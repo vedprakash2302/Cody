@@ -44,6 +44,16 @@ describe("AzureDevOpsCli.layer", () => {
       const target = path.join(root, "target");
       const unrelated = path.join(root, "unrelated");
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+      for (const name of [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      ]) {
+        vi.stubEnv(name, undefined);
+      }
       for (const [cwd, org] of [
         [target, "target"],
         [unrelated, "unrelated"],
@@ -83,7 +93,10 @@ describe("AzureDevOpsCli.layer", () => {
       }).pipe(Effect.provide(scopedLayer));
       expect(azArgs[0]).toContain("https://dev.azure.com/target");
       expect(azArgs[0]).not.toContain("https://dev.azure.com/unrelated");
-    }).pipe(Effect.scoped, Effect.provide(VcsProcess.layer), Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
   );
 
   it.effect("does not inspect Git for account queries or explicitly scoped commands", () =>
