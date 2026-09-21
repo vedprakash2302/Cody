@@ -1,0 +1,165 @@
+name: Personal candidate build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-candidate-build
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    if: github.repository == 'vedprakash2302/t3code' && github.ref == 'refs/heads/personal/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      clerk_key: ${{ steps.version.outputs.clerk_key }}
+      clerk_template: ${{ steps.version.outputs.clerk_template }}
+      clerk_oauth: ${{ steps.version.outputs.clerk_oauth }}
+      relay_url: ${{ steps.version.outputs.relay_url }}
+    steps:
+      - name: Checkout exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Check integrated fixes
+        run: bash .github/scripts/check-personal-fixes.sh
+
+      - name: Set manual-install version and public configuration
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./apps/desktop/package.json').version.split('-')[0]")"
+          version="${base_version}-preview.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          node scripts/update-release-package-versions.ts "$version"
+          cp .env.example .env
+          set -a
+          source .env
+          set +a
+          {
+            echo "version=$version"
+            echo "clerk_key=$T3CODE_CLERK_PUBLISHABLE_KEY"
+            echo "clerk_template=$T3CODE_CLERK_JWT_TEMPLATE"
+            echo "clerk_oauth=$T3CODE_CLERK_CLI_OAUTH_CLIENT_ID"
+            echo "relay_url=$T3CODE_RELAY_URL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Build JS bundle
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: vp run build:desktop
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 3
+
+  linux:
+    needs: bundle
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Personal Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+      version: ${{ needs.bundle.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: preview
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
+      clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
+      clerk_cli_oauth_client_id: ${{ needs.bundle.outputs.clerk_oauth }}
+      relay_url: ${{ needs.bundle.outputs.relay_url }}
+
+  windows:
+    needs: [bundle, linux]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Personal Windows x64
+      runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      cli_archive: false
+      version: ${{ needs.bundle.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: preview
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
+      clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
+      clerk_cli_oauth_client_id: ${{ needs.bundle.outputs.clerk_oauth }}
+      relay_url: ${{ needs.bundle.outputs.relay_url }}
+
+  publish:
+    needs: [bundle, linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: desktop-*
+          path: assets
+          merge-multiple: true
+
+      - name: Download standalone Linux server
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: cli-linux-x64
+          path: assets
+
+      - name: Publish personal prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.bundle.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd assets
+          sha256sum ./* > SHA256SUMS
+          cd ..
+          tag="personal-v${VERSION}"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Personal T3 Code $VERSION" \
+              --notes "Personal candidate from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Unsigned Windows x64 installer with a matching embedded WSL runtime, Linux x64 AppImage, and standalone Linux x64 server archive. Manual installation only; this preview has no automatic update feed. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
+          gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
