@@ -2,6 +2,8 @@
 
 `vedprakash2302/t3code` uses `personal/main` as its integration and default branch. The upstream repository is `pingdotgg/t3code`. Keep contribution branches based on upstream `main`, so each upstream PR contains only its own fix.
 
+Agents should follow [the personal-fork skill](../../.agents/skills/personal-fork/SKILL.md) for feature development, publishing, and manual upstream reconciliation. It covers deciding when upstream supersedes a personal fix, including overlaps that Git merges without a conflict.
+
 ## Sync upstream
 
 The **Personal upstream sync** workflow runs daily at 06:23 UTC, subject to GitHub's scheduling delays. It merges upstream `main`, runs the regression suites in `.github/scripts/check-personal-fixes.sh`, and pushes only if those checks pass. Conflicts or failed checks leave the remote branch unchanged and fail the workflow. The workflow can also be dispatched manually:
