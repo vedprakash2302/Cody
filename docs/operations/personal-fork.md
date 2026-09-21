@@ -41,9 +41,17 @@ Dispatch **Personal candidate build** on `personal/main`:
 gh workflow run personal-build.yml --repo vedprakash2302/Cody --ref personal/main
 ```
 
-The workflow checks the integrated fixes and publishes a prerelease in the fork after both platform jobs succeed. It builds an unsigned Windows x64 installer, a Linux x64 AppImage, and a standalone Linux x64 server archive. The Windows installer embeds that same Linux server archive for its WSL backend. Checksums accompany the downloads.
+The workflow checks the integrated fixes and publishes a prerelease after all platform jobs succeed. Choose the installer for the host:
 
-Versions use `-preview.YYYYMMDD.RUN`, which T3's packaging treats as manual-install builds with no automatic update feed. Install a candidate when ready, after active turns finish. Windows may show an unsigned-app warning. macOS and native mobile builds are not part of this workflow.
+| Host               | Desktop download     | Embedded WSL runtime |
+| ------------------ | -------------------- | -------------------- |
+| Devbox and WorkWSL | Windows x64 `.exe`   | Linux x64            |
+| Surface            | Windows ARM64 `.exe` | Linux ARM64          |
+| Apple Silicon Mac  | ARM64 `.dmg`         | Not needed           |
+
+It also builds Linux x64 and ARM64 AppImages and standalone Linux and macOS ARM64 server archives. Each Windows installer embeds the matching Linux archive from the same build. Checksums accompany the downloads.
+
+Versions use `-preview.YYYYMMDD.RUN`, which T3's packaging treats as manual-install builds with no automatic update feed. Install a candidate when ready, after active turns finish. Windows may show an unsigned-app warning. macOS builds are not notarized and may require approval in Privacy & Security. Native mobile builds are not part of this workflow; keep using the official iOS app.
 
 The desktop app and bundled web client display the name Cody. Application IDs, URL schemes, CLI commands, and data directories retain their T3 identifiers to preserve existing pairing and installation identity. Keep using the official T3 iOS app and T3 Connect. Cody replaces the desktop installation; it is not a separate side-by-side profile.
 

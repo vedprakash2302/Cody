@@ -85,15 +85,25 @@ jobs:
 
   linux:
     needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
     uses: ./.github/workflows/release-desktop.yml
     with:
-      label: Personal Linux x64
-      runner: ubuntu-24.04
+      label: Cody Linux ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
       platform: linux
       target: AppImage
-      arch: x64
-      rust_target: x86_64-unknown-linux-gnu
-      resource_key: linux-x64
+      arch: ${{ matrix.arch }}
+      rust_target: ${{ matrix.rust_target }}
+      resource_key: linux-${{ matrix.arch }}
       cli_archive: true
       version: ${{ needs.bundle.outputs.version }}
       ref: ${{ github.sha }}
@@ -106,15 +116,25 @@ jobs:
 
   windows:
     needs: [bundle, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
     uses: ./.github/workflows/release-desktop.yml
     with:
-      label: Personal Windows x64
-      runner: windows-2025
+      label: Cody Windows ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
       platform: win
       target: nsis
-      arch: x64
-      rust_target: x86_64-pc-windows-msvc
-      resource_key: win32-x64
+      arch: ${{ matrix.arch }}
+      rust_target: ${{ matrix.rust_target }}
+      resource_key: win32-${{ matrix.arch }}
       cli_archive: false
       version: ${{ needs.bundle.outputs.version }}
       ref: ${{ github.sha }}
@@ -125,8 +145,29 @@ jobs:
       clerk_cli_oauth_client_id: ${{ needs.bundle.outputs.clerk_oauth }}
       relay_url: ${{ needs.bundle.outputs.relay_url }}
 
+  mac:
+    needs: bundle
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Cody macOS Apple Silicon
+      runner: macos-15
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+      cli_archive: true
+      version: ${{ needs.bundle.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: preview
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
+      clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
+      clerk_cli_oauth_client_id: ${{ needs.bundle.outputs.clerk_oauth }}
+      relay_url: ${{ needs.bundle.outputs.relay_url }}
+
   publish:
-    needs: [bundle, linux, windows]
+    needs: [bundle, linux, windows, mac]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -138,11 +179,12 @@ jobs:
           path: assets
           merge-multiple: true
 
-      - name: Download standalone Linux server
+      - name: Download standalone servers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: cli-linux-x64
+          pattern: cli-*
           path: assets
+          merge-multiple: true
 
       - name: Publish personal prerelease
         env:
@@ -159,7 +201,7 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --prerelease --latest=false \
               --title "Cody $VERSION" \
-              --notes "Personal candidate from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Unsigned Windows x64 installer with a matching embedded WSL runtime, Linux x64 AppImage, and standalone Linux x64 server archive. Manual installation only; this preview has no automatic update feed. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              --notes "Personal candidate from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Windows x64 for Devbox and WorkWSL; Windows ARM64 for Surface. Each Windows installer embeds its matching Linux WSL runtime. Includes Linux x64/ARM64 AppImages, an Apple Silicon macOS DMG, and standalone Linux/macOS server archives. Windows builds are unsigned; macOS builds are not notarized. Manual installation only; this preview has no automatic update feed. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

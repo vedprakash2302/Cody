@@ -113,7 +113,7 @@ When the user requests a candidate release:
 gh workflow run personal-build.yml --repo vedprakash2302/Cody --ref personal/main
 ```
 
-Wait for the build result and verify the release assets before claiming a release is available. The workflow produces Windows x64 with a matching embedded WSL server, Linux x64 AppImage, and a standalone Linux x64 server. Preview versions have no automatic desktop update feed.
+Wait for the build result and verify the release assets before claiming a release is available. The workflow produces Windows x64 for Devbox and WorkWSL, Windows ARM64 for Surface, and macOS ARM64 for the Apple Silicon Mac. Each Windows installer must embed its matching Linux architecture from the same build. Linux x64 and ARM64 AppImages and standalone Linux/macOS server archives are also published. Preview versions have no automatic desktop update feed. Windows builds are unsigned and macOS builds are not notarized.
 
 A source push does not update a running app. Installation and restarting environments are separate actions requiring the user's authorization. Preserve the existing T3 home, environment identity, secrets, and client application data to retain pairing. Independently running remote servers need their own runtime update. Keep the official iOS app unless a feature specifically requires a custom native build.
 
