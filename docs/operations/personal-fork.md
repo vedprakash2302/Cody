@@ -1,6 +1,6 @@
 # Personal fork maintenance
 
-`vedprakash2302/t3code` uses `personal/main` as its integration and default branch. The upstream repository is `pingdotgg/t3code`. Keep contribution branches based on upstream `main`, so each upstream PR contains only its own fix.
+`vedprakash2302/Cody` uses `personal/main` as its integration and default branch. The upstream repository is `pingdotgg/t3code`. Keep contribution branches based on upstream `main`, so each upstream PR contains only its own fix.
 
 Agents should follow [the personal-fork skill](../../.agents/skills/personal-fork/SKILL.md) for feature development, publishing, and manual upstream reconciliation. It covers deciding when upstream supersedes a personal fix, including overlaps that Git merges without a conflict.
 
@@ -9,7 +9,7 @@ Agents should follow [the personal-fork skill](../../.agents/skills/personal-for
 The **Personal upstream sync** workflow runs daily at 06:23 UTC, subject to GitHub's scheduling delays. It merges upstream `main`, runs the regression suites in `.github/scripts/check-personal-fixes.sh`, and pushes only if those checks pass. Conflicts or failed checks leave the remote branch unchanged and fail the workflow. The workflow can also be dispatched manually:
 
 ```sh
-gh workflow run personal-sync.yml --repo vedprakash2302/t3code --ref personal/main
+gh workflow run personal-sync.yml --repo vedprakash2302/Cody --ref personal/main
 ```
 
 Resolve a conflict in the personal worktree with the existing remote names:
@@ -38,12 +38,14 @@ When upstream incorporates a fix, merge upstream normally. Keep upstream's final
 Dispatch **Personal candidate build** on `personal/main`:
 
 ```sh
-gh workflow run personal-build.yml --repo vedprakash2302/t3code --ref personal/main
+gh workflow run personal-build.yml --repo vedprakash2302/Cody --ref personal/main
 ```
 
 The workflow checks the integrated fixes and publishes a prerelease in the fork after both platform jobs succeed. It builds an unsigned Windows x64 installer, a Linux x64 AppImage, and a standalone Linux x64 server archive. The Windows installer embeds that same Linux server archive for its WSL backend. Checksums accompany the downloads.
 
 Versions use `-preview.YYYYMMDD.RUN`, which T3's packaging treats as manual-install builds with no automatic update feed. Install a candidate when ready, after active turns finish. Windows may show an unsigned-app warning. macOS and native mobile builds are not part of this workflow.
+
+The desktop app and bundled web client display the name Cody. Application IDs, URL schemes, CLI commands, and data directories retain their T3 identifiers to preserve existing pairing and installation identity. Keep using the official T3 iOS app and T3 Connect. Cody replaces the desktop installation; it is not a separate side-by-side profile.
 
 Updating source or installing a client does not update independent remote servers. Install the matching server build on each environment that needs the fixes. Back up the environment's data before replacing a runtime; returning to an older executable does not undo database migrations.
 

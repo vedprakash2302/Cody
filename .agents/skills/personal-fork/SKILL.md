@@ -5,7 +5,7 @@ description: Develop and publish features or fixes for Ved's T3 Code fork, integ
 
 # Maintain the personal T3 Code fork
 
-Use this skill for `vedprakash2302/t3code`. Upstream is `pingdotgg/t3code`. Read the repository's `AGENTS.md` and `CONTRIBUTING.md` first. This skill does not authorize a commit, push, PR, release, installation, or restart by itself. Follow the user's requested scope and the agent's Git permissions.
+Use this skill for `vedprakash2302/Cody`. Upstream is `pingdotgg/t3code`. Read the repository's `AGENTS.md` and `CONTRIBUTING.md` first. This skill does not authorize a commit, push, PR, release, installation, or restart by itself. Follow the user's requested scope and the agent's Git permissions.
 
 ## Establish the checkout and task
 
@@ -47,6 +47,8 @@ gh pr create --repo pingdotgg/t3code --base main --head vedprakash2302:feat/my-f
 ```
 
 Do not merge `personal/main` into a contribution branch. Update that branch from upstream instead. Prefer a merge for a published branch unless the user explicitly requests a history rewrite.
+
+Fork-only work such as Cody branding and personal automation starts from `personal/main` on a separate `personal/` branch. Keep it out of upstream PRs. Cody retains T3's application ID, URL schemes, CLI command, and data paths so existing installations and pairing remain compatible. T3 Connect and the official App Store app keep their upstream names.
 
 ## Integrate completed work
 
@@ -108,7 +110,7 @@ If resolving the merge would require uncertain product decisions, leave the remo
 When the user requests a candidate release:
 
 ```sh
-gh workflow run personal-build.yml --repo vedprakash2302/t3code --ref personal/main
+gh workflow run personal-build.yml --repo vedprakash2302/Cody --ref personal/main
 ```
 
 Wait for the build result and verify the release assets before claiming a release is available. The workflow produces Windows x64 with a matching embedded WSL server, Linux x64 AppImage, and a standalone Linux x64 server. Preview versions have no automatic desktop update feed.

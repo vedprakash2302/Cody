@@ -1,4 +1,10 @@
-# T3 Code
+# Cody
+
+Cody is Ved's personal fork of [T3 Code](https://github.com/pingdotgg/t3code), combining upstream updates with personal fixes. Download Cody from [this fork's releases](https://github.com/vedprakash2302/Cody/releases). The desktop and web clients use the Cody name; the official T3 mobile apps and T3 Connect remain compatible.
+
+For contribution branches, upstream sync, and personal builds, see [fork maintenance](docs/operations/personal-fork.md). The documentation below describes upstream T3 Code; its installation commands install the official release, not Cody.
+
+## Upstream T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 

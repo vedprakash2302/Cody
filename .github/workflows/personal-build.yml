@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   bundle:
-    if: github.repository == 'vedprakash2302/t3code' && github.ref == 'refs/heads/personal/main'
+    if: github.repository == 'vedprakash2302/Cody' && github.ref == 'refs/heads/personal/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     outputs:
@@ -158,7 +158,7 @@ jobs:
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --prerelease --latest=false \
-              --title "Personal T3 Code $VERSION" \
+              --title "Cody $VERSION" \
               --notes "Personal candidate from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Unsigned Windows x64 installer with a matching embedded WSL runtime, Linux x64 AppImage, and standalone Linux x64 server archive. Manual installation only; this preview has no automatic update feed. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber

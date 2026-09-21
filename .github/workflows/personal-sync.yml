@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   sync:
-    if: github.repository == 'vedprakash2302/t3code' && github.ref == 'refs/heads/personal/main'
+    if: github.repository == 'vedprakash2302/Cody' && github.ref == 'refs/heads/personal/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
