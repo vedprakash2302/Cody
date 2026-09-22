@@ -64,6 +64,7 @@ import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
 import { APP_BASE_NAME } from "../../branding";
+import { CodyMark } from "../CodyMark";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -192,6 +193,7 @@ export function WelcomeWizard({
           title={`Set up ${APP_BASE_NAME}`}
           identity={
             <div className="flex items-baseline gap-1.5" role="img" aria-label={APP_BASE_NAME}>
+              <CodyMark aria-hidden className="size-7 self-center" />
               <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
                 {APP_BASE_NAME}
               </span>
