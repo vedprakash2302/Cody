@@ -410,10 +410,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "start-from-origin",
-    title: "Start from origin",
+    title: "Refresh remote base",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["new worktrees latest matching remote branch local"],
+    searchTerms: ["start from origin new worktrees latest matching remote branch local fetch"],
   },
   {
     id: "add-project-starts-in",

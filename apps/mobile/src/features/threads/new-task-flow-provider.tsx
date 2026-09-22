@@ -1,3 +1,4 @@
+import { worktreeBaseRef } from "@t3tools/shared/git";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -129,6 +130,8 @@ export function branchBadgeLabel(input: {
   if (input.branch.worktreePath && input.branch.worktreePath !== input.project?.workspaceRoot) {
     return "worktree";
   }
+  if (input.branch.isRemote)
+    return `remote${input.branch.remoteName ? ` · ${input.branch.remoteName}` : ""}`;
   if (input.branch.isDefault) {
     return "default";
   }
@@ -142,6 +145,7 @@ type NewTaskFlowContextValue = {
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
   readonly selectedBranchName: string | null;
+  readonly selectedWorktreeBaseRef: string | null;
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
   readonly draftKey: string | null;
@@ -458,6 +462,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     !t3ProjectFileQuery.isPending;
   const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
+  const selectedWorktreeBaseRef = selectedProjectDraft.workspaceSelection?.worktreeBaseRef ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
@@ -648,9 +653,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     () =>
       pipe(
         allBranchRefs,
-        Arr.filter((branch) => !branch.isRemote),
+        Arr.filter((branch) => workspaceMode === "worktree" || !branch.isRemote),
       ),
-    [allBranchRefs],
+    [allBranchRefs, workspaceMode],
   );
   // The ref actually checked out in the project root, serialized onto new
   // local threads. It comes from the live status stream rather than listRefs'
@@ -766,6 +771,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode,
           branch: mode === "local" ? localSelection.branch : selectedBranchName,
+          worktreeBaseRef: mode === "local" ? null : selectedWorktreeBaseRef,
           worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
@@ -775,6 +781,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       availableBranches,
       draftStartFromOrigin,
       selectedBranchName,
+      selectedWorktreeBaseRef,
       selectedProject,
       selectedProjectDraftKey,
       selectedWorktreePath,
@@ -825,6 +832,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode: workspaceMode,
           branch: branch.name,
+          worktreeBaseRef: workspaceMode === "worktree" ? worktreeBaseRef(branch) : null,
           worktreePath: resolveNewTaskBranchWorktreePath({
             workspaceMode,
             projectCwd: selectedProject.workspaceRoot,
@@ -846,12 +854,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode: workspaceMode,
           branch: selectedBranchName,
+          worktreeBaseRef: selectedWorktreeBaseRef,
           worktreePath: selectedWorktreePath,
           startFromOrigin: value,
         },
       });
     },
-    [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
+    [
+      selectedBranchName,
+      selectedWorktreeBaseRef,
+      selectedProjectDraftKey,
+      selectedWorktreePath,
+      workspaceMode,
+    ],
   );
 
   const refreshBranches = branchState.refresh;
@@ -938,6 +953,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
+          worktreeBaseRef: message.creation.worktreeBaseRef ?? null,
         },
       });
     }
@@ -1021,6 +1037,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
             currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
           }),
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
+          worktreeBaseRef:
+            mode === "worktree" ? (workspaceSelection?.worktreeBaseRef ?? null) : null,
           // The draft only carries the flag when the user touched it; fall
           // back to the resolved default (server settings) so queued tasks
           // drain with the same origin mode the composer displayed.
@@ -1156,6 +1174,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModelKey,
       workspaceMode,
       selectedBranchName,
+      selectedWorktreeBaseRef,
       selectedWorktreePath,
       startFromOrigin,
       draftKey: selectedProjectDraftKey,
@@ -1236,6 +1255,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       reset,
       runtimeMode,
       selectedBranchName,
+      selectedWorktreeBaseRef,
       hasMoreBranches,
       selectedEnvironmentId,
       selectedModel,

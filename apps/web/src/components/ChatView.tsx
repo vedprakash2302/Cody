@@ -1760,6 +1760,7 @@ export default function ChatView(props: ChatViewProps) {
   const [pendingServerThreadEnvMode, setPendingServerThreadEnvMode] =
     useState<DraftThreadEnvMode | null>(null);
   const [pendingServerThreadBranch, setPendingServerThreadBranch] = useState<string | null>();
+  const [pendingWorktreeBaseRef, setPendingWorktreeBaseRef] = useState<string | null>(null);
   const [
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
@@ -5831,6 +5832,10 @@ export default function ChatView(props: ChatViewProps) {
     canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
       ? pendingServerThreadBranch
       : (activeThread?.branch ?? null);
+  const selectedWorktreeBaseRef = pendingWorktreeBaseRef ?? draftThread?.worktreeBaseRef ?? null;
+  const selectedWorktreeBaseBranch = selectedWorktreeBaseRef
+    ? selectedWorktreeBaseRef.replace(/^refs\/(?:heads|remotes)\//, "")
+    : activeThreadBranch;
   const startFromOrigin = isLocalDraftThread
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
@@ -6572,6 +6577,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
+    setPendingWorktreeBaseRef(null);
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -6580,6 +6586,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
+    setPendingWorktreeBaseRef(null);
   }, [canOverrideServerThreadEnvMode]);
 
   useEffect(() => {
@@ -7377,7 +7384,7 @@ export default function ChatView(props: ChatViewProps) {
       multipleModelSelections !== null &&
       (!isLocalDraftThread ||
         !isGitRepo ||
-        !activeThreadBranch ||
+        !selectedWorktreeBaseBranch ||
         multipleModelSelections.length === 0)
     ) {
       toastManager.add(
@@ -7665,14 +7672,14 @@ export default function ChatView(props: ChatViewProps) {
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
-        ? activeThreadBranch
+        ? selectedWorktreeBaseBranch
         : null;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
-    if (shouldCreateWorktree && !activeThreadBranch) {
+    if (shouldCreateWorktree && !selectedWorktreeBaseBranch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
@@ -8019,7 +8026,8 @@ export default function ChatView(props: ChatViewProps) {
                     },
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
-                      baseBranch: activeThreadBranch!,
+                      baseBranch: selectedWorktreeBaseBranch!,
+                      ...(selectedWorktreeBaseRef ? { baseRef: selectedWorktreeBaseRef } : {}),
                       requireWorktree: true,
                       branch: buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
@@ -8361,6 +8369,7 @@ export default function ChatView(props: ChatViewProps) {
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
                       baseBranch: baseBranchForWorktree,
+                      ...(selectedWorktreeBaseRef ? { baseRef: selectedWorktreeBaseRef } : {}),
                       branch: buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
                     },
@@ -8430,6 +8439,7 @@ export default function ChatView(props: ChatViewProps) {
                 envMode: sendEnvMode,
                 branch: activeThreadBranch,
                 startFromOrigin,
+                worktreeBaseRef: selectedWorktreeBaseRef,
               }),
             ),
           );
@@ -9358,6 +9368,7 @@ export default function ChatView(props: ChatViewProps) {
     (mode: DraftThreadEnvMode) => {
       if (multipleModelSelections !== null) return;
       if (canOverrideServerThreadEnvMode) {
+        if (mode === "local") setPendingWorktreeBaseRef(null);
         setPendingServerThreadEnvMode(mode);
         scheduleComposerFocus();
         return;
@@ -9438,7 +9449,12 @@ export default function ChatView(props: ChatViewProps) {
     if (sendEnvMode !== "local") {
       // The draft is back; switch it to the project checkout and let the next
       // render resend.
-      setDraftThreadContext(composerDraftTarget, { envMode: "local", startFromOrigin: false });
+      setDraftThreadContext(composerDraftTarget, {
+        envMode: "local",
+        startFromOrigin: false,
+        branch: gitStatusQuery.data?.refName ?? null,
+        worktreePath: null,
+      });
       return;
     }
     setWorkLocallyResendDraftId(null);
@@ -9449,6 +9465,7 @@ export default function ChatView(props: ChatViewProps) {
     sendEnvMode,
     setDraftThreadContext,
     workLocallyResendReady,
+    gitStatusQuery.data?.refName,
   ]);
 
   const onStartFromOriginChange = (nextStartFromOrigin: boolean) => {
@@ -10188,6 +10205,8 @@ export default function ChatView(props: ChatViewProps) {
                                 {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                 onEnvModeChange={onEnvModeChange}
                                 startFromOrigin={startFromOrigin}
+                                worktreeBaseRefOverride={selectedWorktreeBaseRef}
+                                onWorktreeBaseRefChange={setPendingWorktreeBaseRef}
                                 onStartFromOriginChange={onStartFromOriginChange}
                                 {...(canOverrideServerThreadEnvMode
                                   ? { effectiveEnvModeOverride: envMode }

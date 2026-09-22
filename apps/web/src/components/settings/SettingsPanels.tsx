@@ -2897,12 +2897,12 @@ export function GeneralSettingsPanel() {
           serverScoped
           settingKeys={["newWorktreesStartFromOrigin"]}
           {...searchableSetting("start-from-origin")}
-          description="Creates the worktree from the latest matching branch on origin instead of your local branch."
+          description="Fetches the selected remote branch before creating a worktree. Local branches use the matching branch on origin when available."
           resetAction={
             settings.newWorktreesStartFromOrigin !==
             DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin ? (
               <SettingResetButton
-                label="new worktrees start from origin"
+                label="refresh remote base for new worktrees"
                 onClick={() =>
                   updateSettings({
                     newWorktreesStartFromOrigin:

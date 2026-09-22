@@ -86,10 +86,41 @@ describe("resolveNewTaskBranchWorktreePath", () => {
 });
 
 describe("resolveNewTaskBranchLabel", () => {
+  it.each([true, false])(
+    "distinguishes colliding names with refresh disabled, remote %s",
+    (remote) => {
+      expect(
+        resolveNewTaskBranchLabel({
+          branchName: `refs/${remote ? "remotes" : "heads"}/upstream/topic`,
+          branchIsRemote: remote,
+          startFromOrigin: false,
+          workspaceMode: "worktree",
+          ambiguousName: true,
+        }),
+      ).toBe(`From upstream/topic · ${remote ? "remote" : "local"}`);
+    },
+  );
+  it.each([
+    ["refs/remotes/t3/main", "From t3/main"],
+    ["refs/heads/t3/main", "From origin/t3/main"],
+  ])(
+    "labels namespaced base %s without relying on the current query results",
+    (branchName, label) => {
+      expect(
+        resolveNewTaskBranchLabel({
+          branchName,
+          branchIsRemote: null,
+          startFromOrigin: true,
+          workspaceMode: "worktree",
+        }),
+      ).toBe(label);
+    },
+  );
   it("shows the checked-out branch without a base-ref prefix", () => {
     expect(
       resolveNewTaskBranchLabel({
         branchName: "feature/mobile",
+        branchIsRemote: false,
         startFromOrigin: true,
         workspaceMode: "local",
       }),
@@ -100,6 +131,7 @@ describe("resolveNewTaskBranchLabel", () => {
     expect(
       resolveNewTaskBranchLabel({
         branchName: "main",
+        branchIsRemote: false,
         startFromOrigin: false,
         workspaceMode: "worktree",
       }),
@@ -110,6 +142,7 @@ describe("resolveNewTaskBranchLabel", () => {
     expect(
       resolveNewTaskBranchLabel({
         branchName: "main",
+        branchIsRemote: false,
         startFromOrigin: true,
         workspaceMode: "worktree",
       }),
@@ -120,9 +153,24 @@ describe("resolveNewTaskBranchLabel", () => {
     expect(
       resolveNewTaskBranchLabel({
         branchName: null,
+        branchIsRemote: null,
         startFromOrigin: true,
         workspaceMode: "worktree",
       }),
     ).toBe("Choose branch");
   });
+
+  it.each([true, false, null])(
+    "preserves a selected remote ref with remote metadata %s",
+    (isRemote) => {
+      expect(
+        resolveNewTaskBranchLabel({
+          branchName: "t3/main",
+          branchIsRemote: isRemote,
+          startFromOrigin: true,
+          workspaceMode: "worktree",
+        }),
+      ).toBe(isRemote === false ? "From origin/t3/main" : "From t3/main");
+    },
+  );
 });

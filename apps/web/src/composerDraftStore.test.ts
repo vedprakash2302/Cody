@@ -1702,6 +1702,71 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.startFromOrigin).toBe(false);
   });
 
+  it("keeps the worktree base separate from checkout metadata and clears it on local mode", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      branch: "main",
+      envMode: "worktree",
+    });
+    store.setDraftThreadContext(draftId, { worktreeBaseRef: "refs/remotes/upstream/main" });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      branch: "main",
+      worktreeBaseRef: "refs/remotes/upstream/main",
+    });
+    store.setDraftThreadContext(draftId, { startFromOrigin: false });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.worktreeBaseRef).toBe(
+      "refs/remotes/upstream/main",
+    );
+    store.setDraftThreadContext(draftId, { envMode: "local" });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      branch: "main",
+      worktreeBaseRef: null,
+    });
+  });
+
+  it("preserves an explicit fanout base alongside an existing worktree, then clears it on a workspace reset", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      branch: "feature/existing",
+      worktreePath: "/tmp/existing",
+    });
+    store.setDraftThreadContext(draftId, { worktreeBaseRef: "refs/remotes/upstream/main" });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      worktreeBaseRef: "refs/remotes/upstream/main",
+      branch: "feature/existing",
+      worktreePath: "/tmp/existing",
+    });
+    store.setDraftThreadContext(draftId, { branch: null, worktreePath: null, envMode: "worktree" });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.worktreeBaseRef).toBeNull();
+    store.setDraftThreadContext(draftId, { worktreeBaseRef: "refs/remotes/upstream/main" });
+    store.setProjectDraftThreadId(projectRef, draftId, { branch: "other" });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.worktreeBaseRef).toBeNull();
+  });
+
+  it("persists the base selection without replacing the checkout branch", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = useComposerDraftStore.getState();
+      store.setProjectDraftThreadId(projectRef, draftId, {
+        threadId,
+        branch: "main",
+        envMode: "worktree",
+        worktreeBaseRef: "refs/remotes/upstream/main",
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      resetComposerDraftStore();
+      await useComposerDraftStore.persist.rehydrate();
+      expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+        branch: "main",
+        worktreeBaseRef: "refs/remotes/upstream/main",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves existing branch and worktree when setProjectDraftThreadId receives undefined", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

@@ -1,3 +1,4 @@
+import { worktreeBaseRef } from "@t3tools/shared/git";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type CheckpointDiffTarget,
@@ -147,7 +148,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
   const refs = new Map<string, VcsRef>();
   for (const value of values) {
     for (const ref of value.refs) {
-      refs.set(ref.name, ref);
+      refs.set(worktreeBaseRef(ref), ref);
     }
   }
   const first = values[0] ?? null;

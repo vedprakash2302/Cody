@@ -416,6 +416,7 @@ export async function restoreRejectedQueuedMessage(
             workspaceSelection: {
               mode: queuedMessage.creation.workspaceMode,
               branch: queuedMessage.creation.branch,
+              worktreeBaseRef: queuedMessage.creation.worktreeBaseRef ?? null,
               worktreePath: queuedMessage.creation.worktreePath,
               ...(queuedMessage.creation.startFromOrigin !== undefined
                 ? { startFromOrigin: queuedMessage.creation.startFromOrigin }
@@ -953,6 +954,7 @@ export function useThreadOutboxDrain(): void {
           branch: creation.branch,
           worktreePath: creation.worktreePath,
           startFromOrigin: creation.startFromOrigin ?? false,
+          worktreeBaseRef: creation.worktreeBaseRef ?? null,
           worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         }),
       });

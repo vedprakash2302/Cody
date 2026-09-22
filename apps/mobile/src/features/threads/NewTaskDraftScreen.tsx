@@ -978,7 +978,14 @@ export function NewTaskDraftScreen(props: {
     currentCheckoutBranch: flow.currentCheckoutBranchName,
   });
   const selectedBranchLabel = resolveNewTaskBranchLabel({
-    branchName: selectedBranchName,
+    ambiguousName:
+      flow.availableBranches.filter((branch) => branch.name === selectedBranchName).length > 1,
+    branchName:
+      flow.workspaceMode === "worktree"
+        ? (flow.selectedWorktreeBaseRef ?? selectedBranchName)
+        : selectedBranchName,
+    branchIsRemote:
+      flow.availableBranches.find((branch) => branch.name === selectedBranchName)?.isRemote ?? null,
     startFromOrigin: flow.startFromOrigin,
     workspaceMode: flow.workspaceMode,
   });

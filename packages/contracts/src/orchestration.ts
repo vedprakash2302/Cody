@@ -1290,7 +1290,10 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
 const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
+  /** Exact Git ref selected by newer clients; baseBranch remains the legacy short name. */
+  baseRef: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
+  /** Refresh remote refs from their own remote; local branches use a matching origin branch. */
   startFromOrigin: Schema.optional(Schema.Boolean),
   requireWorktree: Schema.optional(Schema.Boolean),
 });

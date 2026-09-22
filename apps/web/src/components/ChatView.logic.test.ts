@@ -1760,6 +1760,20 @@ describe("resolveSendEnvMode", () => {
 });
 
 describe("resolveBackgroundDraftWorkspaceOptions", () => {
+  it("carries the selected base independently of the checkout branch", () => {
+    expect(
+      resolveBackgroundDraftWorkspaceOptions({
+        envMode: "worktree",
+        branch: "main",
+        worktreeBaseRef: "refs/remotes/upstream/topic",
+        startFromOrigin: true,
+      }),
+    ).toMatchObject({
+      branch: "main",
+      worktreeBaseRef: "refs/remotes/upstream/topic",
+      worktreePath: null,
+    });
+  });
   it("keeps New worktree selected without reusing the launched worktree", () => {
     expect(
       resolveBackgroundDraftWorkspaceOptions({

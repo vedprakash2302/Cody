@@ -353,6 +353,7 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly worktreeBaseRef?: string | null;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -365,6 +366,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  worktreeBaseRef: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -1152,6 +1154,8 @@ export async function removeDeliveredCloudQueuedMessage(
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
+            (editor.workspaceSelection.worktreeBaseRef ?? null) !==
+              (message.creation?.worktreeBaseRef ?? null) ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false))))
     )

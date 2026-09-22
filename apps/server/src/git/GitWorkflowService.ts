@@ -29,6 +29,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
+import { parseRemoteNames, parseRemoteRefWithRemoteNames } from "./remoteRefs.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -71,26 +72,16 @@ export class GitWorkflowService extends Context.Service<
       input: VcsCreateWorktreeInput,
       options?: GitVcsDriver.CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
-    readonly fetchRemote: (input: {
-      readonly cwd: string;
-      readonly remoteName: string;
-      readonly refName?: string;
-    }) => Effect.Effect<void, GitCommandError>;
-    readonly remoteExists: (input: {
-      readonly cwd: string;
-      readonly remoteName: string;
-    }) => Effect.Effect<boolean, GitCommandError>;
-    readonly remoteBranchExists: (input: {
-      readonly cwd: string;
-      readonly remoteName: string;
-      readonly refName: string;
-    }) => Effect.Effect<boolean, GitCommandError>;
-    readonly resolveRemoteTrackingCommit: (input: {
+    readonly prepareWorktreeBase: (input: {
       readonly cwd: string;
       readonly refName: string;
-      readonly fallbackRemoteName: string;
+      readonly startFromOrigin: boolean;
     }) => Effect.Effect<
-      { readonly commitSha: string; readonly remoteRefName: string },
+      {
+        readonly refName: string;
+        readonly fetchStatus: "done" | "warning" | "skipped";
+        readonly detail?: string;
+      },
       GitCommandError
     >;
     readonly removeWorktree: (
@@ -269,6 +260,82 @@ export const make = Effect.gen(function* () {
     (input: Input) =>
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
+  const prepareWorktreeBase = Effect.fn("GitWorkflowService.prepareWorktreeBase")(function* (
+    input: Parameters<GitWorkflowService["Service"]["prepareWorktreeBase"]>[0],
+  ) {
+    yield* ensureGitCommand("GitWorkflowService.prepareWorktreeBase", input.cwd);
+    if (!input.startFromOrigin) {
+      return { refName: input.refName, fetchStatus: "skipped" as const };
+    }
+
+    // A slash can belong to a local branch name. Resolve that namespace before
+    // interpreting a short ref as <remote>/<branch>.
+    const localBranch = input.refName.startsWith("refs/heads/")
+      ? input.refName.slice("refs/heads/".length)
+      : input.refName;
+    const local = yield* git.execute({
+      operation: "GitWorkflowService.prepareWorktreeBase.localBranch",
+      cwd: input.cwd,
+      args: ["show-ref", "--verify", "--quiet", `refs/heads/${localBranch}`],
+      allowNonZeroExit: true,
+    });
+    const remotes = yield* git.execute({
+      operation: "GitWorkflowService.prepareWorktreeBase.remotes",
+      cwd: input.cwd,
+      args: ["remote"],
+    });
+    const explicitlyRemote = input.refName.startsWith("refs/remotes/");
+    const remote =
+      explicitlyRemote || (!input.refName.startsWith("refs/heads/") && local.exitCode !== 0)
+        ? parseRemoteRefWithRemoteNames(
+            explicitlyRemote ? input.refName.slice("refs/remotes/".length) : input.refName,
+            parseRemoteNames(remotes.stdout),
+          )
+        : null;
+    if (explicitlyRemote && !remote) {
+      return yield* new GitCommandError({
+        operation: "GitWorkflowService.prepareWorktreeBase",
+        cwd: input.cwd,
+        command: "git remote",
+        detail: `No configured remote matches ${input.refName}.`,
+      });
+    }
+
+    const remoteName = remote?.remoteName ?? "origin";
+    const branchName = remote?.branchName ?? localBranch;
+    const remoteRefName = `${remoteName}/${branchName}`;
+    if (remote) {
+      // An explicit remote selection is a promise to use that remote. A missing
+      // branch or failed fetch must not fall back to a stale tracking ref.
+      yield* git.fetchRemoteTrackingBranch({
+        cwd: input.cwd,
+        remoteName,
+        remoteBranch: branchName,
+      });
+    } else {
+      if (!(yield* git.remoteExists({ cwd: input.cwd, remoteName }))) {
+        return { refName: input.refName, fetchStatus: "skipped" as const };
+      }
+      yield* git.fetchRemote({ cwd: input.cwd, remoteName, refName: `refs/heads/${branchName}` });
+      if (!(yield* git.remoteBranchExists({ cwd: input.cwd, remoteName, refName: branchName }))) {
+        return {
+          refName: input.refName,
+          fetchStatus: "warning" as const,
+          detail: `${remoteRefName} not found, using local branch`,
+        };
+      }
+    }
+    const { commitSha } = yield* git.resolveCommit({
+      cwd: input.cwd,
+      revision: `refs/remotes/${remoteRefName}`,
+    });
+    return {
+      refName: commitSha,
+      fetchStatus: "done" as const,
+      detail: `${remoteRefName} at ${commitSha.slice(0, 7)}`,
+    };
+  });
+
   return GitWorkflowService.of({
     isRepository: (cwd) =>
       registry.detect({ cwd }).pipe(
@@ -344,22 +411,7 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input, options)),
       ),
-    fetchRemote: (input) =>
-      ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
-        Effect.andThen(git.fetchRemote(input)),
-      ),
-    remoteExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
-        Effect.andThen(git.remoteExists(input)),
-      ),
-    remoteBranchExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd).pipe(
-        Effect.andThen(git.remoteBranchExists(input)),
-      ),
-    resolveRemoteTrackingCommit: (input) =>
-      ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
-        Effect.andThen(git.resolveRemoteTrackingCommit(input)),
-      ),
+    prepareWorktreeBase,
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),

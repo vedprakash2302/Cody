@@ -9,7 +9,18 @@ import {
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
   parseOriginUrlFromGitConfig,
   WORKTREE_BRANCH_PREFIX,
+  worktreeBaseRef,
+  worktreeBaseLabel,
 } from "./git.ts";
+
+it("keeps colliding local and remote selections distinct while displaying their short names", () => {
+  const local = worktreeBaseRef({ name: "upstream/topic", isRemote: false });
+  const remote = worktreeBaseRef({ name: "upstream/topic", isRemote: true });
+  expect(local).toBe("refs/heads/upstream/topic");
+  expect(remote).toBe("refs/remotes/upstream/topic");
+  expect(worktreeBaseLabel(local)).toBe("upstream/topic");
+  expect(worktreeBaseLabel(remote)).toBe("upstream/topic");
+});
 
 describe("normalizeGitRemoteUrl", () => {
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
