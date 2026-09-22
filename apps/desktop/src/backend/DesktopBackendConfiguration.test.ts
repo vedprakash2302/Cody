@@ -311,6 +311,8 @@ describe("DesktopBackendConfiguration", () => {
         const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
+        assert.equal(wsl.bootstrap.t3Home, "~/.cody");
+        assert.notEqual(wsl.bootstrap.t3Home, primary.bootstrap.t3Home);
       }),
     ),
   );
