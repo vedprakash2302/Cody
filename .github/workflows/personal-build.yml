@@ -45,13 +45,13 @@ jobs:
       - name: Check integrated fixes
         run: bash .github/scripts/check-personal-fixes.sh
 
-      - name: Set manual-install version and public configuration
+      - name: Set update-enabled version and public configuration
         id: version
         shell: bash
         run: |
           set -euo pipefail
           base_version="$(node -p "require('./apps/desktop/package.json').version.split('-')[0]")"
-          version="${base_version}-preview.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          version="${base_version}-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
           node scripts/update-release-package-versions.ts "$version"
           cp .env.example .env
           set -a
@@ -107,7 +107,8 @@ jobs:
       cli_archive: true
       version: ${{ needs.bundle.outputs.version }}
       ref: ${{ github.sha }}
-      release_channel: preview
+      release_channel: nightly
+      desktop_update_repository: vedprakash2302/Cody
       relay_client_tracing: false
       clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
       clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
@@ -138,7 +139,8 @@ jobs:
       cli_archive: false
       version: ${{ needs.bundle.outputs.version }}
       ref: ${{ github.sha }}
-      release_channel: preview
+      release_channel: nightly
+      desktop_update_repository: vedprakash2302/Cody
       relay_client_tracing: false
       clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
       clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
@@ -159,7 +161,8 @@ jobs:
       cli_archive: true
       version: ${{ needs.bundle.outputs.version }}
       ref: ${{ github.sha }}
-      release_channel: preview
+      release_channel: nightly
+      desktop_update_repository: vedprakash2302/Cody
       relay_client_tracing: false
       clerk_publishable_key: ${{ needs.bundle.outputs.clerk_key }}
       clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
@@ -172,19 +175,50 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout manifest tools from the release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install manifest tools
+        run: vp install --frozen-lockfile --filter=@t3tools/scripts...
+
       - name: Download installers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: desktop-*
-          path: assets
+          path: release-assets
           merge-multiple: true
 
       - name: Download standalone servers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: cli-*
-          path: assets
+          path: release-assets
           merge-multiple: true
+
+      - name: Merge and verify updater manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/merge-update-manifests.ts --platform win \
+            release-assets/nightly-win-x64.yml release-assets/nightly-win-arm64.yml release-assets/nightly.yml
+          rm release-assets/nightly-win-x64.yml release-assets/nightly-win-arm64.yml
+          for manifest in nightly.yml nightly-mac.yml nightly-linux.yml nightly-linux-arm64.yml; do
+            test -s "release-assets/$manifest"
+          done
 
       - name: Publish personal prerelease
         env:
@@ -193,15 +227,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd assets
+          cd release-assets
           sha256sum ./* > SHA256SUMS
           cd ..
-          tag="personal-v${VERSION}"
+          # electron-updater discovers nightly releases by parsing SemVer tags.
+          tag="v${VERSION}"
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --draft --prerelease --latest=false \
               --title "Cody $VERSION" \
-              --notes "Personal candidate from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Windows x64 for Devbox and WorkWSL; Windows ARM64 for Surface. Each Windows installer embeds its matching Linux WSL runtime. Includes Linux x64/ARM64 AppImages, an Apple Silicon macOS DMG, and standalone Linux/macOS server archives. Windows builds are unsigned; macOS builds are not notarized. Manual installation only; this preview has no automatic update feed. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              --notes "Cody nightly from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Windows x64 for Devbox and WorkWSL; Windows ARM64 for Surface. Each Windows installer embeds its matching Linux WSL runtime. Includes Linux x64/ARM64 AppImages, an Apple Silicon macOS DMG, and standalone Linux/macOS server archives. Windows builds are unsigned; macOS builds are not notarized. Update-enabled Cody installations can download this release from the in-app updater on the Nightly channel. Older manual-install previews need one manual upgrade. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
-          gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          # Keep the release out of the updater's feed until all assets are uploaded.
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

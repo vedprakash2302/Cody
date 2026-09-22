@@ -11,8 +11,9 @@ Build the Windows installer with `vp run dist:desktop:win:x64`, the macOS instal
 `vp run dist:desktop:dmg`, or the Linux AppImage with `vp run dist:desktop:linux`.
 Install the resulting `Cody-*` artifact. The download links below install the official T3 app.
 
-Cody builds have no automatic update feed by default. To publish Cody updates, set
-`CODY_DESKTOP_UPDATE_REPOSITORY` to your fork's `owner/repository` when building.
+Published Cody nightlies use this fork's in-app update feed. Keep the update channel
+set to Nightly. Older preview builds need one manual upgrade to enable updates.
+Local builds have no feed unless `CODY_DESKTOP_UPDATE_REPOSITORY` is set when building.
 
 For contribution branches, upstream sync, and personal builds, see [fork maintenance](docs/operations/personal-fork.md). The documentation below describes upstream T3 Code; its installation commands install the official release, not Cody.
 

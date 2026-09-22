@@ -14,5 +14,8 @@
   "apps/desktop/src/app/DesktopPreReadyPlatform.test.ts",
   "apps/desktop/src/backend/DesktopBackendConfiguration.test.ts",
   "apps/desktop/src/wsl/DesktopWslEnvironment.test.ts",
-  "scripts/build-desktop-artifact.test.ts"
+  "scripts/build-desktop-artifact.test.ts",
+  "scripts/merge-update-manifests.test.ts",
+  "apps/desktop/src/updates/DesktopUpdates.test.ts",
+  "apps/desktop/src/updates/updateChannels.test.ts"
 ]

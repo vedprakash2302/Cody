@@ -69,7 +69,9 @@ The workflow checks the integrated fixes and publishes a prerelease after all pl
 
 It also builds Linux x64 and ARM64 AppImages and standalone Linux and macOS ARM64 server archives. Each Windows installer embeds the matching Linux archive from the same build. Checksums accompany the downloads.
 
-Versions use `-preview.YYYYMMDD.RUN`, which T3's packaging treats as manual-install builds with no automatic update feed. Install a candidate when ready, after active turns finish. Windows may show an unsigned-app warning. macOS builds are not notarized and may require approval in Privacy & Security. Native mobile builds are not part of this workflow; keep using the official iOS app.
+Versions use `-nightly.YYYYMMDD.RUN` and tags use `v<version>`. The workflow embeds the `vedprakash2302/Cody` GitHub feed and publishes updater manifests and blockmaps. Windows x64 and ARM64 manifests are merged before publication so the updater downloads the correct installer. Keep the desktop update channel set to Nightly to receive these prereleases.
+
+Older `-preview` installations have no embedded feed and need one manual upgrade to an update-enabled build. After that, use the sidebar update control to check, download, and install Cody releases. Installing an update preserves the Cody profile, data, and client pairings. Windows may show an unsigned-app warning. macOS builds are not notarized; reliable macOS in-app installation requires signing credentials, so keep manual DMG installation available. Native mobile builds are not part of this workflow; keep using the official iOS app.
 
 The desktop app and bundled web client display the name Cody. Cody installs alongside official T3 with its own application ID, `cody://` URL scheme, and Electron profile. Desktop data lives in `~/.cody/userdata`, including in WSL. The default backend port is 4773. Existing T3 data stays in `~/.t3`; Cody starts with a separate environment identity and needs its own client pairing. Use different Tailscale Serve ports for the two apps, such as 443 for T3 and 8443 for Cody. Keep using the official T3 iOS app.
 

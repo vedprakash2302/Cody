@@ -408,6 +408,43 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("ships the Cody nightly feed on every desktop platform", () =>
+    Effect.gen(function* () {
+      for (const platform of ["win", "mac", "linux"] as const) {
+        const config = yield* createBuildConfig(
+          platform,
+          platform === "win" ? "nsis" : platform === "mac" ? "dmg" : "AppImage",
+          "0.0.42-nightly.20260922.5",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        assert.equal(config.appId, "com.vedpandey.cody");
+        assert.deepStrictEqual(config.publish, [
+          {
+            provider: "github",
+            owner: "vedprakash2302",
+            repo: "Cody",
+            releaseType: "prerelease",
+            channel: "nightly",
+          },
+        ]);
+      }
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              CODY_DESKTOP_UPDATE_REPOSITORY: "vedprakash2302/Cody",
+              GITHUB_REPOSITORY: "pingdotgg/t3code",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
   it("stages only the desktop main-process externals", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(

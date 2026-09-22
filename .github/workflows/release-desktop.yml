@@ -91,6 +91,11 @@ on:
       relay_url:
         required: true
         type: string
+      desktop_update_repository:
+        description: GitHub repository used by the desktop updater.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -105,6 +110,7 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ inputs.relay_url }}
+      CODY_DESKTOP_UPDATE_REPOSITORY: ${{ inputs.desktop_update_repository }}
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,

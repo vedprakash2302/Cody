@@ -199,7 +199,7 @@ export function main(action, cwd = process.cwd()) {
         root,
       );
       console.log(
-        "Build requested: https://github.com/vedprakash2302/Cody/actions/workflows/personal-build.yml\nThe workflow publishes downloads when all platform jobs succeed. Installation is manual.",
+        "Build requested: https://github.com/vedprakash2302/Cody/actions/workflows/personal-build.yml\nThe workflow publishes downloads and the Cody nightly update feed when all platform jobs succeed. Older preview installations need one manual upgrade.",
       );
     } else {
       console.log(
