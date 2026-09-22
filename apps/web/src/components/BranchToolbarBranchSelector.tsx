@@ -1,5 +1,6 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
+import { worktreeBaseRef, worktreeBaseLabel } from "@t3tools/shared/git";
 import { useRightPanelStore } from "../rightPanelStore";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -90,6 +91,8 @@ interface BranchToolbarBranchSelectorProps {
   effectiveEnvModeOverride?: "local" | "worktree";
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (refName: string | null) => void;
+  worktreeBaseRefOverride?: string | null;
+  onWorktreeBaseRefChange?: (refName: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
@@ -111,6 +114,8 @@ export function BranchToolbarBranchSelector({
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
+  worktreeBaseRefOverride,
+  onWorktreeBaseRefChange,
   startFromOrigin,
   onStartFromOriginChange,
   onCheckoutPullRequestRequest,
@@ -272,12 +277,15 @@ export function BranchToolbarBranchSelector({
   const canonicalActiveBranch = resolveBranchToolbarValue({
     envMode: effectiveEnvMode,
     activeWorktreePath,
-    activeThreadBranch,
+    activeThreadBranch:
+      effectiveEnvMode === "worktree" && !activeWorktreePath
+        ? (worktreeBaseRefOverride ?? draftThread?.worktreeBaseRef ?? activeThreadBranch)
+        : activeThreadBranch,
     currentGitBranch,
   });
-  const branchNames = useMemo(() => refs.map((refName) => refName.name), [refs]);
+  const branchNames = useMemo(() => refs.map(worktreeBaseRef), [refs]);
   const branchByName = useMemo(
-    () => new Map(refs.map((refName) => [refName.name, refName] as const)),
+    () => new Map(refs.map((refName) => [worktreeBaseRef(refName), refName] as const)),
     [refs],
   );
   const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
@@ -291,7 +299,7 @@ export function BranchToolbarBranchSelector({
   // use that name too. Matching on the raw query would offer to create a ref
   // that already exists whenever sanitizing changes the name.
   const newRefName = sanitizeNewRefName(trimmedBranchQuery);
-  const hasExactBranchMatch = branchByName.has(newRefName);
+  const hasExactBranchMatch = refs.some((refName) => refName.name === newRefName);
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
@@ -329,21 +337,26 @@ export function BranchToolbarBranchSelector({
     (_currentBranch: string | null, optimisticBranch: string | null) => optimisticBranch,
   );
   const listedActiveBranch =
-    resolvedActiveBranch === null ? null : (branchByName.get(resolvedActiveBranch) ?? null);
+    resolvedActiveBranch === null
+      ? null
+      : (branchByName.get(resolvedActiveBranch) ??
+        refs.find((refName) => refName.name === resolvedActiveBranch) ??
+        null);
   const activeBranchRefQuery = useEnvironmentQuery(
     branchCwd !== null && resolvedActiveBranch !== null
       ? vcsEnvironment.listRefs({
           environmentId,
           input: {
             cwd: branchCwd,
-            query: resolvedActiveBranch,
+            query: worktreeBaseLabel(resolvedActiveBranch),
             limit: 10,
           },
         })
       : null,
   );
   const queriedActiveBranch = activeBranchRefQuery.data?.refs.find(
-    (refName) => refName.name === resolvedActiveBranch,
+    (refName) =>
+      worktreeBaseRef(refName) === resolvedActiveBranch || refName.name === resolvedActiveBranch,
   );
   const resolvedActiveBranchIsRemote =
     listedActiveBranch !== null
@@ -415,7 +428,14 @@ export function BranchToolbarBranchSelector({
     if (!branchCwd || !activeProjectCwd || isBranchActionPending) return;
 
     if (isSelectingWorktreeBase) {
-      setThreadBranch(refName.name, null);
+      if (hasServerThread) {
+        onWorktreeBaseRefChange?.(worktreeBaseRef(refName));
+      } else {
+        setDraftThreadContext(draftId ?? threadRef, {
+          worktreeBaseRef: worktreeBaseRef(refName),
+          environmentSelection: "manual",
+        });
+      }
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
       return;
@@ -510,29 +530,42 @@ export function BranchToolbarBranchSelector({
 
   // Default the worktree base to the repo default branch (origin/HEAD), only
   // falling back to the checked-out branch when no default is known.
-  const defaultBranchName = useMemo(
-    () => refs.find((refName) => refName.isDefault)?.name ?? null,
-    [refs],
-  );
+  const defaultBranchName = useMemo(() => {
+    const refName = refs.find((refName) => refName.isDefault);
+    return refName ? worktreeBaseRef(refName) : null;
+  }, [refs]);
   const worktreeBaseBranchCandidate = isInitialBranchesLoadPending
     ? null
-    : (defaultBranchName ?? currentGitBranch);
+    : (defaultBranchName ??
+      (currentGitBranch ? worktreeBaseRef({ name: currentGitBranch, isRemote: false }) : null));
 
   useEffect(() => {
     if (
       effectiveEnvMode !== "worktree" ||
       activeWorktreePath ||
+      worktreeBaseRefOverride ||
+      draftThread?.worktreeBaseRef ||
       activeThreadBranch ||
       !worktreeBaseBranchCandidate
     ) {
       return;
     }
-    setThreadBranch(worktreeBaseBranchCandidate, null, true);
+    if (hasServerThread) {
+      onWorktreeBaseRefChange?.(worktreeBaseBranchCandidate);
+    } else {
+      setDraftThreadContext(draftId ?? threadRef, { worktreeBaseRef: worktreeBaseBranchCandidate });
+    }
   }, [
+    worktreeBaseRefOverride,
+    draftThread?.worktreeBaseRef,
     activeThreadBranch,
     activeWorktreePath,
     effectiveEnvMode,
-    setThreadBranch,
+    hasServerThread,
+    onWorktreeBaseRefChange,
+    setDraftThreadContext,
+    draftId,
+    threadRef,
     worktreeBaseBranchCandidate,
   ]);
 
@@ -755,10 +788,10 @@ export function BranchToolbarBranchSelector({
         value={itemValue}
         className="pe-1.5"
         onClick={() => selectPickerItem(itemValue)}
-        onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
+        onContextMenu={(event) => handleBranchContextMenu(event, refName.name)}
       >
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
-          <MiddleTruncate value={itemValue} className="flex-1" />
+          <MiddleTruncate value={refName.name} className="flex-1" />
           {badge && <span className="shrink-0 text-[10px] text-muted-foreground/45">{badge}</span>}
         </div>
       </ComboboxItem>
@@ -783,7 +816,7 @@ export function BranchToolbarBranchSelector({
       }}
       onOpenChange={handleOpenChange}
       open={isBranchMenuOpen}
-      value={resolvedActiveBranch}
+      value={listedActiveBranch ? worktreeBaseRef(listedActiveBranch) : resolvedActiveBranch}
     >
       <div
         className={cn("flex min-w-0 items-center gap-1", className)}
@@ -805,7 +838,12 @@ export function BranchToolbarBranchSelector({
             while refs are loading or a branch action is pending. */}
         <span
           className="flex min-w-0"
-          onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
+          onContextMenu={(event) =>
+            handleBranchContextMenu(
+              event,
+              resolvedActiveBranch ? worktreeBaseLabel(resolvedActiveBranch) : null,
+            )
+          }
         >
           <ComboboxTrigger
             render={<Button variant="ghost" size="xs" />}
@@ -906,21 +944,22 @@ export function BranchToolbarBranchSelector({
                   >
                     <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
                       <RefreshIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
-                      <span className="truncate">Start from origin</span>
+                      <span className="truncate">Refresh remote base</span>
                     </span>
                     <Switch
                       id={startFromOriginSwitchId}
                       checked={startFromOrigin}
                       size="sm"
-                      aria-label="Start worktree from origin"
+                      aria-label="Refresh remote base"
                       onCheckedChange={(checked) => onStartFromOriginChange(Boolean(checked))}
                     />
                   </label>
                 }
               />
               <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
-                Creates the worktree from the latest matching branch on origin instead of your local
-                branch.
+                Fetches the selected remote branch before creating the worktree. For a local branch,
+                uses the matching branch on origin when available. Turn off to use the selected ref
+                without fetching.
               </TooltipPopup>
             </Tooltip>
           ) : null}

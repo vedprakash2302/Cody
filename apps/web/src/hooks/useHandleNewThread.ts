@@ -37,6 +37,8 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import { useClientSettings } from "./useSettings";
 
 interface NewThreadWorkspaceOptions {
+  worktreeBaseRef?: string | null;
+  environmentSelection?: "auto" | "manual";
   branch?: string | null;
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
@@ -48,6 +50,8 @@ interface NewThreadWorkspaceOptions {
 // state. Every reuse path applies exactly this set.
 function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undefined) {
   return {
+    ...(options?.worktreeBaseRef ? { environmentSelection: "manual" as const } : {}),
+    ...(options?.worktreeBaseRef !== undefined ? { worktreeBaseRef: options.worktreeBaseRef } : {}),
     ...(options?.branch !== undefined ? { branch: options.branch } : {}),
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
@@ -68,6 +72,7 @@ export function useNewThreadHandler() {
     (
       projectRef: ScopedProjectRef,
       options?: {
+        worktreeBaseRef?: string | null;
         branch?: string | null;
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
@@ -173,6 +178,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasWorktreeBaseRefOption = options?.worktreeBaseRef !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -212,7 +218,8 @@ export function useNewThreadHandler() {
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
-            hasStartFromOriginOption;
+            hasStartFromOriginOption ||
+            hasWorktreeBaseRefOption;
           // Resurrecting an empty stored draft must not resurrect its stale
           // context: explicit workspace options win outright; otherwise the
           // env context resets to the configured defaults so drafts seeded
@@ -344,7 +351,8 @@ export function useNewThreadHandler() {
           hasBranchOption ||
           hasWorktreePathOption ||
           hasEnvModeOption ||
-          hasStartFromOriginOption
+          hasStartFromOriginOption ||
+          hasWorktreeBaseRefOption
         ) {
           setDraftThreadContext(currentRouteTarget.draftId, pickExplicitWorkspaceOptions(options));
         }
@@ -409,6 +417,8 @@ export function useNewThreadHandler() {
           threadId,
           createdAt,
           branch: options?.branch ?? null,
+          worktreeBaseRef: options?.worktreeBaseRef ?? null,
+          ...(options?.worktreeBaseRef ? { environmentSelection: "manual" as const } : {}),
           worktreePath: options?.worktreePath ?? null,
           envMode: initialEnvMode,
           startFromOrigin:

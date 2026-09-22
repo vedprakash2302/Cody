@@ -10807,9 +10807,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
-    "bootstraps first-send worktree turns on the server before dispatching turn start",
-    () =>
+  it.effect.each([
+    { baseBranch: "main", baseRef: undefined, remoteName: "origin", isRemote: false },
+    { baseBranch: "origin/main", baseRef: undefined, remoteName: "origin", isRemote: true },
+    { baseBranch: "t3/main", baseRef: undefined, remoteName: "t3", isRemote: true },
+    { baseBranch: "t3/main", baseRef: "refs/remotes/t3/main", remoteName: "t3", isRemote: true },
+  ])(
+    "bootstraps first-send worktree turns from $baseBranch before dispatching turn start",
+    ({ baseBranch, baseRef, remoteName, isRemote }) =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
         const bootstrapGitOperations: string[] = [];
@@ -10844,6 +10849,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               bootstrapGitOperations.push("fetch");
             }),
         );
+        const fetchRemoteTrackingBranch = vi.fn(
+          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteTrackingBranch"]>[0]) =>
+            Effect.sync(() => {
+              bootstrapGitOperations.push("fetch");
+            }),
+        );
         const remoteBranchExists = vi.fn(
           (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["remoteBranchExists"]>[0]) =>
             Effect.sync(() => {
@@ -10852,13 +10863,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             }),
         );
         const fetchedOriginCommit = "0123456789abcdef0123456789abcdef01234567";
-        const resolveRemoteTrackingCommit = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["resolveRemoteTrackingCommit"]>[0]) =>
+        const resolveCommit = vi.fn(
+          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"]>[0]) =>
             Effect.sync(() => {
               bootstrapGitOperations.push("resolve-remote-commit");
               return {
                 commitSha: fetchedOriginCommit,
-                remoteRefName: "origin/main",
               };
             }),
         );
@@ -10897,11 +10907,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               isInsideWorkTree: () => Effect.succeed(true),
             },
             gitVcsDriver: {
-              execute: () => Effect.succeed(SUCCESSFUL_GIT_EXECUTION),
+              execute: ({ operation }) =>
+                Effect.succeed({
+                  ...SUCCESSFUL_GIT_EXECUTION,
+                  stdout: operation.endsWith(".remotes") ? "origin\nt3\n" : "",
+                  exitCode: ChildProcessSpawner.ExitCode(
+                    operation.endsWith(".localBranch") && isRemote ? 1 : 0,
+                  ),
+                }),
               remoteExists,
               fetchRemote,
+              fetchRemoteTrackingBranch,
               remoteBranchExists,
-              resolveRemoteTrackingCommit,
+              resolveCommit,
               createWorktree,
             },
             vcsStatusBroadcaster: {
@@ -10951,7 +10969,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 },
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
-                  baseBranch: "main",
+                  baseBranch,
+                  ...(baseRef ? { baseRef } : {}),
                   branch: "t3code/bootstrap-refName",
                   startFromOrigin: true,
                 },
@@ -10993,28 +11012,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           cwd: "/tmp/project",
           refName: fetchedOriginCommit,
           newRefName: "t3code/bootstrap-refName",
-          baseRefName: "main",
+          baseRefName: baseRef ?? baseBranch,
           path: null,
         });
-        assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
+        if (isRemote) {
+          assert.deepEqual(fetchRemoteTrackingBranch.mock.calls[0]?.[0], {
+            cwd: "/tmp/project",
+            remoteName,
+            remoteBranch: "main",
+          });
+          assert.equal(fetchRemote.mock.calls.length, 0);
+        } else {
+          assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
+            cwd: "/tmp/project",
+            remoteName: "origin",
+            refName: "refs/heads/main",
+          });
+          assert.deepEqual(remoteBranchExists.mock.calls[0]?.[0], {
+            cwd: "/tmp/project",
+            remoteName: "origin",
+            refName: "main",
+          });
+        }
+        assert.deepEqual(resolveCommit.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
-          remoteName: "origin",
-          refName: "main",
-        });
-        assert.deepEqual(remoteBranchExists.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          remoteName: "origin",
-          refName: "main",
-        });
-        assert.deepEqual(resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: "main",
-          fallbackRemoteName: "origin",
+          revision: `refs/remotes/${remoteName}/main`,
         });
         assert.deepEqual(bootstrapGitOperations, [
-          "remote-exists",
+          ...(!isRemote ? ["remote-exists"] : []),
           "fetch",
-          "remote-branch-exists",
+          ...(!isRemote ? ["remote-branch-exists"] : []),
           "resolve-remote-commit",
           "create-worktree",
         ]);
@@ -11060,6 +11087,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         if (Schema.is(WorktreeSetupSnapshot)(settledActivity?.payload)) {
           assert.equal(settledActivity.payload.phase, "done");
           assert.equal(settledActivity.payload.threadId, ThreadId.make("thread-bootstrap"));
+          assert.equal(
+            settledActivity.payload.stages.find((stage) => stage.id === "fetch")?.detail,
+            `${remoteName}/main at ${fetchedOriginCommit.slice(0, 7)}`,
+          );
         }
         const finalCommand = dispatchedCommands[7];
         assertTrue(finalCommand?.type === "thread.turn.start");

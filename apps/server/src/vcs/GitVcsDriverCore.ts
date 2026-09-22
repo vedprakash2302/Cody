@@ -3135,10 +3135,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
-        input.baseRefName,
+        input.baseRefName.replace(/^refs\/remotes\//, ""),
         remoteNames.toSorted((left, right) => right.length - left.length),
       );
-      const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
+      const baseBranch = input.baseRefName.startsWith("refs/heads/")
+        ? input.baseRefName.slice("refs/heads/".length)
+        : (parsedBaseRef?.branchName ?? input.baseRefName);
       yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
         "config",
         `branch.${input.newRefName}.gh-merge-base`,
@@ -3299,9 +3301,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (input.refName === undefined) {
         return yield* fetchAll.pipe(Effect.asVoid);
       }
-      const branch =
-        parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ??
-        input.refName;
+      const branch = input.refName.startsWith("refs/heads/")
+        ? input.refName.slice("refs/heads/".length)
+        : (parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ??
+          input.refName);
       const scopedArgs = [
         ...args,
         `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`,
@@ -3376,13 +3379,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemoteTrackingBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteTrackingBranch"] =
     Effect.fn("fetchRemoteTrackingBranch")(function* (input) {
-      yield* runGit("GitVcsDriver.fetchRemoteTrackingBranch", input.cwd, [
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        input.remoteName,
-        `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
-      ]);
+      yield* runGit(
+        "GitVcsDriver.fetchRemoteTrackingBranch",
+        input.cwd,
+        [
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          input.remoteName,
+          `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
+        ],
+        { env: STATUS_UPSTREAM_REFRESH_ENV },
+      );
     });
 
   const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = (input) =>

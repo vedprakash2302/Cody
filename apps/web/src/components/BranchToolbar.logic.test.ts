@@ -178,6 +178,20 @@ describe("resolveBranchToolbarValue", () => {
 });
 
 describe("resolveBranchTriggerLabel", () => {
+  it.each([
+    ["refs/remotes/upstream/topic", "From upstream/topic"],
+    ["refs/heads/upstream/topic", "From origin/upstream/topic"],
+  ])("labels namespaced base %s without query metadata", (resolvedActiveBranch, expected) => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch,
+        resolvedActiveBranchIsRemote: null,
+        startFromOrigin: true,
+      }),
+    ).toBe(expected);
+  });
   it("shows the origin ref when a new worktree will start from origin", () => {
     expect(
       resolveBranchTriggerLabel({

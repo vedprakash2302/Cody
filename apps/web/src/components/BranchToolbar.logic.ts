@@ -1,5 +1,6 @@
 import type { EnvironmentId, EnvironmentMachineKind, VcsRef, ProjectId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { worktreeBaseLabel } from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
@@ -202,10 +203,13 @@ export function resolveBranchTriggerLabel(input: {
     return "Select ref";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
-    const baseRef =
-      startFromOrigin && resolvedActiveBranchIsRemote === false
-        ? `origin/${resolvedActiveBranch}`
-        : resolvedActiveBranch;
+    const branchLabel = worktreeBaseLabel(resolvedActiveBranch);
+    const isRemote = resolvedActiveBranch.startsWith("refs/remotes/")
+      ? true
+      : resolvedActiveBranch.startsWith("refs/heads/")
+        ? false
+        : resolvedActiveBranchIsRemote;
+    const baseRef = startFromOrigin && isRemote === false ? `origin/${branchLabel}` : branchLabel;
     return `From ${baseRef}`;
   }
   return resolvedActiveBranch;

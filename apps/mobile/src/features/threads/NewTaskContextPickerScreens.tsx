@@ -1,3 +1,4 @@
+import { worktreeBaseRef } from "@t3tools/shared/git";
 import { MaterialListRow } from "../../components/MaterialListRow";
 import type { VcsRef } from "@t3tools/client-runtime/state/vcs";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
@@ -371,7 +372,11 @@ export function NewTaskBranchPickerRouteScreen() {
         isFirst={index === 0}
         isLast={index === flow.filteredBranches.length - 1}
         onSelect={selectBranch}
-        selected={selectedBranchName === item.name}
+        selected={
+          flow.selectedWorktreeBaseRef
+            ? flow.selectedWorktreeBaseRef === worktreeBaseRef(item)
+            : selectedBranchName === item.name
+        }
       />
     ),
     [
@@ -379,6 +384,7 @@ export function NewTaskBranchPickerRouteScreen() {
       flow.selectedProject,
       selectBranch,
       selectedBranchName,
+      flow.selectedWorktreeBaseRef,
       switchingBranchName,
     ],
   );
@@ -393,7 +399,7 @@ export function NewTaskBranchPickerRouteScreen() {
       >
         <ToggleRow
           onValueChange={flow.setStartFromOrigin}
-          title="Start from origin"
+          title="Refresh remote base"
           value={flow.startFromOrigin}
         />
       </View>
@@ -449,9 +455,7 @@ export function NewTaskBranchPickerRouteScreen() {
         data={flow.filteredBranches}
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
-        keyExtractor={(branch) =>
-          `${branch.remoteName ?? "local"}:${branch.name}:${branch.worktreePath ?? ""}`
-        }
+        keyExtractor={worktreeBaseRef}
         ListHeaderComponent={branchListHeader}
         ListFooterComponent={
           flow.branchesFetchingNextPage ? (

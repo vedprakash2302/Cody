@@ -2526,6 +2526,42 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("remote operations", () => {
+    it.effect("strict tracking fetches disable interactive authentication", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        let fetches = 0;
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (!ChildProcess.isStandardCommand(command))
+              return yield* Effect.die("unexpected command");
+            if (command.args[0] !== "fetch") return yield* delegate.spawn(command);
+            fetches++;
+            assert.equal(command.options.env?.GIT_TERMINAL_PROMPT, "0");
+            assert.equal(command.options.env?.GCM_INTERACTIVE, "never");
+            assert.equal(command.options.env?.GIT_ASKPASS, "");
+            assert.equal(command.options.env?.SSH_ASKPASS, "");
+            assert.equal(command.options.env?.SSH_ASKPASS_REQUIRE, "never");
+            assert.include(
+              command.args,
+              "+refs/heads/origin/topic:refs/remotes/upstream/origin/topic",
+            );
+            return makeSuccessfulHandle("");
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        yield* driver.fetchRemoteTrackingBranch({
+          cwd,
+          remoteName: "upstream",
+          remoteBranch: "origin/topic",
+        });
+        assert.equal(fetches, 1);
+      }),
+    );
+
     it.effect("explains a real fetch failure for a missing local remote", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

@@ -1,3 +1,5 @@
+import { worktreeBaseLabel } from "@t3tools/shared/git";
+
 type WorkspaceMode = "local" | "worktree";
 
 export function resolveNewTaskWorkspaceLabel(input: {
@@ -59,6 +61,8 @@ export function resolveNewTaskLocalWorkspaceSelection(input: {
 
 export function resolveNewTaskBranchLabel(input: {
   readonly branchName: string | null;
+  readonly ambiguousName?: boolean;
+  readonly branchIsRemote: boolean | null;
   readonly startFromOrigin: boolean;
   readonly workspaceMode: WorkspaceMode;
 }): string {
@@ -70,8 +74,15 @@ export function resolveNewTaskBranchLabel(input: {
     return input.branchName;
   }
 
-  const baseRef = input.startFromOrigin ? `origin/${input.branchName}` : input.branchName;
-  return `From ${baseRef}`;
+  const branchLabel = worktreeBaseLabel(input.branchName);
+  const isRemote = input.branchName.startsWith("refs/remotes/")
+    ? true
+    : input.branchName.startsWith("refs/heads/")
+      ? false
+      : input.branchIsRemote;
+  const baseRef =
+    input.startFromOrigin && isRemote === false ? `origin/${branchLabel}` : branchLabel;
+  return `From ${baseRef}${input.ambiguousName ? (isRemote ? " · remote" : " · local") : ""}`;
 }
 
 export function shouldCheckoutNewTaskBranch(input: {

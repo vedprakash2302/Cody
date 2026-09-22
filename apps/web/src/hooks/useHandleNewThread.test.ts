@@ -269,13 +269,22 @@ describe.each([
         projectId: "project-remote",
       } as never;
 
-      const opened = await openThread(projectRef, { envMode: "worktree", startFromOrigin });
+      const opened = await openThread(projectRef, {
+        envMode: "worktree",
+        startFromOrigin,
+        worktreeBaseRef: "refs/remotes/upstream/topic",
+      });
 
       expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
         "remote-project",
         projectRef,
         opened!.draftId,
-        expect.objectContaining({ envMode: "worktree", startFromOrigin }),
+        expect.objectContaining({
+          envMode: "worktree",
+          startFromOrigin,
+          worktreeBaseRef: "refs/remotes/upstream/topic",
+          environmentSelection: "manual",
+        }),
       );
     },
   );

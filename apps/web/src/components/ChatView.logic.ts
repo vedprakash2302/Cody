@@ -839,17 +839,22 @@ export function resolveBackgroundDraftWorkspaceOptions(input: {
   envMode: DraftThreadEnvMode;
   branch: string | null;
   startFromOrigin: boolean;
+  worktreeBaseRef?: string | null;
 }): {
   envMode: DraftThreadEnvMode;
   branch: string | null;
   worktreePath: null;
   startFromOrigin: boolean;
+  worktreeBaseRef?: string | null;
 } {
   return {
     envMode: input.envMode,
     branch: input.branch,
     worktreePath: null,
     startFromOrigin: input.envMode === "worktree" && input.startFromOrigin,
+    ...(input.worktreeBaseRef !== undefined
+      ? { worktreeBaseRef: input.envMode === "worktree" ? input.worktreeBaseRef : null }
+      : {}),
   };
 }
 

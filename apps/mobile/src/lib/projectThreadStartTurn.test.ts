@@ -68,6 +68,33 @@ describe("project thread title", () => {
 });
 
 describe("new thread on an existing branch", () => {
+  it.each([undefined, "refs/remotes/upstream/main"])(
+    "keeps short checkout metadata with optional exact base %s",
+    (worktreeBaseRef) => {
+      const input = buildProjectThreadStartTurnInput({
+        projectId: ProjectId.make("project"),
+        projectCwd: "/workspace",
+        threadId: "new-thread",
+        commandId: "command",
+        messageId: "message",
+        createdAt: "2026-09-06T00:00:00Z",
+        text: "Work",
+        uploadedAttachments: [],
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workspaceMode: "worktree",
+        branch: "upstream/main",
+        worktreePath: null,
+        startFromOrigin: true,
+        ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
+        worktreeBranchName: "test/work",
+      });
+      expect(input.bootstrap.createThread.branch).toBe("upstream/main");
+      expect(input.bootstrap.prepareWorktree?.baseBranch).toBe("upstream/main");
+      expect(input.bootstrap.prepareWorktree?.baseRef).toBe(worktreeBaseRef);
+    },
+  );
   it.each([null, "/worktrees/existing"])(
     "reuses the selected workspace %s without preparing a new worktree",
     (worktreePath) => {

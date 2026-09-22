@@ -77,6 +77,8 @@ interface BranchToolbarProps {
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
+  worktreeBaseRefOverride?: string | null;
+  onWorktreeBaseRefChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   autoEnvironmentLabel?: string | undefined;
@@ -492,6 +494,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
+  worktreeBaseRefOverride,
+  onWorktreeBaseRefChange,
   startFromOrigin,
   onStartFromOriginChange,
   autoEnvironmentLabel,
@@ -703,6 +707,8 @@ export const BranchToolbar = memo(function BranchToolbar({
               : {})}
           {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
           {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+          {...(worktreeBaseRefOverride !== undefined ? { worktreeBaseRefOverride } : {})}
+          {...(onWorktreeBaseRefChange ? { onWorktreeBaseRefChange } : {})}
           startFromOrigin={startFromOrigin}
           onStartFromOriginChange={onStartFromOriginChange}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
