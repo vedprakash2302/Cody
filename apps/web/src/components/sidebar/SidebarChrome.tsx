@@ -88,15 +88,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       )}
       to="/"
     >
-      {/* Center the visible capitals, without the font's ascender/descender space. */}
-      <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-        <CodyMark aria-hidden className="size-5 shrink-0 self-center" />
-        <span
-          className={cn(
-            "truncate [text-box:trim-both_cap_alphabetic]",
-            onBackdrop ? "text-white/70" : "text-muted-foreground",
-          )}
-        >
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-sm leading-none font-medium tracking-tight">
+        <CodyMark aria-hidden className="size-4 shrink-0" />
+        <span className={cn("truncate", onBackdrop ? "text-white/70" : "text-muted-foreground")}>
           {APP_BASE_NAME}
         </span>
       </span>

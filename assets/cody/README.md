@@ -1,6 +1,6 @@
 # Cody icons
 
-`source.png` is the generated Cody artwork: an ivory C and yellow cursor on teal. Regenerate the desktop and web sizes with:
+`icon.svg` is the app icon source. It uses exactly the header mark's C and cursor geometry, in teal on a transparent background. There is no enclosing tile. `source.png` preserves the original generated concept. Regenerate the desktop and web sizes with:
 
 ```sh
 node scripts/export-cody-icons.mjs

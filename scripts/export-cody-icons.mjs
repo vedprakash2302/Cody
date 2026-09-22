@@ -6,10 +6,7 @@ import sharp from "sharp";
 const root = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const output = NodePath.join(root, "assets/cody");
 await NodeFSP.mkdir(output, { recursive: true });
-const input = process.argv[2] || NodePath.join(output, "source.png");
-if (NodePath.resolve(input) !== NodePath.join(output, "source.png"))
-  await NodeFSP.copyFile(input, NodePath.join(output, "source.png"));
-const source = NodePath.join(output, "source.png");
+const source = NodePath.join(output, "icon.svg");
 for (const size of [16, 32, 64, 180, 256, 512, 1024]) {
   await sharp(source)
     .resize(size, size)
@@ -45,6 +42,7 @@ for (const [src, dest] of [
   ["icon-16.png", "favicon-16x16.png"],
   ["icon-32.png", "favicon-32x32.png"],
   ["icon-180.png", "apple-touch-icon.png"],
+  ["icon-64.png", "cody-mark.png"],
 ]) {
   await NodeFSP.copyFile(NodePath.join(output, src), NodePath.join(root, "apps/web/public", dest));
 }
