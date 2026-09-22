@@ -193,7 +193,7 @@ export function WelcomeWizard({
           title={`Set up ${APP_BASE_NAME}`}
           identity={
             <div className="flex items-center gap-1.5" role="img" aria-label={APP_BASE_NAME}>
-              <CodyMark aria-hidden className="size-6 shrink-0" />
+              <CodyMark aria-hidden className="size-6 shrink-0 text-black dark:text-white" />
               <span className="text-[1.4rem] leading-none font-medium tracking-tight text-muted-foreground">
                 {APP_BASE_NAME}
               </span>

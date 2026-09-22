@@ -56,6 +56,8 @@ Do not merge `personal/main` into a contribution branch. Update that branch from
 
 Fork-only work such as Cody branding and personal automation starts from `personal/main` on a separate `personal/` branch. Keep it out of upstream PRs. Cody retains T3's application ID, URL schemes, CLI command, and data paths so existing installations and pairing remain compatible. T3 Connect and the official App Store app keep their upstream names.
 
+Cody branding is monochrome: the app icon is the white C-and-cursor mark on black. The header uses the same SVG geometry, black in light mode and white in dark mode. Do not introduce teal or other accent colors into the logo.
+
 ## Integrate completed work
 
 Publishing a feature branch does not put it in personal builds. When the user requests integration, inspect the integration worktree, ensure it is clean, and update it from the fork before merging the completed branch:

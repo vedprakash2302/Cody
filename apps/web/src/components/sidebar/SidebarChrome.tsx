@@ -89,7 +89,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       to="/"
     >
       <span className="inline-flex min-w-0 items-center gap-1.5 text-sm leading-none font-medium tracking-tight">
-        <CodyMark aria-hidden className="size-4 shrink-0" />
+        <CodyMark aria-hidden className="size-4 shrink-0 text-black dark:text-white" />
         <span className={cn("truncate", onBackdrop ? "text-white/70" : "text-muted-foreground")}>
           {APP_BASE_NAME}
         </span>
