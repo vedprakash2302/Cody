@@ -1,7 +1,22 @@
 {
   "$schema": "https://t3.codes/schema/t3.json",
-  "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
+  "iconPath": "assets/cody/icon-180.png",
   "scripts": [
+    {
+      "name": "Preview This Checkout",
+      "command": "node scripts/cody-preview.mjs dev",
+      "icon": "configure"
+    },
+    {
+      "name": "Refresh Preview Threads",
+      "command": "node scripts/cody-preview.mjs snapshot",
+      "icon": "configure"
+    },
+    {
+      "name": "Build & Open Cody Preview",
+      "command": "node scripts/cody-preview.mjs native",
+      "icon": "configure"
+    },
     {
       "name": "Sync Cody",
       "command": "node scripts/cody.mjs sync",

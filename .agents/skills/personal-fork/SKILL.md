@@ -17,6 +17,8 @@ On Devbox, the clone is `/home/vedpandey/projects/personal/Cody`, `origin` is Co
 
 Separate worktrees are optional for sequential feature work. They help when agents work concurrently. Keep one integration checkout and one dev app for testing combined features; feature branches do not each need an installation. Merging into local `personal/main` is distinct from pushing it or building a release.
 
+For testing the current feature checkout, use `node scripts/cody-preview.mjs dev`, which snapshots existing threads on first run. Refresh with `snapshot` only while the preview backend is stopped. `native` opens a native development app; from WSL it stages and builds Windows Electron separately and connects it to the running WSL preview. It requires Preview This Checkout first. These commands never point a second server at the installed app's database. The snapshot clears auth and provider sessions, but repository paths remain real, so do not run editing prompts against a production worktree accidentally. See the fork runbook for pairing and platform setup.
+
 Treat other worktrees as active user or agent work. Do not switch, reset, clean, or merge into them without checking their ownership and status. Use a new worktree for a new feature. Do not import an unfinished branch just because its name sounds relevant.
 
 ## Develop an upstream-ready feature

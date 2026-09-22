@@ -140,7 +140,7 @@ function check(cwd) {
   const regressionFiles = JSON.parse(
     NodeFS.readFileSync(NodePath.join(cwd, "scripts", "personal-fixes.json"), "utf8"),
   );
-  run(process.execPath, ["--test", "scripts/cody.test.mjs"], cwd);
+  run(process.execPath, ["--test", "scripts/cody.test.mjs", "scripts/cody-preview.test.mjs"], cwd);
   run("vp", ["test", "run", ...regressionFiles], cwd);
 }
 
