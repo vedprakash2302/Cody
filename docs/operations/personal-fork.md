@@ -6,6 +6,18 @@ Agents should follow [the personal-fork skill](../../.agents/skills/personal-for
 
 ## Sync upstream
 
+### Project actions
+
+In a Cody project thread, use the action menu above the composer:
+
+- **Sync Cody** updates the local `personal/main` checkout from the fork and upstream, installs locked dependencies, and runs regression checks. It does not push or update installed apps. Stop Cody Dev before syncing, then restart it after the checks pass.
+- **Start Cody Dev** starts the integrated web client and backend with `<integration-checkout>/.t3` as its data directory. Open the printed localhost pairing URL in Windows Chrome when the server runs in WSL. Stop the action's terminal process before starting it again.
+- **Build Cody Release** checks the integration checkout, pushes it to the fork, and requests the multi-platform installer workflow. Follow the printed Actions link for results. Install downloads manually after the build succeeds.
+
+The actions locate an existing `personal/main` worktree and discover remotes by GitHub URL. They do not switch a feature checkout. If a fresh upstream feature branch lacks these fork-only actions, invoke them from a thread in the Cody integration checkout. A missing integration worktree or dirty working tree produces instructions instead of changing branches or stashing work.
+
+Sync leaves merge conflicts in the integration checkout for an agent to resolve using the fork skill. Failed checks leave the update local and do not publish a build. The regression file list is maintained in `scripts/personal-fixes.json`, shared by project actions and CI. GitHub authentication is required for Build Cody Release. Node 24, Git, and Vite+ are required for all actions.
+
 The **Personal upstream sync** workflow runs daily at 06:23 UTC, subject to GitHub's scheduling delays. It merges upstream `main`, runs the regression suites in `.github/scripts/check-personal-fixes.sh`, and pushes only if those checks pass. Conflicts or failed checks leave the remote branch unchanged and fail the workflow. The workflow can also be dispatched manually:
 
 ```sh

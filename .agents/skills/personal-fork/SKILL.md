@@ -13,6 +13,10 @@ Inspect `git status --short`, `git worktree list`, `git remote -v`, and the curr
 
 In the existing local checkout, `origin` is upstream and `personal` is the fork. On GitHub Actions runners, `origin` is the fork. The fork's default branch is `personal/main`; it combines upstream code, pending personal fixes, and fork-only workflows. The existing integration worktree is `/home/vedpandey/projects/personal/t3code-personal`, but verify that path before using it.
 
+On Devbox, the clone is `/home/vedpandey/projects/personal/Cody`, `origin` is Cody, and `t3` is upstream. The project actions in `t3.json` discover these roles by URL. Use **Sync Cody** for checked local updates, **Start Cody Dev** for the integration app, and **Build Cody Release** only when the user requests publishing. Regression files are listed in `scripts/personal-fixes.json`.
+
+Separate worktrees are optional for sequential feature work. They help when agents work concurrently. Keep one integration checkout and one dev app for testing combined features; feature branches do not each need an installation. Merging into local `personal/main` is distinct from pushing it or building a release.
+
 Treat other worktrees as active user or agent work. Do not switch, reset, clean, or merge into them without checking their ownership and status. Use a new worktree for a new feature. Do not import an unfinished branch just because its name sounds relevant.
 
 ## Develop an upstream-ready feature

@@ -3,6 +3,21 @@
   "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
   "scripts": [
     {
+      "name": "Sync Cody",
+      "command": "node scripts/cody.mjs sync",
+      "icon": "configure"
+    },
+    {
+      "name": "Start Cody Dev",
+      "command": "node scripts/cody.mjs dev",
+      "icon": "configure"
+    },
+    {
+      "name": "Build Cody Release",
+      "command": "node scripts/cody.mjs release",
+      "icon": "configure"
+    },
+    {
       "name": "Setup Worktree",
       "command": "vp i && ln -sf $T3CODE_PROJECT_ROOT/.env .env && ln -sf $T3CODE_PROJECT_ROOT/infra/relay/.env infra/relay/.env && node apps/web/scripts/warm-dep-cache.ts",
       "icon": "configure",
