@@ -103,7 +103,7 @@ describe("DesktopPreReadyPlatform", () => {
             const identity = yield* Effect.promise(() => portalIdentity);
             assert.equal(identity.desktopName, "com.vedpandey.cody.desktop");
             assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
-            assert.include(identity.desktopEntry ?? "", "Name=Cody (Alpha)");
+            assert.include(identity.desktopEntry ?? "", "Name=Cody");
             assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/cody;");
           }),
         ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));

@@ -15,19 +15,14 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "Cody (Dev)" : "Cody (Alpha)";
+const APP_DISPLAY_NAME = isDevelopment ? "Cody (Dev)" : "Cody";
 const APP_BUNDLE_ID = isDevelopment
   ? `com.vedpandey.cody.dev.${devBundleIdSuffix || "local"}`
   : "com.vedpandey.cody";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["cody-dev"] : ["cody"];
 const LAUNCHER_VERSION = 20;
-const developmentMacIconPngPath = NodePath.join(
-  repoRoot,
-  "assets",
-  "dev",
-  "blueprint-macos-1024.png",
-);
-const productionMacIconPngPath = NodePath.join(repoRoot, "assets", "prod", "black-macos-1024.png");
+const developmentMacIconPngPath = NodePath.join(repoRoot, "assets", "cody", "icon-1024.png");
+const productionMacIconPngPath = developmentMacIconPngPath;
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone launcher script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 

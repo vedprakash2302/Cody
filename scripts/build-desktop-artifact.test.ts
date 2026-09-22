@@ -90,7 +90,6 @@ import {
   WslRuntimeArchiveMissingError,
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
@@ -254,21 +253,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "Cody (Alpha)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "Cody");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "Cody (Nightly)");
   });
 
-  it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
+  it("uses Cody icons for release and nightly packages", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
-      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+      macIconPng: "assets/cody/icon-1024.png",
+      linuxIconPng: "assets/cody/icon-1024.png",
+      windowsIconIco: "assets/cody/icon.ico",
     });
 
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42"), {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+      macIconPng: "assets/cody/icon-1024.png",
+      linuxIconPng: "assets/cody/icon-1024.png",
+      windowsIconIco: "assets/cody/icon.ico",
     });
   });
 
@@ -381,7 +380,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           undefined,
         );
         assert.equal(config.appId, "com.vedpandey.cody");
-        assert.equal(config.productName, "Cody (Alpha)");
+        assert.equal(config.productName, "Cody");
         assert.equal(config.artifactName, "Cody-${version}-${arch}.${ext}");
         assert.isNull(config.publish);
       }
@@ -699,7 +698,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/*.map",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "Cody (Alpha) 1.2.3 Installer",
+        title: "Cody 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 640, height: 432 },
         contents: [

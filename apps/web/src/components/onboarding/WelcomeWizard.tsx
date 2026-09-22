@@ -63,7 +63,8 @@ import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
-import { T3Wordmark } from "../T3Wordmark";
+import { APP_BASE_NAME } from "../../branding";
+import { CodyMark } from "../CodyMark";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -189,12 +190,12 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title="Set up T3 Code"
+          title={`Set up ${APP_BASE_NAME}`}
           identity={
-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
-              <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
-                Code
+            <div className="flex items-center gap-1.5" role="img" aria-label={APP_BASE_NAME}>
+              <CodyMark aria-hidden className="size-6 shrink-0 text-black dark:text-white" />
+              <span className="text-[1.4rem] leading-none font-medium tracking-tight text-muted-foreground">
+                {APP_BASE_NAME}
               </span>
             </div>
           }
@@ -477,7 +478,7 @@ function ConnectAccountOption({
           </p>
           <CommandBlock command="npx t3 connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
-            Keep T3 Code running. Select the computers you want to set up above.
+            Keep Cody running. Select the computers you want to set up above.
           </p>
         </div>
       </CollapsiblePanel>
@@ -594,7 +595,7 @@ function PairingForm({
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start T3 Code first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
+              Start Cody first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
@@ -1162,7 +1163,7 @@ function ImportStep({
       <div className="flex h-full min-h-40 flex-col">
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Your projects</h1>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6">
-          <Spinner className="size-5 text-muted-foreground" />
+          <Spinner size="lg" tone="muted" />
           <p className="text-center text-sm text-muted-foreground">
             Looking for projects from Claude Code and Codex…
           </p>
@@ -1229,7 +1230,7 @@ function ImportStep({
                 ) : null}
                 {scan.isPending && scan.data === null ? (
                   <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-                    <Spinner className="size-4" />
+                    <Spinner size="md" />
                     Looking for projects…
                   </div>
                 ) : scan.error !== null ? (

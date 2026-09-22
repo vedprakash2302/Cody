@@ -1,0 +1,18 @@
+[
+  "apps/server/src/git/remoteUrls.test.ts",
+  "apps/server/src/project/RepositoryIdentityResolver.test.ts",
+  "apps/server/src/vcs/GitVcsDriver.test.ts",
+  "apps/server/src/vcs/VcsProcess.test.ts",
+  "apps/server/src/sourceControl/AzureDevOpsCli.test.ts",
+  "apps/server/src/sourceControl/azureDevOpsScope.test.ts",
+  "apps/server/src/pullRequest/AzureDevOpsPullRequestCli.test.ts",
+  "apps/web/src/lib/previewAnnotation.test.ts",
+  "apps/web/src/branding.test.ts",
+  "apps/desktop/src/app/DesktopEnvironment.test.ts",
+  "apps/desktop/src/app/DesktopAppIdentity.test.ts",
+  "apps/desktop/src/app/DesktopEarlyElectronStartup.test.ts",
+  "apps/desktop/src/app/DesktopPreReadyPlatform.test.ts",
+  "apps/desktop/src/backend/DesktopBackendConfiguration.test.ts",
+  "apps/desktop/src/wsl/DesktopWslEnvironment.test.ts",
+  "scripts/build-desktop-artifact.test.ts"
+]

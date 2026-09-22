@@ -1,5 +1,7 @@
 {
   "id": "/",
+  "name": "Cody",
+  "short_name": "Cody",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

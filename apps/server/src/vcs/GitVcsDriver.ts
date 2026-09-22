@@ -30,6 +30,7 @@ import {
   type VcsRemoveWorktreeInput,
   type VcsStatusInput,
   type VcsStatusResult,
+  type WorktreeSubmodules,
 } from "@t3tools/contracts";
 import {
   makeGitVcsDriverCore,
@@ -38,6 +39,7 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { parseGitRemoteVerboseOutput } from "../git/remoteUrls.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -128,6 +130,10 @@ export interface CreateWorktreeProgress {
     total: number;
   }) => Effect.Effect<void, never>;
   readonly onSubmodulesStarted?: () => Effect.Effect<void, never>;
+  /** Fires when `.gitmodules` exists but the resolved submodule mode is `"none"`. */
+  readonly onSubmodulesDisabled?: (input: {
+    source: "settings" | "t3.json";
+  }) => Effect.Effect<void, never>;
   readonly onSubmoduleLine?: (line: string) => Effect.Effect<void, never>;
   readonly onSubmodulesFinished?: (input: {
     ok: boolean;
@@ -137,6 +143,12 @@ export interface CreateWorktreeProgress {
 
 export interface CreateWorktreeOptions {
   readonly progress?: CreateWorktreeProgress;
+  /**
+   * The project-over-environment `worktreeSubmodules` setting. Null (or
+   * omitted, for callers without settings access) defers to the checkout's
+   * own t3.json.
+   */
+  readonly submodules?: WorktreeSubmodules | null;
 }
 
 export interface GitCommitProgress {
@@ -427,38 +439,6 @@ function chunkPathsForGitCheckIgnore(relativePaths: ReadonlyArray<string>): stri
   }
 
   return chunks;
-}
-
-function parseGitRemoteVerboseOutput(
-  output: string,
-): Map<string, { url?: string; pushUrl?: string }> {
-  const remotes = new Map<string, { url?: string; pushUrl?: string }>();
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) {
-      continue;
-    }
-
-    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(trimmed);
-    if (!match) {
-      continue;
-    }
-
-    const name = match[1];
-    const url = match[2];
-    const direction = match[3];
-    if (!name || !url || !direction) {
-      continue;
-    }
-    const remote = remotes.get(name) ?? {};
-    if (direction === "fetch") {
-      remote.url = url;
-    } else {
-      remote.pushUrl = url;
-    }
-    remotes.set(name, remote);
-  }
-  return remotes;
 }
 
 const gitCommand = (

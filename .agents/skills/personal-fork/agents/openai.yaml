@@ -1,0 +1,4 @@
+interface:
+  display_name: "Personal T3 fork"
+  short_description: "Develop features and sync upstream without losing personal fixes"
+  default_prompt: "Use $personal-fork to develop or integrate changes in the personal T3 Code fork. Prefer upstream implementations when they preserve the required behavior of personal fixes."
