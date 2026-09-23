@@ -11,6 +11,7 @@ import {
   type EnvironmentId,
   type UsageBucket,
   type UsageProviderKind,
+  type UsageSource,
   type UsageSourceFingerprint,
   type UsageSummary,
 } from "@t3tools/contracts";
@@ -114,6 +115,14 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
 }
 
 /**
+ * Missing and failed sources read nothing, so they must not claim a directory
+ * another environment read successfully.
+ */
+function contributes(source: UsageSource): boolean {
+  return source.status !== "missing" && source.status !== "failed";
+}
+
+/**
  * Decides which environment owns each physical transcript directory.
  *
  * Several environments on one machine (worktree servers, for instance) resolve
@@ -137,7 +146,7 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
 
   for (const environment of ordered) {
     for (const source of environment.summary.sources) {
-      if (source.status === "missing") continue;
+      if (!contributes(source)) continue;
       const key = fingerprintKey(source.fingerprint);
       if (ownerByFingerprint.has(key)) {
         duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
@@ -161,7 +170,7 @@ function ownedContribution(
   const ownedProviders = new Set<UsageProviderKind>();
   const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
-    if (source.status === "missing") continue;
+    if (!contributes(source)) continue;
     const key = fingerprintKey(source.fingerprint);
     if (ownerByFingerprint.get(key) === environment.environmentId) {
       const provider = source.fingerprint.provider;

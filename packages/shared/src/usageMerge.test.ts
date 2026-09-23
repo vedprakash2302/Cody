@@ -1,5 +1,6 @@
 import {
   USAGE_CONTRACT_VERSION,
+  USAGE_MERGE_COMPATIBLE_SINCE,
   type EnvironmentId,
   type UsageBucket,
   type UsageDay,
@@ -166,6 +167,34 @@ describe("mergeUsage", () => {
     }
   });
 
+  it("keeps an older good read when the newest scan of the same source failed", () => {
+    const source = { provider: "opencode" as const, hostId: "mac", homePath: "/opencode.db" };
+    const failed = summary([], [source]);
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary([bucket({ provider: "opencode", model: "gpt-6-sol" })], [source]),
+        ),
+        environment("env-b", {
+          ...failed,
+          readAt: "2026-08-07T01:00:00.000Z",
+          sources: failed.sources.map((entry) => ({
+            ...entry,
+            status: "failed" as const,
+            scannedFiles: 0,
+            distinctSessions: 0,
+          })),
+        }),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(10);
+    expect(merged.contributingEnvironments).toEqual(["env-a"]);
+    expect(merged.duplicateSources).toHaveLength(0);
+  });
+
   it("excludes an environment reporting an older contract version", () => {
     const merged = mergeUsage(
       [
@@ -178,7 +207,7 @@ describe("mergeUsage", () => {
           summary(
             [bucket()],
             [{ provider: "claude", hostId: "linux", homePath: "/b" }],
-            USAGE_CONTRACT_VERSION - 2,
+            USAGE_MERGE_COMPATIBLE_SINCE - 1,
           ),
         ),
       ],
