@@ -18,5 +18,6 @@
   "scripts/build-desktop-artifact.test.ts",
   "scripts/merge-update-manifests.test.ts",
   "apps/desktop/src/updates/DesktopUpdates.test.ts",
-  "apps/desktop/src/updates/updateChannels.test.ts"
+  "apps/desktop/src/updates/updateChannels.test.ts",
+  "apps/web/src/components/desktopUpdate.logic.test.ts"
 ]

@@ -2,7 +2,8 @@ import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/con
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
-const DESKTOP_RELEASE_HISTORY_URL = "https://github.com/pingdotgg/t3code/releases";
+// Cody's updater follows the fork's releases, so the notes it shows live there too.
+const DESKTOP_RELEASE_HISTORY_URL = "https://github.com/vedprakash2302/Cody/releases";
 const DESKTOP_RELEASE_TAG_URL = `${DESKTOP_RELEASE_HISTORY_URL}/tag`;
 
 /**

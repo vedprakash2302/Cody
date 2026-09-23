@@ -233,10 +233,13 @@ jobs:
           # electron-updater discovers nightly releases by parsing SemVer tags.
           tag="v${VERSION}"
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # The in-app updater shows this body as the release's "What's changed".
+            node scripts/cody-release-notes.mjs "$GITHUB_REPOSITORY" "$tag" "$GITHUB_SHA" \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/release-notes.md"
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --draft --prerelease --latest=false \
               --title "Cody $VERSION" \
-              --notes "Cody nightly from commit $GITHUB_SHA. Includes upstream main and the fixes merged into personal/main. Windows x64 for Devbox and WorkWSL; Windows ARM64 for Surface. Each Windows installer embeds its matching Linux WSL runtime. Includes Linux x64/ARM64 AppImages, an Apple Silicon macOS DMG, and standalone Linux/macOS server archives. Windows builds are unsigned; macOS builds are not notarized. Update-enabled Cody installations can download this release from the in-app updater on the Nightly channel. Older manual-install previews need one manual upgrade. Build: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
           gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
           # Keep the release out of the updater's feed until all assets are uploaded.
