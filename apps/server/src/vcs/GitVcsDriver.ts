@@ -395,6 +395,8 @@ const CHECKPOINT_RECOVERY_MAX_CANDIDATES = 64;
 const CHECKPOINT_RECOVERY_TIMEOUT = "5 seconds";
 const GIT_CHECK_IGNORE_MAX_STDIN_BYTES = 256 * 1024;
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+// Repository updates during a turn can make even numstat scan thousands of changed blobs.
+const CHECKPOINT_SUMMARY_TIMEOUT_MS = 120_000;
 const WORKSPACE_GIT_HARDENED_CONFIG_ARGS = [
   "-c",
   "core.fsmonitor=false",
@@ -1144,6 +1146,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ],
         allowNonZeroExit: true,
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        ...(input.format === "numstat" ? { timeoutMs: CHECKPOINT_SUMMARY_TIMEOUT_MS } : {}),
         outputMode: input.format === "numstat" ? "error" : "truncate",
       });
 
