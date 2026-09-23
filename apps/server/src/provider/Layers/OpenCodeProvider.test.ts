@@ -25,7 +25,7 @@ import {
   openCodeCommandsToServerProviderSlashCommands,
 } from "./OpenCodeProvider.ts";
 import type { OpenCodeInventory } from "../opencodeRuntime.ts";
-import { readOpenCodeGoUsageLimits } from "./openCodeUsageLimits.ts";
+import { readOpenCodeUsageLimits } from "./openCodeUsageLimits.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
@@ -33,7 +33,7 @@ const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
 it.effect("reads Go limits with the instance's XDG credentials and preserves reset times", () =>
   Effect.gen(function* () {
     const resetsAt = "2026-09-17T12:00:00.000Z";
-    const limits = yield* readOpenCodeGoUsageLimits({
+    const limits = yield* readOpenCodeUsageLimits({
       enabled: true,
       serverUrl: "",
       environment: { XDG_DATA_HOME: "/instance/data", OPENCODE_API_KEY: "env-key" },
@@ -92,7 +92,7 @@ it.effect("does not read local credentials for external or disabled OpenCode ins
       { enabled: true, serverUrl: "https://remote.example" },
       { enabled: false, serverUrl: "" },
     ]) {
-      const limits = yield* readOpenCodeGoUsageLimits({ ...settings, environment: {} }).pipe(
+      const limits = yield* readOpenCodeUsageLimits({ ...settings, environment: {} }).pipe(
         Effect.provideService(
           FileSystem.FileSystem,
           FileSystem.makeNoop({
@@ -117,7 +117,7 @@ it.effect("keeps Go entitlement absence distinct from failed or malformed usage 
       [401, "probeFailed"],
       [200, "probeFailed"],
     ] as const) {
-      const limits = yield* readOpenCodeGoUsageLimits({
+      const limits = yield* readOpenCodeUsageLimits({
         enabled: true,
         serverUrl: "",
         environment: {
@@ -141,6 +141,136 @@ it.effect("keeps Go entitlement absence distinct from failed or malformed usage 
       NodeAssert.equal(limits.unavailable?.reason, reason);
       NodeAssert.deepEqual(limits.windows, []);
     }
+  }),
+);
+
+const copilotUser = (
+  snapshots: Record<string, { percent_remaining: number; unlimited: boolean }>,
+) =>
+  Response.json({
+    quota_reset_date_utc: "2026-10-01T00:00:00.000Z",
+    quota_snapshots: Object.fromEntries(
+      Object.entries(snapshots).map(([id, quota]) => [
+        id,
+        { ...quota, quota_id: id, entitlement: 0 },
+      ]),
+    ),
+  });
+
+it.effect("reads Copilot quotas from the OpenCode login and drops unlimited ones", () =>
+  Effect.gen(function* () {
+    for (const [auth, expectedUrl] of [
+      [
+        '{"github-copilot":{"type":"oauth","refresh":"gho_token","access":"x","expires":0}}',
+        "https://api.github.com/copilot_internal/user",
+      ],
+      [
+        '{"github-copilot":{"type":"oauth","refresh":"gho_token","enterpriseUrl":"octocorp.ghe.com"}}',
+        "https://api.octocorp.ghe.com/copilot_internal/user",
+      ],
+    ] as const) {
+      const limits = yield* readOpenCodeUsageLimits({
+        enabled: true,
+        serverUrl: "",
+        environment: { OPENCODE_AUTH_CONTENT: auth },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            NodeAssert.equal(request.url, expectedUrl);
+            NodeAssert.equal(request.headers.authorization, "Bearer gho_token");
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                copilotUser({
+                  premium_interactions: { percent_remaining: 84.6, unlimited: false },
+                  chat: { percent_remaining: 100, unlimited: true },
+                  completions: { percent_remaining: 100, unlimited: true },
+                }),
+              ),
+            );
+          }),
+        ),
+        Effect.provide(NodeServices.layer),
+      );
+      NodeAssert.equal(limits.unavailable, undefined);
+      NodeAssert.deepEqual(limits.windows, [
+        {
+          id: "copilot_premium_interactions",
+          kind: "monthly",
+          label: "Copilot · Premium requests",
+          usedPercent: 100 - 84.6,
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        },
+      ]);
+    }
+  }),
+);
+
+it.effect("shows the accounts that answered when another OpenCode login fails", () =>
+  Effect.gen(function* () {
+    const auth =
+      '{"opencode-go":{"type":"api","key":"go-key"},"github-copilot":{"type":"oauth","refresh":"gho_token"}}';
+    const probe = (failing: "go" | "copilot" | "both" | "copilotUnlimited") =>
+      readOpenCodeUsageLimits({
+        enabled: true,
+        serverUrl: "",
+        environment: { OPENCODE_AUTH_CONTENT: auth },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            const isGo = request.url.includes("opencode.ai");
+            const fail = failing === "both" || failing === (isGo ? "go" : "copilot");
+            if (fail) {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(request, Response.json({}, { status: 500 })),
+              );
+            }
+            const resetsAt = "2026-09-17T12:00:00.000Z";
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                isGo
+                  ? Response.json({
+                      usage: {
+                        rolling: { percent: 5, resetsAt },
+                        weekly: { percent: 5, resetsAt },
+                        monthly: { percent: 5, resetsAt },
+                      },
+                    })
+                  : copilotUser({
+                      premium_interactions: {
+                        percent_remaining: 50,
+                        unlimited: failing === "copilotUnlimited",
+                      },
+                    }),
+              ),
+            );
+          }),
+        ),
+        Effect.provide(NodeServices.layer),
+      );
+
+    const goFailed = yield* probe("go");
+    NodeAssert.deepEqual(
+      goFailed.windows.map((window) => window.id),
+      ["copilot_premium_interactions"],
+    );
+    const copilotFailed = yield* probe("copilot");
+    NodeAssert.deepEqual(
+      copilotFailed.windows.map((window) => window.id),
+      ["go_rolling", "go_weekly", "go_monthly"],
+    );
+    const bothFailed = yield* probe("both");
+    NodeAssert.deepEqual(bothFailed.unavailable, {
+      reason: "probeFailed",
+      message: "OpenCode Go and GitHub Copilot could not read usage.",
+    });
+    const copilotUnlimited = yield* probe("copilotUnlimited");
+    NodeAssert.equal(copilotUnlimited.windows.length, 3);
   }),
 );
 
