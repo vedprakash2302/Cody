@@ -296,6 +296,7 @@ describe("CheckpointReactor", () => {
       cwd: string,
     ) => VcsProcessTimeoutError | VcsProcessSpawnError | undefined;
     readonly workspaceRefresh?: (cwd: string) => Effect.Effect<void>;
+    readonly beforeCheckpointSummary?: Effect.Effect<void>;
     readonly hasSession?: boolean;
     readonly seedFilesystemCheckpoints?: boolean;
     readonly initializeGit?: boolean;
@@ -382,6 +383,10 @@ describe("CheckpointReactor", () => {
           CheckpointStore.make.pipe(
             Effect.map((store) => ({
               ...store,
+              diffCheckpoints: (input) =>
+                (options?.beforeCheckpointSummary ?? Effect.void).pipe(
+                  Effect.andThen(store.diffCheckpoints(input)),
+                ),
               hasCheckpointRef: (input) => {
                 const failure = options?.checkpointLookupFailure?.(input.cwd);
                 return failure ? Effect.fail(failure) : store.hasCheckpointRef(input);
@@ -1497,6 +1502,49 @@ describe("CheckpointReactor", () => {
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1)),
     ).toBe(true);
   });
+
+  effectIt.effect("finalizes a delayed summary with complete files and no failure activity", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeCheckpointSummary: Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+          ),
+        }),
+      );
+      NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "updated\n");
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.make("evt-delayed-summary"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-delayed-summary"),
+        payload: { state: "completed" },
+      });
+      yield* Deferred.await(started);
+      expect(
+        gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1)),
+      ).toBe(true);
+      yield* Deferred.succeed(finish, undefined);
+      expect(yield* harness.nextReceipt).toMatchObject({
+        type: "checkpoint.diff.finalized",
+        checkpointTurnCount: 1,
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "turn.processing.quiesced" });
+      yield* Effect.promise(harness.drain);
+      const thread = (yield* Effect.promise(harness.readModel)).threads[0];
+      expect(thread?.checkpoints[0]).toMatchObject({
+        status: "ready",
+        files: [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }],
+      });
+      expect(
+        thread?.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+      ).toBe(false);
+    }),
+  );
 
   effectIt.effect("captures a checkpoint without a summary when the baseline is missing", () =>
     Effect.gen(function* () {
