@@ -3,12 +3,14 @@
  * through its preview tunnel, and the credentials the tunnel needs.
  *
  * `localhost` in a preview tab means the machine the environment runs on.
- * For the desktop's own backends that is this machine, so tabs load
- * directly. For every other environment the desktop proxies loopback traffic
- * over the environment's `/api/preview-tunnel`, which rides whatever
- * connection already reaches that server: LAN, Tailscale, SSH, or T3 Connect.
- * The decision follows the environment, not its URL, because an SSH forward
- * or a port forward into WSL makes a remote server look like loopback.
+ * Only a desktop-managed backend reached over loopback shares this machine's
+ * `localhost`, so only its tabs load directly. Every other environment,
+ * including a desktop-managed WSL backend on its NAT address, gets its
+ * loopback traffic proxied over the environment's `/api/preview-tunnel`,
+ * which rides whatever connection already reaches that server: LAN,
+ * Tailscale, SSH, or T3 Connect. A remote environment tunnels even when its
+ * URL is loopback, because an SSH forward or a port forward into WSL makes a
+ * remote server look local.
  */
 import { useAtomValue } from "@effect/atom-react";
 import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
@@ -17,6 +19,7 @@ import {
   resolveEnvironmentSocketAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -38,17 +41,29 @@ const CREDENTIAL_REFRESH_MS = 4 * 60_000;
 export function shouldTunnelPreview(input: {
   readonly isElectron: boolean;
   readonly target: ConnectionTarget | null;
+  /** The URL this client uses to reach the environment. */
+  readonly httpBaseUrl: string | null;
   readonly serverSupportsTunnel: boolean;
   /** Cookie sessions have no ticket to hand the desktop's main process. */
   readonly hasAuthorization: boolean;
 }): boolean {
   if (!input.isElectron || input.target === null) return false;
   if (!input.serverSupportsTunnel || !input.hasAuthorization) return false;
-  // The desktop manages these backends on this machine, even when their URL
-  // is a WSL address rather than loopback.
-  return (
-    input.target._tag !== "PrimaryConnectionTarget" && !isDesktopLocalConnectionTarget(input.target)
-  );
+  const desktopManaged =
+    input.target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(input.target);
+  if (!desktopManaged) return true;
+  // A desktop-managed backend in WSL (NAT networking) has its own loopback,
+  // which the WSL address cannot reach from here.
+  return !isOnThisMachinesLoopback(input.httpBaseUrl);
+}
+
+function isOnThisMachinesLoopback(httpBaseUrl: string | null): boolean {
+  if (httpBaseUrl === null) return false;
+  try {
+    return isLocalLoopbackHost(new URL(httpBaseUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 const previewTunnelAtom = Atom.family((environmentId: EnvironmentId) =>
@@ -59,6 +74,7 @@ const previewTunnelAtom = Atom.family((environmentId: EnvironmentId) =>
     return shouldTunnelPreview({
       isElectron,
       target: get(environmentCatalog.catalogValueAtom).entries.get(environmentId)?.target ?? null,
+      httpBaseUrl: prepared?.httpBaseUrl ?? null,
       serverSupportsTunnel:
         get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
           .previewTunnel === true,
