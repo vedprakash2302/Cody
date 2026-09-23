@@ -2,11 +2,52 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const readPreparedConnection = vi.fn();
+const readPreviewTunnel = vi.fn(() => false);
 
 vi.mock("~/state/session", () => ({ readPreparedConnection }));
+vi.mock("~/state/previewTunnel", () => ({ readPreviewTunnel }));
 
 describe("browser target resolver", () => {
-  beforeEach(() => readPreparedConnection.mockReset());
+  beforeEach(() => {
+    readPreparedConnection.mockReset();
+    readPreviewTunnel.mockReset().mockReturnValue(false);
+  });
+
+  it("keeps the environment's own localhost URL for a tunneled environment", async () => {
+    // An SSH or WSL port forward looks like loopback; the tunnel does not care.
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.1:49152" });
+    readPreviewTunnel.mockReturnValue(true);
+    const { resolveBrowserNavigationTarget, resolveDiscoveredServerUrl } =
+      await import("./browserTargetResolver");
+    const environmentId = EnvironmentId.make("environment-remote");
+    expect(
+      resolveBrowserNavigationTarget(environmentId, {
+        kind: "environment-port",
+        port: 7378,
+        path: "/usage",
+      }),
+    ).toEqual({
+      requestedUrl: "http://localhost:7378/usage",
+      resolvedUrl: "http://localhost:7378/usage",
+      resolutionKind: "environment-tunnel",
+      environmentId,
+    });
+    expect(resolveDiscoveredServerUrl(environmentId, "http://127.0.0.1:5173/")).toBe(
+      "http://127.0.0.1:5173/",
+    );
+  });
+
+  it("tunnels public relay hosts instead of refusing them", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://env.t3.codes" });
+    readPreviewTunnel.mockReturnValue(true);
+    const { resolveBrowserNavigationTarget } = await import("./browserTargetResolver");
+    expect(
+      resolveBrowserNavigationTarget(EnvironmentId.make("environment-relay"), {
+        kind: "environment-port",
+        port: 3000,
+      }).resolutionKind,
+    ).toBe("environment-tunnel");
+  });
 
   it("maps environment ports onto a private network host", async () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });

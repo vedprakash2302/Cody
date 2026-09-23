@@ -939,7 +939,12 @@ export type PreviewAutomationError = typeof PreviewAutomationError.Type;
 export const PreviewUrlResolution = Schema.Struct({
   requestedUrl: Schema.String,
   resolvedUrl: Schema.String,
-  resolutionKind: Schema.Literals(["direct", "direct-private-network"]),
+  /**
+   * `environment-tunnel` keeps the environment's own `localhost` URL: the
+   * desktop carries that tab's loopback traffic to the environment. Only
+   * servers advertising the `previewTunnel` capability receive it.
+   */
+  resolutionKind: Schema.Literals(["direct", "direct-private-network", "environment-tunnel"]),
   environmentId: EnvironmentId,
 });
 export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;

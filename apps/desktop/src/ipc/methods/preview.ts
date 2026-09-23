@@ -9,6 +9,7 @@ import {
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
+  DesktopPreviewTunnelCredentialsInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
@@ -32,10 +33,12 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
+import type { Session } from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
+import { PreviewTunnelProxies } from "../../preview/PreviewTunnelProxy.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import { PREVIEW_WEBVIEW_PREFERENCES } from "../../preview/WebviewPreferences.ts";
 import * as IpcChannels from "../channels.ts";
@@ -284,22 +287,73 @@ const resolveClearPartitions = Effect.fn("desktop.ipc.preview.resolveClearPartit
   return [yield* manager.getBrowserPartition(scope, persistent, namespace)];
 });
 
+/** Process-wide, like the Electron sessions it serves: one proxy per remote environment. */
+const previewTunnels = new PreviewTunnelProxies();
+const tunneledSessions = new WeakSet<Session>();
+
+/**
+ * Points a partition's proxy at the environment's tunnel, or back to the
+ * system proxy. `<-loopback>` removes Chromium's implicit loopback bypass,
+ * which is the whole point; the tunnel dials every other host directly.
+ */
+const routePreviewSession = Effect.fn("desktop.ipc.preview.routeSession")(function* (
+  session: Session,
+  environmentId: string,
+  tunnel: boolean,
+) {
+  if (tunnel === tunneledSessions.has(session)) return;
+  if (tunnel) {
+    const port = yield* Effect.promise(() => previewTunnels.portFor(environmentId));
+    yield* Effect.promise(() =>
+      session.setProxy({
+        mode: "fixed_servers",
+        proxyRules: `socks5://127.0.0.1:${port}`,
+        proxyBypassRules: "<-loopback>",
+      }),
+    );
+    tunneledSessions.add(session);
+  } else {
+    yield* Effect.promise(() => session.setProxy({ mode: "system" }));
+    tunneledSessions.delete(session);
+  }
+  // Connections opened under the previous route would otherwise be reused.
+  yield* Effect.promise(() => session.closeAllConnections());
+});
+
 export const getPreviewConfig = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_GET_CONFIG_CHANNEL,
   payload: DesktopPreviewConfigInputSchema,
   result: DesktopPreviewWebviewConfigSchema,
-  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({ environmentId, profileId }) {
+  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({
+    environmentId,
+    profileId,
+    tunnel,
+  }) {
     const manager = yield* PreviewManager.PreviewManager;
     const { scope, persistent, namespace } = resolvePartitionScope(environmentId, profileId);
     // Creating the session first is what installs the UA rewrite and permission
     // handlers; a guest that attached to an untouched partition would run with
-    // Electron's default UA and Chromium's default permission behaviour.
-    yield* manager.getBrowserSession(scope, persistent, namespace);
+    // Electron's default UA and Chromium's default permission behaviour. The
+    // route is set here too, so the webview never loads before it applies.
+    const session = yield* manager.getBrowserSession(scope, persistent, namespace);
+    yield* routePreviewSession(session, environmentId, tunnel === true);
     return {
       partition: yield* manager.getBrowserPartition(scope, persistent, namespace),
       webPreferences: PREVIEW_WEBVIEW_PREFERENCES,
       preloadUrl: NodeURL.pathToFileURL(`${__dirname}/preview-pick-preload.cjs`).href,
     };
+  }),
+});
+
+export const setTunnelCredentials = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_TUNNEL_CREDENTIALS_CHANNEL,
+  payload: DesktopPreviewTunnelCredentialsInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setTunnelCredentials")(function* ({
+    environmentId,
+    credentials,
+  }) {
+    yield* Effect.promise(() => previewTunnels.setCredentials(environmentId, credentials));
   }),
 });
 
@@ -484,6 +538,7 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
 
 export const methods = [
   createTab,
+  setTunnelCredentials,
   closeTab,
   registerWebview,
   navigate,

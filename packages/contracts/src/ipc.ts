@@ -1048,6 +1048,24 @@ export const DesktopPreviewConfigInputSchema = Schema.Struct({
    * UA rewrite or permission handlers installed.
    */
   profileId: Schema.optional(BrowserProfileId),
+  /**
+   * Route the partition's loopback traffic through the environment's preview
+   * tunnel. Set for environments on another machine; the renderer supplies
+   * credentials separately through `setTunnelCredentials`.
+   */
+  tunnel: Schema.optional(Schema.Boolean),
+});
+
+export const DesktopPreviewTunnelCredentialsInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  /** `null` clears credentials, for example after the environment disconnects. */
+  credentials: Schema.NullOr(
+    Schema.Struct({
+      /** `ws(s)://…/api/preview-tunnel` on the environment. */
+      tunnelUrl: Schema.String.check(Schema.isPattern(/^wss?:\/\//)),
+      wsTicket: Schema.String,
+    }),
+  ),
 });
 
 export const DesktopPreviewClearDataInputSchema = Schema.Struct({
@@ -1292,7 +1310,17 @@ export interface DesktopPreviewBridge {
   getPreviewConfig: (
     environmentId: EnvironmentId,
     profileId?: string,
+    options?: { readonly tunnel?: boolean },
   ) => Promise<DesktopPreviewWebviewConfig>;
+  /**
+   * Credentials the preview tunnel uses for this environment's loopback
+   * traffic. Tickets expire, so the renderer sends fresh ones while tabs are
+   * open.
+   */
+  setTunnelCredentials: (
+    environmentId: EnvironmentId,
+    credentials: { readonly tunnelUrl: string; readonly wsTicket: string } | null,
+  ) => Promise<void>;
   /** Browsers on this machine whose cookies can be imported. */
   listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
   importBrowserCookies: (input: {

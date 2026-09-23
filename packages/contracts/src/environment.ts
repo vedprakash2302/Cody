@@ -128,6 +128,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       client reconnecting to one must drop published themes rather than keep
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
+  /** Server tunnels client connections to its own loopback ports at
+      `/api/preview-tunnel`, so the desktop Browser panel can load a remote
+      environment's dev servers. Absent on older servers. */
+  previewTunnel: Schema.optionalKey(Schema.Boolean),
   /** Server streams quota from configured usage-limit sources. Same
       version-skew contract as environmentThemes. */
   usageLimitSources: Schema.optionalKey(Schema.Boolean),

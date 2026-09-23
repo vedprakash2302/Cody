@@ -198,6 +198,35 @@ export const requireEnvironmentScope = Effect.fn("environment.auth.requireScope"
   return session;
 });
 
+/**
+ * Authenticates a raw route the way the `/ws` upgrade does. `<img>` and
+ * WebSocket cannot set headers, so this accepts a cookie for browser sessions
+ * or a short-lived `wsTicket` minted over authenticated HTTP for bearer and
+ * DPoP clients, for plain requests as well as upgrades.
+ */
+export const requireUpgradeScope = Effect.fn("environment.auth.requireUpgradeScope")(function* (
+  requiredScope: AuthEnvironmentScope,
+) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        if (EnvironmentAuth.isServerAuthCredentialError(error)) {
+          return yield* failEnvironmentAuthInvalid(
+            EnvironmentAuth.serverAuthCredentialReason(error),
+            EnvironmentAuth.serverAuthDpopFailureReason(error),
+          );
+        }
+        return yield* failEnvironmentInternal("internal_error", error);
+      }),
+    ),
+  );
+  if (!session.scopes.includes(requiredScope)) {
+    return yield* failEnvironmentScopeRequired(requiredScope);
+  }
+});
+
 export const environmentAuthenticatedAuthLayer = Layer.effect(
   EnvironmentAuthenticatedAuth,
   Effect.gen(function* () {

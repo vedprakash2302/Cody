@@ -1,17 +1,24 @@
 "use client";
 
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
+import { type EnvironmentId, FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useEffect, useMemo } from "react";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
 import { useActivePreviewSessions } from "~/previewStateStore";
+import { usePreviewTunnel, usePreviewTunnelCredentials } from "~/state/previewTunnel";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
+
+/** Keeps one remote environment's tunnel credentials current while it has tabs. */
+function PreviewTunnelCredentials({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  usePreviewTunnelCredentials(environmentId, usePreviewTunnel(environmentId));
+  return null;
+}
 
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
@@ -36,6 +43,10 @@ export function ElectronBrowserHost() {
           : [];
       }),
     [previewByThreadKey],
+  );
+  const environmentIds = useMemo(
+    () => [...new Set(sessions.map(({ threadRef }) => threadRef.environmentId))],
+    [sessions],
   );
 
   useEffect(() => {
@@ -82,6 +93,9 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
+      {environmentIds.map((environmentId) => (
+        <PreviewTunnelCredentials key={environmentId} environmentId={environmentId} />
+      ))}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
