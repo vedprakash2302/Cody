@@ -956,7 +956,7 @@ export function BranchToolbarBranchSelector({
                   </label>
                 }
               />
-              <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
+              <TooltipPopup side="top">
                 Fetches the selected remote branch before creating the worktree. For a local branch,
                 uses the matching branch on origin when available. Turn off to use the selected ref
                 without fetching.
