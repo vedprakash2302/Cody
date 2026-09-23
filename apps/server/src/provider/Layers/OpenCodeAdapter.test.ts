@@ -30,6 +30,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -61,6 +62,8 @@ type MessageEntry = {
   info: {
     id: string;
     role: "user" | "assistant";
+    parentID?: string;
+    time?: { created: number; completed?: number };
   };
   parts: Array<unknown>;
 };
@@ -115,6 +118,7 @@ const runtimeMock = {
     }>,
     questionReplyImplementation: null as ((signal?: AbortSignal) => Promise<void>) | null,
     sessionStatus: "idle" as "idle" | "busy",
+    latestReplyFinished: true,
     sessionStatusFailures: 0,
     sessionStatusCalls: 0,
     sessionStatusImplementation: null as (() => Promise<unknown>) | null,
@@ -176,6 +180,7 @@ const runtimeMock = {
     this.state.questionReplyCalls.length = 0;
     this.state.questionReplyImplementation = null;
     this.state.sessionStatus = "idle";
+    this.state.latestReplyFinished = true;
     this.state.sessionStatusFailures = 0;
     this.state.sessionStatusCalls = 0;
     this.state.sessionStatusImplementation = null;
@@ -196,6 +201,19 @@ const runtimeMock = {
     this.state.forkCalls.length = 0;
   },
 };
+
+// OpenCode stores a completed assistant reply once it has finished a prompt.
+function finishedReply(parentID: string): MessageEntry {
+  return {
+    info: {
+      id: `msg-reply-${parentID}`,
+      role: "assistant",
+      parentID,
+      time: { created: 1, completed: 2 },
+    },
+    parts: [],
+  };
+}
 
 const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   startOpenCodeServerProcess: ({ binaryPath, serverPassword }) =>
@@ -405,10 +423,21 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           runtimeMock.state.summarizeCalls.push(input);
           return { data: true };
         },
-        messages: async ({ sessionID }: { sessionID: string }) => ({
-          data:
-            runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages,
-        }),
+        messages: async ({ sessionID, limit }: { sessionID: string; limit?: number }) => {
+          const messages =
+            runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages;
+          if (limit === undefined) {
+            return { data: messages };
+          }
+          // OpenCode returns the newest `limit` messages, oldest first. Most
+          // tests model a prompt OpenCode already finished without storing its
+          // reply, so the newest message defaults to a completed assistant.
+          return {
+            data: runtimeMock.state.latestReplyFinished
+              ? [finishedReply("msg-mock-latest")]
+              : messages.slice(-limit),
+          };
+        },
         message: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
           runtimeMock.state.messageCalls.push({ sessionID, messageID });
           if (runtimeMock.state.messageFailures > 0) {
@@ -2293,6 +2322,215 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("keeps a cold-start prompt running until OpenCode starts and finishes it", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-cold-start-admission");
+      const sessionID = "http://127.0.0.1:9999/session";
+      const echoEvent = promiseWithResolvers<unknown>();
+      const busyEvent = promiseWithResolvers<unknown>();
+      const toolEvent = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.latestReplyFinished = false;
+      runtimeMock.state.subscribedEvents = [
+        echoEvent.promise,
+        busyEvent.promise,
+        toolEvent.promise,
+        idleEvent.promise,
+      ];
+      // A cold server stores the prompt but leaves the session out of
+      // session.status until it starts running it.
+      runtimeMock.state.sessionStatusImplementation = async () => ({ data: {} });
+      runtimeMock.state.promptAsyncImplementation = async () => {
+        const prompt = runtimeMock.state.promptCalls.at(-1) as { messageID?: string } | undefined;
+        if (prompt?.messageID) {
+          runtimeMock.state.messages.push({
+            info: { id: prompt.messageID, role: "user" },
+            parts: [],
+          });
+        }
+      };
+
+      const events: Array<ProviderRuntimeEvent> = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "Run on a cold server",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      const messageId = (runtimeMock.state.promptCalls.at(-1) as { messageID: string }).messageID;
+
+      // Poll well past the old two-idle-read completion before OpenCode starts.
+      for (let index = 0; index < 10; index += 1) {
+        yield* advanceTestClock(2_000);
+      }
+      NodeAssert.ok(runtimeMock.state.sessionStatusCalls >= 3);
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+      const waitingSession = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(waitingSession?.status, "running");
+      NodeAssert.equal(waitingSession?.activeTurnId, turn.turnId);
+
+      echoEvent.resolve({
+        id: "evt-cold-start-echo",
+        type: "message.updated",
+        properties: { sessionID, info: { id: messageId, role: "user" } },
+      });
+      busyEvent.resolve({
+        id: "evt-cold-start-busy",
+        type: "session.status",
+        properties: { sessionID, status: { type: "busy" } },
+      });
+      toolEvent.resolve({
+        id: "evt-cold-start-tool",
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          time: 4,
+          part: {
+            id: "part-cold-start-tool",
+            sessionID,
+            messageID: "msg-cold-start-reply",
+            type: "tool",
+            callID: "call-cold-start",
+            tool: "bash",
+            state: { status: "running", input: { command: "pwd" }, time: { start: 1 } },
+          },
+        },
+      });
+      yield* advanceTestClock(0);
+      const toolItem = events.find((event) => event.itemId === "call-cold-start");
+      NodeAssert.equal(toolItem?.turnId, turn.turnId);
+
+      runtimeMock.state.messages.push(finishedReply(messageId));
+      idleEvent.resolve({
+        id: "evt-cold-start-idle",
+        type: "session.status",
+        properties: { sessionID, status: { type: "idle" } },
+      });
+      yield* advanceTestClock(2_000);
+
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.equal(completed[0]?.turnId, turn.turnId);
+      NodeAssert.equal(
+        completed[0]?.type === "turn.completed" ? completed[0].payload.state : undefined,
+        "completed",
+      );
+      const session = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(session?.status, "ready");
+      NodeAssert.equal(session?.activeTurnId, undefined);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("fails a stored prompt that OpenCode never starts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-prompt-never-starts");
+      const abortIdleEvent = promiseWithResolvers<unknown>();
+      const abortRelease = promiseWithResolvers<void>();
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.latestReplyFinished = false;
+      runtimeMock.state.subscribedEvents = [abortIdleEvent.promise];
+      runtimeMock.state.sessionStatusImplementation = async () => ({ data: {} });
+      runtimeMock.state.promptAsyncImplementation = async () => {
+        const prompt = runtimeMock.state.promptCalls.at(-1) as { messageID?: string } | undefined;
+        if (prompt?.messageID) {
+          runtimeMock.state.messages.push({
+            info: { id: prompt.messageID, role: "user" },
+            parts: [],
+          });
+        }
+      };
+      // Aborting a session with no runner publishes idle before responding.
+      runtimeMock.state.abortImplementation = async (sessionID) => {
+        abortIdleEvent.resolve({
+          id: "evt-idle-from-abort",
+          type: "session.status",
+          properties: { sessionID, status: { type: "idle" } },
+        });
+        await abortRelease.promise;
+      };
+
+      const events: Array<ProviderRuntimeEvent> = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "Never started",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+
+      // Advance until the wait gives up and aborts, then stop the clock so the
+      // abort cannot time out while OpenCode's idle event is processed.
+      for (let index = 0; index < 50; index += 1) {
+        yield* advanceTestClock(2_000);
+      }
+      NodeAssert.equal(events.length, 0);
+      NodeAssert.equal(runtimeMock.state.abortCalls.length, 0);
+      // Small steps keep the abort's own 1s timeout from firing.
+      for (let index = 0; index < 200 && runtimeMock.state.abortCalls.length === 0; index += 1) {
+        yield* advanceTestClock(250);
+      }
+      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
+      // Let the event pump handle OpenCode's idle before the abort returns.
+      const drainPump = Effect.promise(
+        () => new Promise<void>((resolve) => setImmediate(resolve)),
+      ).pipe(Effect.andThen(Effect.yieldNow), Effect.repeat({ times: 4 }));
+      yield* drainPump;
+      abortRelease.resolve(undefined);
+      yield* drainPump;
+
+      NodeAssert.deepEqual(
+        events.map((event) => [
+          event.turnId,
+          event.type === "turn.completed" ? event.payload.state : undefined,
+        ]),
+        [[turn.turnId, "failed"]],
+      );
+      NodeAssert.ok(runtimeMock.state.abortCalls.length > 0);
+      const session = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(session?.status, "error");
+      NodeAssert.equal(session?.activeTurnId, undefined);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("uses polled busy status to admit output after a stopped turn", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -3404,6 +3642,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const idleEvent = promiseWithResolvers<unknown>();
       const userMessageEvent = promiseWithResolvers<unknown>();
       runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.latestReplyFinished = false;
       runtimeMock.state.subscribedEvents = [idleEvent.promise, userMessageEvent.promise];
       runtimeMock.state.sessionStatusImplementation = async () => ({ data: {} });
 
@@ -3437,6 +3676,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const activeMessageId = (
         runtimeMock.state.promptCalls.at(-1) as { messageID?: string } | undefined
       )?.messageID;
+      NodeAssert.ok(activeMessageId);
+      runtimeMock.state.messages.push({ info: { id: activeMessageId, role: "user" }, parts: [] });
       idleEvent.resolve({
         id: "evt-only-idle-before-exact-echo-after-stop",
         type: "session.status",
@@ -3462,6 +3703,20 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
       });
       yield* advanceTestClock(250);
+
+      // The stopped turn's idle cannot complete a prompt OpenCode has not run.
+      for (let index = 0; index < 5; index += 1) {
+        yield* advanceTestClock(2_000);
+      }
+      NodeAssert.equal(completedFiber.pollUnsafe(), undefined);
+      const sessionBeforeReply = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(sessionBeforeReply?.status, "running");
+      NodeAssert.equal(sessionBeforeReply?.activeTurnId, activeTurn.turnId);
+
+      runtimeMock.state.messages.push(finishedReply(activeMessageId));
+      yield* advanceTestClock(2_000);
 
       const completed = Option.getOrUndefined(
         yield* Fiber.join(completedFiber).pipe(Effect.timeout("1 second")),

@@ -194,6 +194,10 @@ const OpenCodeSessionStatusMap = Schema.Record(
 );
 const decodeOpenCodeSessionStatusMap = Schema.decodeUnknownOption(OpenCodeSessionStatusMap);
 
+// A cold OpenCode server can take several seconds to start a stored prompt.
+// Past this, reconciliation fails the turn instead of showing it as running.
+const OPENCODE_PROMPT_START_TIMEOUT_MS = 120_000;
+
 interface OpenCodeCancellation {
   readonly turnId: TurnId | undefined;
   readonly acknowledgment: Deferred.Deferred<void>;
@@ -1167,6 +1171,29 @@ export function makeOpenCodeAdapter(
       });
     });
 
+    // session.status drops idle sessions, so a missing entry also covers a
+    // prompt OpenCode has stored but not started yet. Reconciliation only runs
+    // once the turn's prompt is stored, so the prompt is finished only when the
+    // newest message is a completed assistant message. Its parent may be a
+    // message OpenCode added itself, such as a compaction continue prompt.
+    const readPromptReplyState = Effect.fn("readPromptReplyState")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      const response = yield* runOpenCodeSdk("session.messages", (signal) =>
+        context.client.session.messages(
+          { sessionID: context.openCodeSessionId, limit: 1 },
+          { signal },
+        ),
+      ).pipe(Effect.timeout("1 second"), Effect.option);
+      if (Option.isNone(response)) {
+        return "unknown" as const;
+      }
+      const newest = response.value.data?.at(-1)?.info;
+      return newest?.role === "assistant" && newest.time.completed !== undefined
+        ? ("finished" as const)
+        : ("pending" as const);
+    });
+
     const scheduleIdleReconciliation = Effect.fn("scheduleIdleReconciliation")(function* (
       context: OpenCodeSessionContext,
       turnId: TurnId,
@@ -1190,6 +1217,7 @@ export function makeOpenCodeAdapter(
       context.pendingIdleReconciliation = pending;
       const reconcile = Effect.gen(function* () {
         let retryCount = 0;
+        let notStartedWaitMs = 0;
         while (context.pendingIdleReconciliation === pending) {
           if (
             context.activeTurnId !== turnId ||
@@ -1222,6 +1250,8 @@ export function makeOpenCodeAdapter(
               },
             }),
           );
+          const replyState =
+            result.type === "idle" ? yield* readPromptReplyState(context) : undefined;
 
           if (
             context.pendingIdleReconciliation !== pending ||
@@ -1230,10 +1260,27 @@ export function makeOpenCodeAdapter(
           ) {
             return;
           }
-          if (result.type === "idle") {
+          if (result.type === "idle" && replyState === "finished") {
             context.pendingIdleReconciliation = undefined;
             yield* completeOpenCodeTurn(context, turnId, pending.promptGeneration, pending.raw);
             return;
+          }
+          if (result.type === "idle" && replyState === "pending") {
+            if (notStartedWaitMs >= OPENCODE_PROMPT_START_TIMEOUT_MS) {
+              context.pendingIdleReconciliation = undefined;
+              yield* failUnconfirmedTurn(
+                context,
+                turnId,
+                pending.raw,
+                "OpenCode went idle without finishing the prompt.",
+              );
+              return;
+            }
+            const delayMs = Math.min(250 * 2 ** retryCount, 2_000);
+            retryCount += 1;
+            notStartedWaitMs += delayMs;
+            yield* Effect.sleep(`${delayMs} millis`);
+            continue;
           }
           if (result.type === "busy") {
             if (pending.dirty) {
@@ -1251,9 +1298,11 @@ export function makeOpenCodeAdapter(
               payload: {
                 message: "OpenCode turn completion is waiting for session status.",
                 detail:
-                  result.cause === undefined
-                    ? "session.status returned missing or invalid status data."
-                    : openCodeRuntimeErrorDetail(result.cause),
+                  result.type === "idle"
+                    ? "session.messages did not return the latest message."
+                    : result.cause === undefined
+                      ? "session.status returned missing or invalid status data."
+                      : openCodeRuntimeErrorDetail(result.cause),
               },
             });
           }
@@ -1285,8 +1334,25 @@ export function makeOpenCodeAdapter(
       ) {
         return;
       }
-      const detail =
-        "OpenCode accepted the prompt, but T3 Code could not confirm its message or session status.";
+      yield* failUnconfirmedTurn(
+        context,
+        promptAdmission.turnId,
+        promptAdmission.recoveryRaw,
+        "OpenCode accepted the prompt, but T3 Code could not confirm its message or session status.",
+      );
+    });
+
+    // Aborts the OpenCode prompt and fails the active turn. Callers check that
+    // `turnId` is still the active turn of the current prompt generation.
+    const failUnconfirmedTurn = Effect.fn("failUnconfirmedTurn")(function* (
+      context: OpenCodeSessionContext,
+      turnId: TurnId,
+      raw: unknown,
+      detail: string,
+    ) {
+      // Aborting an unstarted prompt makes OpenCode publish idle before the
+      // abort returns. Hold the turn so that idle cannot complete it first.
+      context.awaitingBusyAfterInterruption = true;
       const abortExit = yield* Effect.exit(
         runOpenCodeSdk("session.abort", (signal) =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
@@ -1315,8 +1381,8 @@ export function makeOpenCodeAdapter(
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
-          turnId: promptAdmission.turnId,
-          raw: promptAdmission.recoveryRaw,
+          turnId,
+          raw,
         })),
         type: "turn.completed",
         payload: {
@@ -1328,8 +1394,8 @@ export function makeOpenCodeAdapter(
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
-          turnId: promptAdmission.turnId,
-          raw: promptAdmission.recoveryRaw,
+          turnId,
+          raw,
         })),
         type: "runtime.error",
         payload: {
@@ -1443,11 +1509,9 @@ export function makeOpenCodeAdapter(
           }
 
           const idle = promptAdmission.idleDuringAdmission ?? promptAdmission.priorIdle;
-          if (
-            isIdle &&
-            idle !== undefined &&
-            (promptAdmission.messageObserved || promptAdmission.busyObserved)
-          ) {
+          // A busy event may belong to the previous run, so only a stored
+          // prompt can hand off to reconciliation.
+          if (isIdle && idle !== undefined && promptAdmission.messageObserved) {
             context.promptAdmission = undefined;
             context.awaitingBusyAfterInterruption = false;
             yield* scheduleIdleReconciliation(context, promptAdmission.turnId, idle.raw);
@@ -1458,15 +1522,12 @@ export function makeOpenCodeAdapter(
             if (promptAdmission.idleStatusConfirmations >= 2) {
               context.promptAdmission = undefined;
               context.awaitingBusyAfterInterruption = false;
-              yield* completeOpenCodeTurn(
-                context,
-                promptAdmission.turnId,
-                promptAdmission.generation,
-                {
-                  type: "session.status.recovered",
-                  status: statusData,
-                },
-              );
+              // Reconciliation confirms OpenCode ran the prompt before
+              // completing the turn.
+              yield* scheduleIdleReconciliation(context, promptAdmission.turnId, {
+                type: "session.status.recovered",
+                status: statusData,
+              });
               return;
             }
           } else if (!isIdle) {
