@@ -10,7 +10,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { shouldTunnelPreview } from "./previewTunnel";
 
 const environmentId = EnvironmentId.make("environment-1");
-const base = { isElectron: true, serverSupportsTunnel: true, hasAuthorization: true };
+const base = {
+  isElectron: true,
+  serverSupportsTunnel: true,
+  hasAuthorization: true,
+  httpBaseUrl: "http://127.0.0.1:49152",
+};
 const saved = new BearerConnectionTarget({
   environmentId,
   label: "Devbox",
@@ -28,19 +33,34 @@ describe("shouldTunnelPreview", () => {
     }
   });
 
-  it("loads the desktop's own backends directly", () => {
-    const primary = new PrimaryConnectionTarget({
-      environmentId,
-      label: "This machine",
-      httpBaseUrl: "http://172.30.75.225:4773",
-      wsBaseUrl: "ws://172.30.75.225:4773",
-    });
+  it("loads the desktop's own backend directly only when it shares this machine's loopback", () => {
+    const primary = (httpBaseUrl: string) =>
+      new PrimaryConnectionTarget({
+        environmentId,
+        label: "This machine",
+        httpBaseUrl,
+        wsBaseUrl: httpBaseUrl.replace(/^http/, "ws"),
+      });
     const wsl = new BearerConnectionTarget({
       environmentId,
       label: "WSL",
       connectionId: "local:wsl:Ubuntu",
     });
-    expect(shouldTunnelPreview({ ...base, target: primary })).toBe(false);
+    for (const httpBaseUrl of [
+      "http://127.0.0.1:4773",
+      "http://localhost:4773",
+      "http://[::1]:4773",
+    ]) {
+      expect(shouldTunnelPreview({ ...base, httpBaseUrl, target: primary(httpBaseUrl) })).toBe(
+        false,
+      );
+    }
+    // WSL-only mode binds the WSL NAT address, whose loopback is not this machine's.
+    const natUrl = "http://172.30.75.225:4773";
+    expect(shouldTunnelPreview({ ...base, httpBaseUrl: natUrl, target: primary(natUrl) })).toBe(
+      true,
+    );
+    expect(shouldTunnelPreview({ ...base, httpBaseUrl: natUrl, target: wsl })).toBe(true);
     expect(shouldTunnelPreview({ ...base, target: wsl })).toBe(false);
   });
 
