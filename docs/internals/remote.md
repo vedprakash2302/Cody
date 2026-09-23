@@ -52,6 +52,23 @@ launcher owns it; a server it discovered already running must survive a client
 disconnect. Reconnection restores the forward before opening the application
 transport.
 
+The desktop Browser panel reaches a remote environment's dev servers through
+that same connection instead of a direct route. Each preview session for an
+environment on another machine proxies loopback traffic through a
+[SOCKS listener in desktop main](../../apps/desktop/src/preview/PreviewTunnelProxy.ts),
+which opens one WebSocket per connection to the server's
+[`/api/preview-tunnel`](../../apps/server/src/preview/PreviewTunnel.ts). The
+server dials only its own loopback. This is the only design that keeps the
+page's `localhost` origin, which dev servers' host checks, OAuth callbacks,
+cookies, and secure-context APIs depend on. Rewriting URLs to the
+environment's host breaks those, and fails outright for SSH forwards and port
+forwards, whose URLs are loopback on the client.
+[Whether a tab tunnels](../../apps/web/src/state/previewTunnel.ts) follows the
+environment's connection target, not its URL, for the same reason. Chromium's
+PAC mode always bypasses loopback, so the session uses fixed rules with
+`<-loopback>` and the listener dials other hosts directly. Hosted web and
+mobile cannot reroute their own loopback traffic and do not tunnel.
+
 Remote servers can outlive several client releases. Clients must use advertised
 capabilities and handle their absence, rather than assume their own version
 describes the server. Process replacement belongs to the launcher's

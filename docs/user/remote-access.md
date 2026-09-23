@@ -143,6 +143,19 @@ running is left alone.
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).
 
+## Preview a remote environment's dev servers
+
+In the desktop app, a Browser tab belongs to its thread's environment, so
+`localhost` means that environment's machine. When the environment runs
+somewhere else, the desktop carries the tab's `localhost` traffic over the
+existing connection to that server, whether it is LAN, Tailscale, SSH, or
+T3 Connect. Dev servers can stay bound to `localhost`, and the page keeps its
+`localhost` address, so logins, cookies, and hot reload work as they do
+locally. Nothing else needs to be forwarded or exposed.
+
+This needs a server that supports it; older servers open `localhost` on your
+own machine instead. The web and mobile apps do not tunnel preview traffic.
+
 ## Manage or revoke access
 
 On the host, **Settings → Connections** lets authorized administrators create

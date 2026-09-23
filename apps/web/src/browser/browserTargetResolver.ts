@@ -6,6 +6,7 @@ import type {
 import { isLoopbackHost, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { isLocalLoopbackHost, isPrivateNetworkHost } from "@t3tools/shared/hostClassification";
 
+import { readPreviewTunnel } from "~/state/previewTunnel";
 import { readPreparedConnection } from "~/state/session";
 
 export {
@@ -19,6 +20,29 @@ const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
   if (!connection) throw new Error(`Environment ${environmentId} is not connected.`);
   return new URL(connection.httpBaseUrl);
+};
+
+/**
+ * Tunneled tabs keep the environment's `localhost` URL unchanged; the desktop
+ * sends their loopback traffic to the environment's machine.
+ */
+const resolveTunneledPortTarget = (
+  environmentId: EnvironmentId,
+  target: Extract<BrowserNavigationTarget, { readonly kind: "environment-port" }>,
+  requestedUrl?: string,
+  sourceUrl?: URL,
+): PreviewUrlResolution => {
+  const protocol = target.protocol ?? "http";
+  const path = target.path?.startsWith("/") ? target.path : `/${target.path ?? ""}`;
+  const url = sourceUrl
+    ? sourceUrl.toString()
+    : new URL(path, `${protocol}://localhost:${target.port}`).toString();
+  return {
+    requestedUrl: requestedUrl ?? url,
+    resolvedUrl: url,
+    resolutionKind: "environment-tunnel",
+    environmentId,
+  };
 };
 
 const resolveEnvironmentPortTarget = (
@@ -72,6 +96,7 @@ export function resolveBrowserNavigationTarget(
       environmentId,
     };
   }
+  if (readPreviewTunnel(environmentId)) return resolveTunneledPortTarget(environmentId, target);
   return resolveEnvironmentPortTarget(environmentId, target, readEnvironmentUrl(environmentId));
 }
 
@@ -80,6 +105,7 @@ export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl:
     const normalizedUrl = normalizePreviewUrl(rawUrl);
     const parsed = new URL(normalizedUrl);
     if (!isLoopbackHost(parsed.hostname)) return normalizedUrl;
+    if (readPreviewTunnel(environmentId)) return normalizedUrl;
     return resolveEnvironmentPortTarget(
       environmentId,
       {
