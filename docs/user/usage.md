@@ -7,14 +7,16 @@ connected environments. It shows token use, cache savings, model breakdowns, and
 API-equivalent cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals. OpenCode costs come from OpenCode's own model prices, even
-for subscriptions such as GitHub Copilot. OpenCode instances connected to an external server are
-not included, and deleting an OpenCode session removes its usage.
+record are missing from the totals. OpenCode shows the cost OpenCode recorded for each message,
+which for GitHub Copilot is Copilot's own credit charge rather than your bill. OpenCode instances
+connected to an external server are not included, and deleting an OpenCode session removes its
+usage.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
 the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, or, for
 OpenCode, `XDG_DATA_HOME` or `OPENCODE_DB` environment variable. Use absolute paths or `~/` paths
-in the account's environment settings; relative
+in the account's environment settings; OpenCode does not expand `~/`, so use absolute paths for
+its variables. Relative
 environment paths depend on each project's working directory and cannot be reliably discovered
 by Usage. Accounts sharing a history directory count once.
 
@@ -74,9 +76,9 @@ anything. The command is offered only for providers that appear under **Usage â†
 
 OpenCode reports limits for the accounts it is signed in to when it runs locally in the
 environment. OpenCode Go shows its session, weekly, and monthly allowance. GitHub Copilot, signed
-in through `opencode auth login`, shows its monthly premium requests; quotas your plan marks
-unlimited are left out. T3 cannot report limits for external OpenCode servers because their
-credentials belong to the remote server. Cursor reports
+in through `opencode auth login`, shows its monthly AI credits, or premium requests on plans that
+still count them. Quotas your plan marks unlimited are left out. T3 cannot report limits for
+external OpenCode servers because their credentials belong to the remote server. Cursor reports
 its monthly allowance, including separate Auto and API usage, using a file-based CLI login or
 `CURSOR_AUTH_TOKEN`. Cursor's default macOS keychain login does not currently report limits.
 On macOS, use `AGENT_CLI_CREDENTIAL_STORE=file` when signing in and in the provider's environment

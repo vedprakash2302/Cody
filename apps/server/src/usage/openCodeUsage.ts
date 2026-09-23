@@ -3,10 +3,11 @@
  * Usage records from OpenCode's own SQLite store.
  *
  * OpenCode keeps sessions in `opencode.db` rather than JSONL transcripts, and
- * every finished assistant message already carries its token counts and an
- * API-equivalent cost from OpenCode's model catalog. A 30-day query over a few
- * thousand messages takes tens of milliseconds, so this runs on every scan
- * instead of joining the per-file transcript cache.
+ * every finished assistant message already carries its token counts and the
+ * cost OpenCode recorded for it. That cost comes from OpenCode's model catalog,
+ * or for Copilot from Copilot's own credit charge. The query only walks recent
+ * sessions, so it runs on every scan instead of joining the per-file transcript
+ * cache.
  *
  * The database belongs to a running OpenCode process. It is only ever opened
  * read-only.
@@ -25,7 +26,8 @@ const DATABASE_FILE = /^opencode(-[A-Za-z0-9._-]+)?\.db$/;
 /**
  * Database files OpenCode may be writing for this data directory, mirroring
  * OpenCode's own resolution: `OPENCODE_DB` wins, otherwise every channel's
- * database in `<data>/opencode`.
+ * database in `<data>/opencode`. A database that does not exist yet is not a
+ * source.
  */
 export async function listOpenCodeDatabases(
   dataDir: string,
@@ -33,7 +35,13 @@ export async function listOpenCodeDatabases(
 ): Promise<readonly string[]> {
   const override = openCodeDb?.trim();
   if (override) {
-    return override === ":memory:" ? [] : [NodePath.resolve(dataDir, override)];
+    if (override === ":memory:") return [];
+    const databasePath = NodePath.resolve(dataDir, override);
+    try {
+      return (await NodeFSP.stat(databasePath)).isFile() ? [databasePath] : [];
+    } catch {
+      return [];
+    }
   }
   try {
     const entries = await NodeFSP.readdir(dataDir, { withFileTypes: true });
@@ -67,7 +75,9 @@ function int(value: unknown): number {
  *
  * OpenCode's `input` excludes both cache reads and writes, and its `output`
  * excludes reasoning, so reasoning is added back to output to match the
- * contract's "reasoning is a subset of output" rule.
+ * contract's "reasoning is a subset of output" rule. OpenCode releases before
+ * April 2026 included reasoning in `output`, so their rows overcount reasoning;
+ * nothing in the row distinguishes them.
  *
  * Forking a session copies its messages under new ids while keeping their
  * creation time and tokens, so the dedupe key is built from those instead of
@@ -115,7 +125,8 @@ const MESSAGES_SQL = `
     json_extract(data, '$.tokens.cache.read') AS cacheRead,
     json_extract(data, '$.tokens.cache.write') AS cacheWrite
   FROM message
-  WHERE time_created >= ?
+  WHERE session_id IN (SELECT id FROM session WHERE time_updated >= ?)
+    AND time_created >= ?
     AND json_extract(data, '$.role') = 'assistant'
     AND json_extract(data, '$.time.completed') IS NOT NULL
 `;
@@ -124,6 +135,12 @@ const MESSAGES_SQL = `
  * Finished assistant messages created at or after `sinceMs`. Returns `null`
  * when the database cannot be opened or queried, which callers report as a
  * failed source rather than an empty one.
+ *
+ * `message` is only indexed by session, so the query narrows to sessions
+ * touched in the window first; a session is updated whenever it gains a
+ * message. The read is synchronous, which keeps it short: it only walks
+ * recent sessions, and a busy database fails fast instead of stalling the
+ * server.
  */
 export function readOpenCodeUsageRecords(
   databasePath: string,
@@ -131,9 +148,10 @@ export function readOpenCodeUsageRecords(
 ): readonly UsageRecord[] | null {
   let database: NodeSqlite.DatabaseSync | undefined;
   try {
-    // A short busy timeout rides out OpenCode's WAL checkpoints.
-    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 1_000 });
-    const rows = database.prepare(MESSAGES_SQL).all(sinceMs) as unknown as OpenCodeMessageRow[];
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true, timeout: 100 });
+    const rows = database
+      .prepare(MESSAGES_SQL)
+      .all(sinceMs, sinceMs) as unknown as OpenCodeMessageRow[];
     const records: UsageRecord[] = [];
     for (const row of rows) {
       const record = openCodeRowToRecord(row);

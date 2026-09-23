@@ -126,11 +126,18 @@ function writeOpenCodeDatabase(
 ) {
   const database = new NodeSqlite.DatabaseSync(databasePath);
   database.exec(
+    "CREATE TABLE session (id text PRIMARY KEY, time_created integer NOT NULL, time_updated integer NOT NULL)",
+  );
+  database.exec(
     "CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
   );
   const insert = database.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)");
+  const touchSession = database.prepare(
+    "INSERT INTO session VALUES (?1, ?2, ?2) ON CONFLICT (id) DO UPDATE SET time_updated = max(time_updated, ?2)",
+  );
   for (const message of messages) {
     const createdMs = Date.parse(message.createdAt);
+    touchSession.run(message.sessionId, createdMs);
     insert.run(
       message.id,
       message.sessionId,
@@ -229,7 +236,11 @@ describe("UsageService", () => {
             }),
           },
         ]);
+        await NodeFSP.writeFile(NodePath.join(dataDir, "opencode-broken.db"), "not a database");
       });
+      const databaseBytes = () =>
+        Effect.promise(() => NodeFSP.readFile(NodePath.join(dataDir, "opencode.db")));
+      const before = yield* databaseBytes();
 
       const summary = yield* Effect.gen(function* () {
         const service = yield* UsageService.make;
@@ -297,11 +308,54 @@ describe("UsageService", () => {
         ]),
         [
           ["opencode-beta.db", "ok", 1],
+          ["opencode-broken.db", "failed", 0],
           ["opencode.db", "ok", 1],
         ],
       );
+      // The database belongs to a running OpenCode; the scan must never write it.
+      assert.isTrue((yield* databaseBytes()).equals(before));
     }).pipe(Effect.scoped),
   );
+
+  it.live("reads only the database OPENCODE_DB names, and nothing when it does not exist", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const dataDir = NodePath.join(home, "data", "opencode");
+      const message = (id: string, model: string) => ({
+        id,
+        sessionId: `ses_${id}`,
+        createdAt: "2026-08-01T10:00:00Z",
+        data: openCodeAssistant({ model, cost: 1, createdAt: "2026-08-01T10:00:00Z" }),
+      });
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(dataDir, { recursive: true });
+        writeOpenCodeDatabase(NodePath.join(dataDir, "opencode.db"), [message("a", "default")]);
+        writeOpenCodeDatabase(NodePath.join(dataDir, "custom.db"), [message("b", "custom")]);
+      });
+      const readModels = (openCodeDb: string) =>
+        Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          const summary = yield* service.readSummary(WINDOW);
+          return summary.buckets
+            .filter((bucket) => bucket.provider === "opencode")
+            .map((bucket) => bucket.model);
+        }).pipe(
+          Effect.provide(
+            serviceLayers({
+              prefix: "usage-service-opencode-db-test",
+              home,
+              settings,
+              // Relative paths resolve against OpenCode's data directory, as OpenCode does.
+              environment: { OPENCODE_DB: openCodeDb },
+            }),
+          ),
+        );
+
+      assert.deepStrictEqual(yield* readModels("custom.db"), ["custom"]);
+      assert.deepStrictEqual(yield* readModels("not-yet.db"), []);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

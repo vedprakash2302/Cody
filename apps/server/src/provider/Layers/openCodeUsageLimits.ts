@@ -39,25 +39,34 @@ const UsageResponse = Schema.Struct({
   usage: Schema.Struct({ rolling: UsageWindow, weekly: UsageWindow, monthly: UsageWindow }),
 });
 
+// Every field is optional in GitHub's own client types, so one odd snapshot
+// is skipped rather than failing the whole response.
 const CopilotQuota = Schema.Struct({
-  percent_remaining: Schema.Finite,
-  unlimited: Schema.Boolean,
+  percent_remaining: Schema.optionalKey(Schema.Finite),
+  unlimited: Schema.optionalKey(Schema.Boolean),
+  entitlement: Schema.optionalKey(Schema.Finite),
+  token_based_billing: Schema.optionalKey(Schema.Boolean),
 });
-const COPILOT_QUOTA_LABELS = {
-  premium_interactions: "Copilot · Premium requests",
-  chat: "Copilot · Chat",
-  completions: "Copilot · Completions",
-} as const;
+const decodeCopilotQuota = Schema.decodeUnknownOption(CopilotQuota);
+const COPILOT_QUOTA_IDS = ["premium_interactions", "chat", "completions"] as const;
 const CopilotUserResponse = Schema.Struct({
   quota_reset_date_utc: Schema.optionalKey(Schema.DateTimeUtcFromString),
-  quota_snapshots: Schema.optionalKey(
-    Schema.Struct({
-      premium_interactions: Schema.optionalKey(CopilotQuota),
-      chat: Schema.optionalKey(CopilotQuota),
-      completions: Schema.optionalKey(CopilotQuota),
-    }),
-  ),
+  token_based_billing: Schema.optionalKey(Schema.Boolean),
+  quota_snapshots: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 });
+
+/**
+ * Plans billed in AI credits still report them under `premium_interactions`;
+ * only plans that still count premium requests keep that name.
+ */
+function copilotQuotaLabel(
+  quotaId: (typeof COPILOT_QUOTA_IDS)[number],
+  tokenBasedBilling: boolean,
+): string {
+  if (quotaId === "chat") return "Copilot · Chat";
+  if (quotaId === "completions") return "Copilot · Completions";
+  return tokenBasedBilling ? "Copilot · AI credits" : "Copilot · Premium requests";
+}
 
 type ProbeResult = ReadonlyArray<ServerProviderUsageWindow> | "unsupported" | "probeFailed";
 
@@ -102,8 +111,8 @@ const readGoWindows = Effect.fn("readGoWindows")(function* (apiKey: string) {
 
 /**
  * Copilot publishes no quota API; this is the endpoint GitHub's own editor
- * extensions read. Unlimited quotas (chat and completions on paid plans) have
- * nothing to show and are dropped.
+ * extensions read. Unlimited quotas (chat and completions on paid plans) and
+ * quotas with no allotment have nothing to show and are dropped.
  */
 const readCopilotWindows = Effect.fn("readCopilotWindows")(function* (
   auth: typeof CopilotAuth.Type,
@@ -123,13 +132,24 @@ const readCopilotWindows = Effect.fn("readCopilotWindows")(function* (
     ? DateTime.formatIso(body.quota_reset_date_utc)
     : undefined;
   const windows: ServerProviderUsageWindow[] = [];
-  for (const [quotaId, label] of Object.entries(COPILOT_QUOTA_LABELS)) {
-    const quota = body.quota_snapshots?.[quotaId as keyof typeof COPILOT_QUOTA_LABELS];
-    if (!quota || quota.unlimited) continue;
+  for (const quotaId of COPILOT_QUOTA_IDS) {
+    const decoded = decodeCopilotQuota(body.quota_snapshots?.[quotaId]);
+    if (Option.isNone(decoded)) continue;
+    const quota = decoded.value;
+    if (
+      quota.unlimited === true ||
+      quota.percent_remaining === undefined ||
+      (quota.entitlement !== undefined && quota.entitlement <= 0)
+    ) {
+      continue;
+    }
     windows.push({
       id: `copilot_${quotaId}`,
       kind: "monthly",
-      label,
+      label: copilotQuotaLabel(
+        quotaId,
+        quota.token_based_billing ?? body.token_based_billing ?? false,
+      ),
       usedPercent: clampPercent(100 - quota.percent_remaining),
       ...(resetsAt ? { resetsAt } : {}),
     });

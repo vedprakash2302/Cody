@@ -144,18 +144,30 @@ it.effect("keeps Go entitlement absence distinct from failed or malformed usage 
   }),
 );
 
-const copilotUser = (
-  snapshots: Record<string, { percent_remaining: number; unlimited: boolean }>,
-) =>
+const copilotUser = (snapshots: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   Response.json({
     quota_reset_date_utc: "2026-10-01T00:00:00.000Z",
-    quota_snapshots: Object.fromEntries(
-      Object.entries(snapshots).map(([id, quota]) => [
-        id,
-        { ...quota, quota_id: id, entitlement: 0 },
-      ]),
-    ),
+    quota_snapshots: snapshots,
+    ...extra,
   });
+
+const readCopilotLimits = (response: () => Response, auth?: string) =>
+  readOpenCodeUsageLimits({
+    enabled: true,
+    serverUrl: "",
+    environment: {
+      OPENCODE_AUTH_CONTENT:
+        auth ??
+        '{"github-copilot":{"type":"oauth","refresh":"gho_token","access":"x","expires":0}}',
+    },
+  }).pipe(
+    Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, response()))),
+    ),
+    Effect.provide(NodeServices.layer),
+  );
 
 it.effect("reads Copilot quotas from the OpenCode login and drops unlimited ones", () =>
   Effect.gen(function* () {
@@ -183,11 +195,19 @@ it.effect("reads Copilot quotas from the OpenCode login and drops unlimited ones
             return Effect.succeed(
               HttpClientResponse.fromWeb(
                 request,
-                copilotUser({
-                  premium_interactions: { percent_remaining: 84.6, unlimited: false },
-                  chat: { percent_remaining: 100, unlimited: true },
-                  completions: { percent_remaining: 100, unlimited: true },
-                }),
+                copilotUser(
+                  {
+                    premium_interactions: {
+                      percent_remaining: 84.6,
+                      unlimited: false,
+                      entitlement: 2_000_000,
+                      token_based_billing: true,
+                    },
+                    chat: { percent_remaining: 100, unlimited: true, entitlement: 0 },
+                    completions: { percent_remaining: 100, unlimited: true, entitlement: 0 },
+                  },
+                  { token_based_billing: true },
+                ),
               ),
             );
           }),
@@ -199,12 +219,35 @@ it.effect("reads Copilot quotas from the OpenCode login and drops unlimited ones
         {
           id: "copilot_premium_interactions",
           kind: "monthly",
-          label: "Copilot · Premium requests",
+          label: "Copilot · AI credits",
           usedPercent: 100 - 84.6,
           resetsAt: "2026-10-01T00:00:00.000Z",
         },
       ]);
     }
+  }),
+);
+
+it.effect("skips Copilot snapshots it cannot use instead of failing the probe", () =>
+  Effect.gen(function* () {
+    const limits = yield* readCopilotLimits(() =>
+      copilotUser({
+        // Premium requests plans keep their name.
+        premium_interactions: { percent_remaining: 40, unlimited: false, entitlement: 300 },
+        // Metered but with no allotment: no meaningful percentage.
+        chat: { percent_remaining: 100, unlimited: false, entitlement: 0 },
+        completions: { percent_remaining: "unknown" },
+      }),
+    );
+    NodeAssert.deepEqual(
+      limits.windows.map(({ label, usedPercent }) => ({ label, usedPercent })),
+      [{ label: "Copilot · Premium requests", usedPercent: 60 }],
+    );
+
+    const nothingUsable = yield* readCopilotLimits(() =>
+      copilotUser({ premium_interactions: null, chat: { unlimited: false } }),
+    );
+    NodeAssert.equal(nothingUsable.unavailable?.reason, "unsupported");
   }),
 );
 
@@ -245,6 +288,7 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
                       premium_interactions: {
                         percent_remaining: 50,
                         unlimited: failing === "copilotUnlimited",
+                        entitlement: 300,
                       },
                     }),
               ),
