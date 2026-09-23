@@ -3,6 +3,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -102,6 +103,8 @@ const serviceLayers = (input: {
     Layer.provideMerge(
       Layer.succeed(HostProcessEnvironment, {
         GROK_HOME: NodePath.join(input.home, "grok"),
+        // Keeps the host's real OpenCode database out of every scan.
+        XDG_DATA_HOME: NodePath.join(input.home, "data"),
         ...input.environment,
       }),
     ),
@@ -111,7 +114,248 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
+/** Seeds an OpenCode database with the columns the usage query reads. */
+function writeOpenCodeDatabase(
+  databasePath: string,
+  messages: ReadonlyArray<{
+    readonly id: string;
+    readonly sessionId: string;
+    readonly createdAt: string;
+    readonly data: unknown;
+  }>,
+) {
+  const database = new NodeSqlite.DatabaseSync(databasePath);
+  database.exec(
+    "CREATE TABLE session (id text PRIMARY KEY, time_created integer NOT NULL, time_updated integer NOT NULL)",
+  );
+  database.exec(
+    "CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
+  );
+  const insert = database.prepare("INSERT INTO message VALUES (?, ?, ?, ?, ?)");
+  const touchSession = database.prepare(
+    "INSERT INTO session VALUES (?1, ?2, ?2) ON CONFLICT (id) DO UPDATE SET time_updated = max(time_updated, ?2)",
+  );
+  for (const message of messages) {
+    const createdMs = Date.parse(message.createdAt);
+    touchSession.run(message.sessionId, createdMs);
+    insert.run(
+      message.id,
+      message.sessionId,
+      createdMs,
+      createdMs,
+      encodeUnknownJsonString(message.data),
+    );
+  }
+  database.close();
+}
+
+function openCodeAssistant(input: {
+  readonly model: string;
+  readonly cost: number;
+  readonly createdAt: string;
+  readonly completed?: boolean;
+}) {
+  const createdMs = Date.parse(input.createdAt);
+  return {
+    role: "assistant",
+    providerID: "github-copilot",
+    modelID: input.model,
+    cost: input.cost,
+    tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 1000, write: 50 } },
+    time: input.completed === false ? { created: createdMs } : { created: createdMs, completed: 1 },
+  };
+}
+
 describe("UsageService", () => {
+  it.live("reads finished OpenCode messages from every local channel database once", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const dataDir = NodePath.join(home, "data", "opencode");
+      const remoteDataDir = NodePath.join(home, "remote-data");
+      const astra = openCodeAssistant({
+        model: "gpt-6-astra",
+        cost: 0.5,
+        createdAt: "2026-08-01T10:00:00Z",
+      });
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(dataDir, { recursive: true });
+        await NodeFSP.mkdir(NodePath.join(remoteDataDir, "opencode"), { recursive: true });
+        writeOpenCodeDatabase(NodePath.join(dataDir, "opencode.db"), [
+          { id: "msg_1", sessionId: "ses_1", createdAt: "2026-08-01T10:00:00Z", data: astra },
+          // Forking copies the message under a new id into the new session.
+          { id: "msg_fork", sessionId: "ses_fork", createdAt: "2026-08-01T10:00:00Z", data: astra },
+          {
+            id: "msg_running",
+            sessionId: "ses_1",
+            createdAt: "2026-08-01T11:00:00Z",
+            data: openCodeAssistant({
+              model: "gpt-6-astra",
+              cost: 0,
+              createdAt: "2026-08-01T11:00:00Z",
+              completed: false,
+            }),
+          },
+          {
+            id: "msg_user",
+            sessionId: "ses_1",
+            createdAt: "2026-08-01T09:59:00Z",
+            data: { role: "user", time: { created: 1 } },
+          },
+          {
+            id: "msg_unpriced",
+            sessionId: "ses_1",
+            createdAt: "2026-08-01T12:00:00Z",
+            data: openCodeAssistant({
+              model: "claude-opus-5.5",
+              cost: 0,
+              createdAt: "2026-08-01T12:00:00Z",
+            }),
+          },
+        ]);
+        writeOpenCodeDatabase(NodePath.join(dataDir, "opencode-beta.db"), [
+          {
+            id: "msg_beta",
+            sessionId: "ses_beta",
+            createdAt: "2026-08-01T13:00:00Z",
+            data: openCodeAssistant({
+              model: "gpt-6-sol",
+              cost: 0.25,
+              createdAt: "2026-08-01T13:00:00Z",
+            }),
+          },
+        ]);
+        writeOpenCodeDatabase(NodePath.join(remoteDataDir, "opencode", "opencode.db"), [
+          {
+            id: "msg_remote",
+            sessionId: "ses_remote",
+            createdAt: "2026-08-01T13:00:00Z",
+            data: openCodeAssistant({
+              model: "gpt-6-sol",
+              cost: 9,
+              createdAt: "2026-08-01T13:00:00Z",
+            }),
+          },
+        ]);
+        await NodeFSP.writeFile(NodePath.join(dataDir, "opencode-broken.db"), "not a database");
+      });
+      const databaseBytes = () =>
+        Effect.promise(() => NodeFSP.readFile(NodePath.join(dataDir, "opencode.db")));
+      const before = yield* databaseBytes();
+
+      const summary = yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        return yield* service.readSummary(WINDOW);
+      }).pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-opencode-test",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                // An external server owns its history, even when this host has a database.
+                [ProviderInstanceId.make("opencode-remote")]: {
+                  driver: ProviderDriverKind.make("opencode"),
+                  config: { serverUrl: "http://remote.example:4096" },
+                  environment: [{ name: "XDG_DATA_HOME", value: remoteDataDir, sensitive: false }],
+                },
+              },
+            },
+            ratesDocument: {
+              "claude-opus-5.5": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 },
+            },
+          }),
+        ),
+      );
+
+      const buckets = summary.buckets
+        .filter((bucket) => bucket.provider === "opencode")
+        .map(({ model, totals, costUsd, costSource, records }) => ({
+          model,
+          totals,
+          costUsd: Number(costUsd.toFixed(6)),
+          costSource,
+          records,
+        }))
+        .toSorted((left, right) => left.model.localeCompare(right.model));
+      const totals = {
+        uncachedInputTokens: 100,
+        cachedInputTokens: 1000,
+        cacheCreationTokens: 50,
+        outputTokens: 25,
+        reasoningTokens: 5,
+      };
+      assert.deepStrictEqual(buckets, [
+        // Zero reported cost falls back to the rate table: 1150 input + 25 output tokens.
+        {
+          model: "claude-opus-5.5",
+          totals,
+          costUsd: 0.0014,
+          costSource: "modelPriced",
+          records: 1,
+        },
+        { model: "gpt-6-astra", totals, costUsd: 0.5, costSource: "providerReported", records: 1 },
+        { model: "gpt-6-sol", totals, costUsd: 0.25, costSource: "providerReported", records: 1 },
+      ]);
+      const sources = summary.sources.filter(
+        (source) => source.fingerprint.provider === "opencode",
+      );
+      assert.deepStrictEqual(
+        sources.map((source) => [
+          NodePath.basename(source.fingerprint.resolvedHomePath),
+          source.status,
+          source.distinctSessions,
+        ]),
+        [
+          ["opencode-beta.db", "ok", 1],
+          ["opencode-broken.db", "failed", 0],
+          ["opencode.db", "ok", 1],
+        ],
+      );
+      // The database belongs to a running OpenCode; the scan must never write it.
+      assert.isTrue((yield* databaseBytes()).equals(before));
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("reads only the database OPENCODE_DB names, and nothing when it does not exist", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const dataDir = NodePath.join(home, "data", "opencode");
+      const message = (id: string, model: string) => ({
+        id,
+        sessionId: `ses_${id}`,
+        createdAt: "2026-08-01T10:00:00Z",
+        data: openCodeAssistant({ model, cost: 1, createdAt: "2026-08-01T10:00:00Z" }),
+      });
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(dataDir, { recursive: true });
+        writeOpenCodeDatabase(NodePath.join(dataDir, "opencode.db"), [message("a", "default")]);
+        writeOpenCodeDatabase(NodePath.join(dataDir, "custom.db"), [message("b", "custom")]);
+      });
+      const readModels = (openCodeDb: string) =>
+        Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          const summary = yield* service.readSummary(WINDOW);
+          return summary.buckets
+            .filter((bucket) => bucket.provider === "opencode")
+            .map((bucket) => bucket.model);
+        }).pipe(
+          Effect.provide(
+            serviceLayers({
+              prefix: "usage-service-opencode-db-test",
+              home,
+              settings,
+              // Relative paths resolve against OpenCode's data directory, as OpenCode does.
+              environment: { OPENCODE_DB: openCodeDb },
+            }),
+          ),
+        );
+
+      assert.deepStrictEqual(yield* readModels("custom.db"), ["custom"]);
+      assert.deepStrictEqual(yield* readModels("not-yet.db"), []);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

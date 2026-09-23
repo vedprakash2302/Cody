@@ -2,16 +2,21 @@
 
 ## Understand your usage
 
-**Usage** combines Codex, Claude Code, and Grok Build session history from your connected
-environments. It shows token use, cache savings, model breakdowns, and estimated API-equivalent
-cost. These estimates are not your subscription bill.
+**Usage** combines Codex, Claude Code, Grok Build, and OpenCode session history from your
+connected environments. It shows token use, cache savings, model breakdowns, and estimated
+API-equivalent cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals.
+record are missing from the totals. OpenCode shows the cost OpenCode recorded for each message,
+which for GitHub Copilot is Copilot's own credit charge rather than your bill. OpenCode instances
+connected to an external server are not included, and deleting an OpenCode session removes its
+usage.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
-the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
-variable. Use absolute paths or `~/` paths in the account's environment settings; relative
+the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, or, for
+OpenCode, `XDG_DATA_HOME` or `OPENCODE_DB` environment variable. Use absolute paths or `~/` paths
+in the account's environment settings; OpenCode does not expand `~/`, so use absolute paths for
+its variables. Relative
 environment paths depend on each project's working directory and cannot be reliably discovered
 by Usage. Accounts sharing a history directory count once.
 
@@ -69,9 +74,11 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
-OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
-the environment. T3 cannot report limits for external OpenCode servers because their credentials
-belong to the remote server. Cursor reports
+OpenCode reports limits for the accounts it is signed in to when it runs locally in the
+environment. OpenCode Go shows its session, weekly, and monthly allowance. GitHub Copilot, signed
+in through `opencode auth login`, shows its monthly AI credits, or premium requests on plans that
+still count them. Quotas your plan marks unlimited are left out. T3 cannot report limits for
+external OpenCode servers because their credentials belong to the remote server. Cursor reports
 its monthly allowance, including separate Auto and API usage, using a file-based CLI login or
 `CURSOR_AUTH_TOKEN`. Cursor's default macOS keychain login does not currently report limits.
 On macOS, use `AGENT_CLI_CREDENTIAL_STORE=file` when signing in and in the provider's environment
