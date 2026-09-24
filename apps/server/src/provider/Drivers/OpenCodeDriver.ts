@@ -90,6 +90,20 @@ export type OpenCodeDriverEnv =
   | ServerConfig
   | ServerSettingsService;
 
+/**
+ * Environment for the servers behind thread sessions. Only those run
+ * subagents, so the shared helper server for inventory and text generation
+ * keeps the plain environment.
+ */
+export function openCodeSessionEnvironment(
+  config: Pick<OpenCodeSettings, "backgroundSubagents">,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return config.backgroundSubagents
+    ? { ...environment, OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true" }
+    : environment;
+}
+
 export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -134,7 +148,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
 
       const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
         instanceId,
-        environment: processEnv,
+        environment: openCodeSessionEnvironment(effectiveConfig, processEnv),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const serverOwner = yield* OpenCodeServerOwner.make({

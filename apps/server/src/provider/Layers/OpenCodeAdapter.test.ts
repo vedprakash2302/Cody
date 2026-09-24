@@ -29,6 +29,7 @@ import {
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderRuntimeEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -61,6 +62,8 @@ type MessageEntry = {
   info: {
     id: string;
     role: "user" | "assistant";
+    parentID?: string;
+    time?: { created: number; completed?: number };
   };
   parts: Array<unknown>;
 };
@@ -93,6 +96,7 @@ const runtimeMock = {
       | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<void>)
       | null,
     summarizeCalls: [] as Array<unknown>,
+    summarizeImplementation: null as (() => Promise<void>) | null,
     promptAsyncError: null as Error | null,
     promptAsyncImplementation: null as (() => Promise<void>) | null,
     autoPromptEcho: true,
@@ -157,6 +161,7 @@ const runtimeMock = {
     this.state.commandCalls.length = 0;
     this.state.commandImplementation = null;
     this.state.summarizeCalls.length = 0;
+    this.state.summarizeImplementation = null;
     this.state.promptAsyncError = null;
     this.state.promptAsyncImplementation = null;
     this.state.autoPromptEcho = true;
@@ -403,6 +408,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         },
         summarize: async (input: unknown) => {
           runtimeMock.state.summarizeCalls.push(input);
+          await runtimeMock.state.summarizeImplementation?.();
           return { data: true };
         },
         messages: async ({ sessionID }: { sessionID: string }) => ({
@@ -2198,6 +2204,16 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.ok(steerMessageId);
       runtimeMock.state.messages.push({
         info: { id: steerMessageId, role: "user" },
+        parts: [],
+      });
+      // The steer ran to completion while the event stream was down.
+      runtimeMock.state.messages.push({
+        info: {
+          id: "msg-steer-reply",
+          role: "assistant",
+          parentID: steerMessageId,
+          time: { created: 1, completed: 2 },
+        },
         parts: [],
       });
       runtimeMock.state.messageFailures = 1;
@@ -7960,6 +7976,842 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(sessions.length, 1);
       NodeAssert.equal(sessions[0]?.threadId, "thread-native-log-failure");
       NodeAssert.deepEqual(closeCallsDuringRun, []);
+    }),
+  );
+});
+
+it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapter turn lifecycle", (it) => {
+  const rootSessionId = "http://127.0.0.1:9999/session";
+  const modelSelection = createModelSelection(
+    ProviderInstanceId.make("opencode"),
+    "opencode/kimi-k3",
+  );
+  const taskMetadata = (childId: string, background: boolean) => ({
+    parentSessionId: rootSessionId,
+    sessionId: childId,
+    model: { providerID: "github-copilot", modelID: "claude-haiku-4.5" },
+    ...(background ? { background: true } : {}),
+  });
+  const taskInput = (description: string, background: boolean) => ({
+    description,
+    prompt: description,
+    subagent_type: "general",
+    ...(background ? { background: true } : {}),
+  });
+  const rootTaskPart = (
+    callID: string,
+    childId: string,
+    state: "running" | "completed",
+    options: { readonly background?: boolean; readonly output?: string } = {},
+  ) => ({
+    id: `evt-${callID}-${state}`,
+    type: "message.part.updated",
+    properties: {
+      sessionID: rootSessionId,
+      part: {
+        id: `prt-${callID}`,
+        sessionID: rootSessionId,
+        messageID: "msg-root-assistant",
+        type: "tool",
+        callID,
+        tool: "task",
+        state:
+          state === "running"
+            ? {
+                status: "running",
+                input: taskInput(callID, options.background ?? false),
+                metadata: taskMetadata(childId, options.background ?? false),
+                time: { start: 1 },
+              }
+            : {
+                status: "completed",
+                input: taskInput(callID, options.background ?? false),
+                metadata: taskMetadata(childId, options.background ?? false),
+                title: callID,
+                output: options.output ?? "",
+                time: { start: 1, end: 2 },
+              },
+      },
+    },
+  });
+  const childCreated = (childId: string) => ({
+    id: `evt-${childId}-created`,
+    type: "session.created",
+    properties: {
+      sessionID: childId,
+      info: { id: childId, parentID: rootSessionId, title: `${childId} (@general subagent)` },
+    },
+  });
+  const status = (sessionID: string, type: "busy" | "idle") => ({
+    id: `evt-${sessionID}-${type}`,
+    type: "session.status",
+    properties: { sessionID, status: { type } },
+  });
+  const message = (
+    sessionID: string,
+    id: string,
+    role: "user" | "assistant",
+    extra: Record<string, unknown> = {},
+  ) => ({
+    id: `evt-${id}`,
+    type: "message.updated",
+    properties: { sessionID, info: { id, sessionID, role, ...extra } },
+  });
+  const textPart = (
+    sessionID: string,
+    messageID: string,
+    id: string,
+    text: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    id: `evt-${id}`,
+    type: "message.part.updated",
+    properties: {
+      sessionID,
+      part: { id, sessionID, messageID, type: "text", text, time: { start: 1, end: 2 }, ...extra },
+    },
+  });
+  const marker = (title: string) => ({
+    id: `evt-marker-${title}`,
+    type: "session.updated",
+    properties: { sessionID: rootSessionId, info: { id: rootSessionId, title } },
+  });
+
+  it.effect("reports a foreground subagent as task events and keeps its text out of the chat", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-foreground");
+      const push = makeOpenCodeEventQueue();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Count lines with a subagent", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+
+      push(childCreated("ses_fg"));
+      push(rootTaskPart("call_fg", "ses_fg", "running"));
+      push(message("ses_fg", "msg-fg-assistant", "assistant"));
+      push(textPart("ses_fg", "msg-fg-assistant", "prt-fg-text", "Counting lines now."));
+      push({
+        id: "evt-fg-step",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "ses_fg",
+          part: {
+            id: "prt-fg-step",
+            sessionID: "ses_fg",
+            messageID: "msg-fg-assistant",
+            type: "step-finish",
+            reason: "stop",
+            cost: 0,
+            tokens: { input: 3, output: 71, reasoning: 0, cache: { write: 4122, read: 0 } },
+          },
+        },
+      });
+      push(status("ses_fg", "idle"));
+      push(
+        rootTaskPart("call_fg", "ses_fg", "completed", {
+          output: '<task id="ses_fg" state="completed">\n<task_result>\n1\n</task_result>\n</task>',
+        }),
+      );
+      push(status(rootSessionId, "idle"));
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const taskEvents = events.filter((event) => event.type.startsWith("task."));
+      NodeAssert.deepEqual(
+        taskEvents.map((event) => event.type),
+        ["task.started", "task.progress", "task.progress", "task.completed"],
+      );
+      for (const event of taskEvents) {
+        NodeAssert.equal(event.turnId, turn.turnId);
+      }
+      const completed = taskEvents.at(-1);
+      NodeAssert.ok(completed?.type === "task.completed");
+      NodeAssert.equal(completed.payload.status, "completed");
+      NodeAssert.equal(completed.payload.summary, "1");
+      NodeAssert.equal(completed.payload.typedUsage?.totalTokens, 4196);
+      NodeAssert.equal(completed.payload.toolUseId, "call_fg");
+      NodeAssert.equal(
+        events.some((event) => event.type === "content.delta"),
+        false,
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  // `streamEvents` drains one queue, so each test reads it through one collector.
+  const collectThreadEvents = (adapter: OpenCodeAdapterShape, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const events: Array<ProviderRuntimeEvent> = [];
+      const waiters: Array<{
+        readonly predicate: (event: ProviderRuntimeEvent) => boolean;
+        readonly deferred: Deferred.Deferred<ProviderRuntimeEvent>;
+      }> = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            events.push(event);
+            for (const waiter of waiters.filter((candidate) => candidate.predicate(event))) {
+              waiters.splice(waiters.indexOf(waiter), 1);
+              yield* Deferred.succeed(waiter.deferred, event);
+            }
+          }),
+        ),
+        Effect.forkChild,
+      );
+      const waitFor = (predicate: (event: ProviderRuntimeEvent) => boolean) =>
+        Effect.suspend(() => {
+          const seen = events.find(predicate);
+          if (seen) return Effect.succeed(seen);
+          const deferred = Deferred.makeUnsafe<ProviderRuntimeEvent>();
+          waiters.push({ predicate, deferred });
+          return Deferred.await(deferred);
+        });
+      return { events, waitFor };
+    });
+
+  it.effect("opens a turn when a finished background subagent wakes the session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-wake");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Summarize in the background", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+      const promptMessageId = (runtimeMock.state.promptCalls[0] as { messageID: string }).messageID;
+
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed");
+      // OpenCode re-emits the finished turn's user message; that is history.
+      push(message(rootSessionId, promptMessageId, "user"));
+
+      push(message("ses_bg", "msg-bg-assistant", "assistant"));
+      push(textPart("ses_bg", "msg-bg-assistant", "prt-bg-text", "README is a demo."));
+      push(status("ses_bg", "idle"));
+      push(message(rootSessionId, "msg-wake", "user", { time: { created: 1_790_261_142_303 } }));
+      push(
+        textPart(
+          rootSessionId,
+          "msg-wake",
+          "prt-wake",
+          '<task id="ses_bg" state="completed">\n<task_result>\nREADME is a demo.\n</task_result>\n</task>',
+          { synthetic: true },
+        ),
+      );
+      push(marker("wake prompt seen"));
+      yield* waitFor((event) => event.type === "thread.metadata.updated");
+      // The prompt alone opens nothing; OpenCode has to start working on it.
+      NodeAssert.equal(events.filter((event) => event.type === "turn.started").length, 1);
+      push(status(rootSessionId, "busy"));
+      push(message(rootSessionId, "msg-wake-reply", "assistant", { parentID: "msg-wake" }));
+      push(textPart(rootSessionId, "msg-wake-reply", "prt-wake-reply", "The summary is in."));
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed" && event.turnId !== turn.turnId);
+
+      const lifecycle = events.filter(
+        (event) =>
+          event.type === "turn.started" ||
+          event.type === "turn.completed" ||
+          event.type === "task.started" ||
+          event.type === "task.completed",
+      );
+      NodeAssert.deepEqual(
+        lifecycle.map((event) => event.type),
+        [
+          "turn.started",
+          "task.started",
+          "turn.completed",
+          "task.completed",
+          "turn.started",
+          "turn.completed",
+        ],
+      );
+      const wakeTurnId = lifecycle[4]?.turnId;
+      NodeAssert.ok(wakeTurnId);
+      NodeAssert.notEqual(wakeTurnId, turn.turnId);
+      NodeAssert.equal(lifecycle[5]?.turnId, wakeTurnId);
+      const settled = lifecycle[3];
+      NodeAssert.ok(settled?.type === "task.completed");
+      NodeAssert.equal(settled.payload.summary, "README is a demo.");
+      NodeAssert.equal(settled.turnId, turn.turnId);
+      const reply = events.find(
+        (event) => event.type === "content.delta" && event.itemId === "prt-wake-reply",
+      );
+      NodeAssert.equal(reply?.turnId, wakeTurnId);
+      const sessions = yield* adapter.listSessions();
+      NodeAssert.equal(sessions.find((session) => session.threadId === threadId)?.status, "ready");
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles every running subagent as stopped when the turn stops", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-stop");
+      const push = makeOpenCodeEventQueue();
+      runtimeMock.state.sessionChildrenById.set(rootSessionId, [
+        { id: "ses_fg" },
+        { id: "ses_bg" },
+      ]);
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Run two subagents", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+      push(childCreated("ses_fg"));
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(rootTaskPart("call_fg", "ses_fg", "running"));
+      push(marker("subagents launched"));
+      yield* waitFor((event) => event.type === "thread.metadata.updated");
+
+      yield* adapter.interruptTurn(threadId, turn.turnId);
+      yield* waitFor((event) => event.type === "turn.aborted");
+      const stopped = events.flatMap((event) =>
+        event.type === "task.completed" ? [[event.payload.taskId, event.payload.status]] : [],
+      );
+      NodeAssert.deepEqual(stopped, [
+        ["ses_bg", "stopped"],
+        ["ses_fg", "stopped"],
+      ]);
+      NodeAssert.deepEqual(
+        new Set(runtimeMock.state.abortCalls),
+        new Set([rootSessionId, "ses_fg", "ses_bg"]),
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+  it.effect("keeps a turn running while a fresh session has not started the prompt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-cold-start");
+      const push = makeOpenCodeEventQueue();
+      // OpenCode stores the prompt at once but its echo and busy status wait
+      // until the session finishes loading plugins.
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.promptAsyncImplementation = async () => {
+        const call = runtimeMock.state.promptCalls.at(-1) as { messageID: string };
+        runtimeMock.state.messages.push({ info: { id: call.messageID, role: "user" }, parts: [] });
+      };
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({ threadId, input: "Hello", modelSelection });
+      const promptMessageId = (runtimeMock.state.promptCalls[0] as { messageID: string }).messageID;
+      for (let second = 0; second < 8; second += 1) {
+        yield* advanceTestClock(1_000);
+      }
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+      const sessions = yield* adapter.listSessions();
+      NodeAssert.equal(
+        sessions.find((session) => session.threadId === threadId)?.activeTurnId,
+        turn.turnId,
+      );
+
+      push(message(rootSessionId, promptMessageId, "user"));
+      push(status(rootSessionId, "busy"));
+      push(message(rootSessionId, "msg-cold-reply", "assistant", { parentID: promptMessageId }));
+      push(textPart(rootSessionId, "msg-cold-reply", "prt-cold-reply", "Hi there."));
+      push(status(rootSessionId, "idle"));
+      const completed = yield* waitFor((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.turnId, turn.turnId);
+      const reply = events.find(
+        (event) => event.type === "content.delta" && event.itemId === "prt-cold-reply",
+      );
+      NodeAssert.equal(reply?.turnId, turn.turnId);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  // A stored prompt with no reply and an idle session, as on a cold start.
+  const storePromptsWithoutEcho = () => {
+    runtimeMock.state.autoPromptEcho = false;
+    runtimeMock.state.promptAsyncImplementation = async () => {
+      const call = runtimeMock.state.promptCalls.at(-1) as { messageID: string };
+      runtimeMock.state.messages.push({ info: { id: call.messageID, role: "user" }, parts: [] });
+    };
+  };
+  const advanceSeconds = (seconds: number) =>
+    Effect.gen(function* () {
+      for (let second = 0; second < seconds; second += 1) {
+        yield* advanceTestClock(1_000);
+      }
+    });
+
+  it.effect("stops waiting for an unstarted prompt after a minute", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-cold-start-cap");
+      makeOpenCodeEventQueue();
+      storePromptsWithoutEcho();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({ threadId, input: "Hello", modelSelection });
+      yield* advanceSeconds(55);
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+      yield* advanceSeconds(10);
+      const completed = yield* waitFor((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.turnId, turn.turnId);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("stops or steers a turn while its prompt waits to start", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-cold-start-stop");
+      const push = makeOpenCodeEventQueue();
+      storePromptsWithoutEcho();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stoppedTurn = yield* adapter.sendTurn({ threadId, input: "One", modelSelection });
+      yield* advanceSeconds(3);
+      yield* adapter.interruptTurn(threadId, stoppedTurn.turnId);
+      yield* waitFor((event) => event.type === "turn.aborted");
+      yield* advanceSeconds(70);
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+
+      const turn = yield* adapter.sendTurn({ threadId, input: "Two", modelSelection });
+      yield* advanceSeconds(3);
+      const steer = yield* adapter.sendTurn({ threadId, input: "Also this", modelSelection });
+      NodeAssert.equal(steer.turnId, turn.turnId);
+      yield* advanceSeconds(3);
+      const steerMessageId = (runtimeMock.state.promptCalls.at(-1) as { messageID: string })
+        .messageID;
+      push(message(rootSessionId, steerMessageId, "user"));
+      push(status(rootSessionId, "busy"));
+      push(message(rootSessionId, "msg-steer-reply", "assistant", { parentID: steerMessageId }));
+      push(textPart(rootSessionId, "msg-steer-reply", "prt-steer-reply", "Done both."));
+      push(status(rootSessionId, "idle"));
+      const completed = yield* waitFor((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.turnId, turn.turnId);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("completes a turn whose reply stopped mid-way while events were lost", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-cold-start-replying");
+      makeOpenCodeEventQueue();
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.promptAsyncImplementation = async () => {
+        const call = runtimeMock.state.promptCalls.at(-1) as { messageID: string };
+        runtimeMock.state.messages.push({ info: { id: call.messageID, role: "user" }, parts: [] });
+        // A server restart cut the reply off; it never completes.
+        runtimeMock.state.messages.push({
+          info: {
+            id: "msg-cut-off",
+            role: "assistant",
+            parentID: call.messageID,
+            time: { created: 1 },
+          },
+          parts: [],
+        });
+      };
+      const { waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({ threadId, input: "Hello", modelSelection });
+      yield* advanceSeconds(3);
+      const completed = yield* waitFor((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.turnId, turn.turnId);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("folds a notice OpenCode queues mid-turn into the running turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-notice-mid-turn");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Launch, then keep working", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(status("ses_bg", "idle"));
+      // Captured order: the notice lands while the main agent is still busy,
+      // and OpenCode answers it within the same busy period.
+      push(message(rootSessionId, "msg-notice", "user", { time: { created: 1 } }));
+      push(
+        textPart(
+          rootSessionId,
+          "msg-notice",
+          "prt-notice",
+          '<task id="ses_bg" state="completed">\n<task_result>\nCHILD DONE\n</task_result>\n</task>',
+          { synthetic: true },
+        ),
+      );
+      push(message(rootSessionId, "msg-notice-reply", "assistant", { parentID: "msg-notice" }));
+      push({
+        id: "evt-notice-reply-step",
+        type: "message.part.updated",
+        properties: {
+          sessionID: rootSessionId,
+          part: {
+            id: "prt-notice-step",
+            sessionID: rootSessionId,
+            messageID: "msg-notice-reply",
+            type: "step-finish",
+            reason: "stop",
+            cost: 0,
+            tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      });
+      push(status(rootSessionId, "idle"));
+      const completed = yield* waitFor((event) => event.type === "turn.completed");
+
+      NodeAssert.equal(completed.turnId, turn.turnId);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.started").length, 1);
+      const settled = events.find((event) => event.type === "task.completed");
+      NodeAssert.ok(settled?.type === "task.completed");
+      NodeAssert.equal(settled.payload.summary, "CHILD DONE");
+      NodeAssert.ok(completed.type === "turn.completed");
+      NodeAssert.equal(completed.payload.tokenUsage?.outputTokens, 5);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores a task block inside an attachment on T3's own prompt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-attachment");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Read this file", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      yield* Fiber.join(sendFiber);
+      const promptMessageId = (runtimeMock.state.promptCalls[0] as { messageID: string }).messageID;
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(
+        textPart(
+          rootSessionId,
+          promptMessageId,
+          "prt-inlined-file",
+          '<task id="ses_bg" state="completed">\n<task_result>\nfake\n</task_result>\n</task>',
+          { synthetic: true },
+        ),
+      );
+      push(marker("attachment seen"));
+      yield* waitFor((event) => event.type === "thread.metadata.updated");
+      NodeAssert.equal(
+        events.some((event) => event.type === "task.completed"),
+        false,
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles a foreground subagent whose result was lost when its turn ends", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-lost-result");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Delegate", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+      push(childCreated("ses_fg"));
+      push(rootTaskPart("call_fg", "ses_fg", "running"));
+      // The completed task part never arrives.
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed");
+
+      const lifecycle = events.filter(
+        (event) => event.type === "task.completed" || event.type === "turn.completed",
+      );
+      NodeAssert.deepEqual(
+        lifecycle.map((event) => event.type),
+        ["task.completed", "turn.completed"],
+      );
+      const settled = lifecycle[0];
+      NodeAssert.ok(settled?.type === "task.completed");
+      NodeAssert.equal(settled.payload.status, "completed");
+      NodeAssert.equal(settled.turnId, turn.turnId);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles running subagents when the session stops", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-session-stop");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Launch in the background", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      yield* Fiber.join(sendFiber);
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed");
+
+      yield* adapter.stopSession(threadId);
+      yield* waitFor((event) => event.type === "session.exited");
+      const tail = events.filter(
+        (event) => event.type === "task.completed" || event.type === "session.exited",
+      );
+      NodeAssert.deepEqual(
+        tail.map((event) => event.type),
+        ["task.completed", "session.exited"],
+      );
+      NodeAssert.ok(tail[0]?.type === "task.completed");
+      NodeAssert.equal(tail[0].payload.status, "stopped");
+    }),
+  );
+
+  it.effect("stops live subagents and the old session when the thread rewinds", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-rewind");
+      const push = makeOpenCodeEventQueue();
+      runtimeMock.state.sessionChildrenById.set(rootSessionId, [{ id: "ses_bg" }]);
+      const { waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Launch in the background", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      yield* Fiber.join(sendFiber);
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed");
+
+      runtimeMock.state.messages = [
+        { info: { id: "user-1", role: "user" }, parts: [] },
+        { info: { id: "assistant-1", role: "assistant" }, parts: [] },
+        { info: { id: "user-2", role: "user" }, parts: [] },
+        { info: { id: "assistant-2", role: "assistant" }, parts: [] },
+      ];
+      runtimeMock.state.abortCalls.length = 0;
+      yield* adapter.rollbackThread(threadId, 1);
+
+      const stopped = yield* waitFor((event) => event.type === "task.completed");
+      NodeAssert.ok(stopped.type === "task.completed");
+      NodeAssert.equal(stopped.payload.taskId, "ses_bg");
+      NodeAssert.equal(stopped.payload.status, "stopped");
+      NodeAssert.deepEqual(
+        new Set(runtimeMock.state.abortCalls),
+        new Set([rootSessionId, "ses_bg"]),
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not open a turn for the prompt behind a compaction", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-compaction");
+      const push = makeOpenCodeEventQueue();
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      const compactionEventsSeen = promiseWithResolvers<void>();
+      runtimeMock.state.summarizeImplementation = async () => {
+        push(message(rootSessionId, "msg-compaction", "user"));
+        push(status(rootSessionId, "busy"));
+        push(message(rootSessionId, "msg-summary", "assistant", { parentID: "msg-compaction" }));
+        push(textPart(rootSessionId, "msg-summary", "prt-summary", "Summary of the thread."));
+        push(status(rootSessionId, "idle"));
+        push(marker("compacted"));
+        await compactionEventsSeen.promise;
+      };
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      NodeAssert.ok(adapter.compaction?.type === "native");
+      const compactFiber = yield* adapter.compaction
+        .start(threadId, modelSelection)
+        .pipe(Effect.forkChild);
+      yield* waitFor((event) => event.type === "thread.metadata.updated");
+      compactionEventsSeen.resolve(undefined);
+      yield* Fiber.join(compactFiber);
+
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.started"),
+        false,
+      );
+      const sessions = yield* adapter.listSessions();
+      NodeAssert.equal(sessions.find((session) => session.threadId === threadId)?.status, "ready");
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("leaves subagents running when the stop request fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-stop-failed");
+      const push = makeOpenCodeEventQueue();
+      runtimeMock.state.abortImplementation = async (sessionID) => {
+        if (sessionID === rootSessionId) throw new Error("abort failed");
+      };
+      const { events, waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Run a subagent", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      const turn = yield* Fiber.join(sendFiber);
+      push(childCreated("ses_fg"));
+      push(rootTaskPart("call_fg", "ses_fg", "running"));
+      push(marker("subagent launched"));
+      yield* waitFor((event) => event.type === "thread.metadata.updated");
+
+      const result = yield* adapter.interruptTurn(threadId, turn.turnId).pipe(Effect.result);
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(
+        events.some((event) => event.type === "task.completed"),
+        false,
+      );
+
+      runtimeMock.state.abortImplementation = null;
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("stops background subagents from an idle thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-idle-stop");
+      const push = makeOpenCodeEventQueue();
+      runtimeMock.state.sessionChildrenById.set(rootSessionId, [{ id: "ses_bg" }]);
+      const { waitFor } = yield* collectThreadEvents(adapter, threadId);
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "Launch in the background", modelSelection })
+        .pipe(Effect.forkChild);
+      push(status(rootSessionId, "busy"));
+      yield* Fiber.join(sendFiber);
+      push(childCreated("ses_bg"));
+      push(rootTaskPart("call_bg", "ses_bg", "running", { background: true }));
+      push(rootTaskPart("call_bg", "ses_bg", "completed", { background: true }));
+      push(status(rootSessionId, "idle"));
+      yield* waitFor((event) => event.type === "turn.completed");
+
+      // The idle "stop agents" control names no turn.
+      yield* adapter.interruptTurn(threadId);
+      const stopped = yield* waitFor((event) => event.type === "task.completed");
+      NodeAssert.ok(stopped.type === "task.completed");
+      NodeAssert.equal(stopped.payload.taskId, "ses_bg");
+      NodeAssert.equal(stopped.payload.status, "stopped");
+      NodeAssert.ok(runtimeMock.state.abortCalls.includes("ses_bg"));
+
+      yield* adapter.stopSession(threadId);
     }),
   );
 });

@@ -46,6 +46,17 @@ import {
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  makeOpenCodeSubagentTracker,
+  observeOpenCodeChildEvent,
+  observeOpenCodeTaskNotification,
+  observeOpenCodeTaskToolPart,
+  type OpenCodeSubagentEmission,
+  type OpenCodeSubagentTracker,
+  resetOpenCodeSubagentTracker,
+  settleForegroundOpenCodeSubagents,
+  stopOpenCodeSubagents,
+} from "./OpenCodeSubagents.ts";
+import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
@@ -69,6 +80,12 @@ const PROVIDER = ProviderDriverKind.make("opencode");
  * rather than misread (mirrors GROK_RESUME_VERSION / CURSOR_RESUME_VERSION).
  */
 const OPENCODE_RESUME_VERSION = 1 as const;
+
+/**
+ * How long prompt recovery waits for OpenCode to start a stored prompt before
+ * falling back to trusting idle status. A fresh session takes a few seconds.
+ */
+const OPENCODE_QUEUED_PROMPT_WAIT_MS = 60_000;
 
 /**
  * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
@@ -357,6 +374,17 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  readonly subagents: OpenCodeSubagentTracker;
+  /** Message ids of prompts T3 submitted, so their echoes never read as foreign. */
+  readonly sentMessageIds: Set<string>;
+  /**
+   * A new user message T3 did not send, seen while idle. The turn opens only
+   * when the session goes busy, so history re-emitted by a resume or fork, or
+   * a message that never runs, cannot leave a turn spinning.
+   */
+  pendingForeignPromptId: string | undefined;
+  /** True while `compactThread` runs; its summary prompt is not a turn. */
+  compacting: boolean;
   cancellation: OpenCodeCancellation | undefined;
   interruptedTurnId: TurnId | undefined;
   reconcileIdleStatus: boolean;
@@ -1153,6 +1181,10 @@ export function makeOpenCodeAdapter(
         yield* Fiber.interrupt(pendingIdleReconciliation.fiber);
       }
       yield* schedulePendingRequestRecovery(context);
+      yield* emitSubagentEvents(
+        context,
+        settleForegroundOpenCodeSubagents(context.subagents, "completed"),
+      );
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
@@ -1312,6 +1344,10 @@ export function makeOpenCodeAdapter(
         { status: "error", lastError: detail },
         { clearActiveTurnId: true },
       );
+      yield* emitSubagentEvents(
+        context,
+        settleForegroundOpenCodeSubagents(context.subagents, "stopped"),
+      );
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
@@ -1339,6 +1375,38 @@ export function makeOpenCodeAdapter(
       });
     });
 
+    /**
+     * How far OpenCode got with a stored prompt, from its newest messages.
+     * Every step of a reply is an assistant message parented to the prompt.
+     * `queued` means the prompt is stored and nothing answers it yet: OpenCode
+     * has not started it (a fresh session loads plugins first), so an idle
+     * status then says nothing about the turn being done. `replying` means a
+     * reply started but never finished, as after a server restart mid-reply.
+     */
+    const readOpenCodePromptReply = Effect.fn("readOpenCodePromptReply")(function* (
+      context: OpenCodeSessionContext,
+      messageId: string,
+    ) {
+      const response = yield* runOpenCodeSdk("session.messages", (signal) =>
+        context.client.session.messages(
+          { sessionID: context.openCodeSessionId, limit: 3 },
+          { signal },
+        ),
+      ).pipe(Effect.timeout("1 second"), Effect.option);
+      const messages = Option.isSome(response) ? response.value.data : undefined;
+      if (!messages) return "unknown" as const;
+      let replying = false;
+      for (const { info } of messages) {
+        if (info.role !== "assistant" || info.parentID !== messageId) continue;
+        if (info.time.completed !== undefined) return "answered" as const;
+        replying = true;
+      }
+      if (replying) return "replying" as const;
+      return messages.some((message) => message.info.id === messageId)
+        ? ("queued" as const)
+        : ("unknown" as const);
+    });
+
     const schedulePromptAdmissionRecovery = Effect.fn("schedulePromptAdmissionRecovery")(function* (
       context: OpenCodeSessionContext,
       raw: unknown,
@@ -1357,6 +1425,10 @@ export function makeOpenCodeAdapter(
         if (!promptAdmission.requiresMessageReceipt) {
           yield* Deferred.await(promptAdmission.acceptance);
         }
+        // Time spent waiting for OpenCode to start a stored prompt. It does not
+        // spend the retry budget, but it is capped so a prompt OpenCode never
+        // runs cannot hold the turn open forever.
+        let queuedWaitMs = 0;
         for (
           let retryCount = 0;
           retryCount < 5 || (promptAdmission.requiresMessageReceipt && !promptAdmission.accepted);
@@ -1454,6 +1526,26 @@ export function makeOpenCodeAdapter(
             return;
           }
           if (isIdle && promptAdmission.messageObserved) {
+            const reply = yield* readOpenCodePromptReply(context, promptAdmission.messageId);
+            if (
+              (yield* Ref.get(context.stopped)) ||
+              sessions.get(context.session.threadId) !== context ||
+              context.promptAdmission !== promptAdmission ||
+              context.activeTurnId !== promptAdmission.turnId ||
+              context.promptGeneration !== promptAdmission.generation ||
+              promptAdmission.cancelled
+            ) {
+              return;
+            }
+            if (reply === "queued" && queuedWaitMs < OPENCODE_QUEUED_PROMPT_WAIT_MS) {
+              // Idle before OpenCode starts the prompt is not a finished turn.
+              // The busy status ends admission as usual.
+              promptAdmission.idleStatusConfirmations = 0;
+              queuedWaitMs += 1_000;
+              retryCount -= 1; // offsets the loop increment: waiting is not a retry
+              yield* Effect.sleep("1 second");
+              continue;
+            }
             promptAdmission.idleStatusConfirmations += 1;
             if (promptAdmission.idleStatusConfirmations >= 2) {
               context.promptAdmission = undefined;
@@ -1536,6 +1628,9 @@ export function makeOpenCodeAdapter(
         );
       }
       yield* clearPendingOpenCodeRequests(context, { type: "session.abort" });
+      // OpenCode's abort of the parent cascades to every child, background
+      // runs included.
+      yield* emitSubagentEvents(context, stopOpenCodeSubagents(context.subagents));
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
@@ -1579,6 +1674,10 @@ export function makeOpenCodeAdapter(
       context.promptAdmission = undefined;
       const turnId = context.activeTurnId;
       deleteContextIfCurrent(context);
+      // The server is gone, and every subagent with it.
+      yield* emitSubagentEvents(context, stopOpenCodeSubagents(context.subagents)).pipe(
+        Effect.ignore,
+      );
       // Emit lifecycle events BEFORE tearing down the scope. Both call sites
       // run this inside a fiber forked via `Effect.forkIn(context.sessionScope)`;
       // closing that scope triggers the fiber-interrupt finalizer, so any
@@ -1662,6 +1761,63 @@ export function makeOpenCodeAdapter(
           },
         });
       }
+    });
+
+    const emitSubagentEvents = Effect.fn("emitSubagentEvents")(function* (
+      context: OpenCodeSessionContext,
+      emissions: ReadonlyArray<OpenCodeSubagentEmission>,
+      raw?: unknown,
+    ) {
+      for (const emission of emissions) {
+        const base = yield* buildEventBase({
+          threadId: context.session.threadId,
+          turnId: emission.turnId,
+          raw,
+        });
+        // One case per type: spreading the emission union would not narrow
+        // `payload` to its event type.
+        switch (emission.type) {
+          case "task.started":
+            yield* emit({ ...base, type: emission.type, payload: emission.payload });
+            break;
+          case "task.progress":
+            yield* emit({ ...base, type: emission.type, payload: emission.payload });
+            break;
+          case "task.updated":
+            yield* emit({ ...base, type: emission.type, payload: emission.payload });
+            break;
+          case "task.completed":
+            yield* emit({ ...base, type: emission.type, payload: emission.payload });
+            break;
+        }
+      }
+    });
+
+    /**
+     * Opens a turn for a prompt OpenCode submitted to the thread's session by
+     * itself, such as the notice that a background subagent finished. Without
+     * it the reply streams with no working state, turn boundary, or usage.
+     */
+    const startProviderInitiatedTurn = Effect.fn("startProviderInitiatedTurn")(function* (
+      context: OpenCodeSessionContext,
+      promptMessageId: string,
+      raw: unknown,
+    ) {
+      const turnId = TurnId.make(`opencode-turn-${yield* randomUUIDv4}`);
+      yield* cancelIdleReconciliation(context);
+      context.activeTurnId = turnId;
+      context.turnTokenUsage = makeOpenCodeTurnTokenUsageAccumulator();
+      context.turnTokenUsage.promptMessageIds.add(promptMessageId);
+      // The prompt is new work, not output from an interrupted turn.
+      context.interruptedTurnId = undefined;
+      context.reconcileIdleStatus = false;
+      context.awaitingBusyAfterInterruption = false;
+      yield* updateProviderSession(context, { status: "running", activeTurnId: turnId });
+      yield* emit({
+        ...(yield* buildEventBase({ threadId: context.session.threadId, turnId, raw })),
+        type: "turn.started",
+        payload: context.session.model ? { model: context.session.model } : {},
+      });
     });
 
     // Records a child session of this thread. A child seen during a live turn
@@ -2232,6 +2388,19 @@ export function makeOpenCodeAdapter(
 
       const payloadSessionId = openCodeEventSessionId(event);
       const isParentEvent = payloadSessionId === context.openCodeSessionId;
+      if (
+        payloadSessionId !== undefined &&
+        !isParentEvent &&
+        context.relatedSessionIds.has(payloadSessionId)
+      ) {
+        // Child sessions are subagents. Their activity feeds the Agents
+        // surface, never the parent transcript.
+        yield* emitSubagentEvents(
+          context,
+          observeOpenCodeChildEvent(context.subagents, payloadSessionId, event),
+          event,
+        );
+      }
       let isKnownPendingTerminalEvent = false;
       if (
         payloadSessionId !== undefined &&
@@ -2277,6 +2446,23 @@ export function makeOpenCodeAdapter(
           payload: event,
         },
       });
+
+      if (
+        isParentEvent &&
+        event.type === "message.part.updated" &&
+        event.properties.part.type === "text" &&
+        event.properties.part.synthetic === true &&
+        // Parts of T3's own prompts are synthetic too (inlined attachments).
+        !context.sentMessageIds.has(event.properties.part.messageID)
+      ) {
+        // OpenCode's notice that a background subagent finished. Read it even
+        // while stopped-turn output is suppressed so the agent still settles.
+        yield* emitSubagentEvents(
+          context,
+          observeOpenCodeTaskNotification(context.subagents, event.properties.part.text),
+          event,
+        );
+      }
 
       const suppressInterruptedParentOutput =
         isParentEvent &&
@@ -2345,6 +2531,21 @@ export function makeOpenCodeAdapter(
               if (idle) {
                 yield* scheduleIdleReconciliation(context, idle.turnId, idle.raw);
               }
+            }
+          }
+          const info = event.properties.info;
+          if (
+            info.role === "user" &&
+            !context.sentMessageIds.has(info.id) &&
+            !context.messageRoleById.has(info.id)
+          ) {
+            if (context.activeTurnId === undefined) {
+              context.pendingForeignPromptId = info.id;
+            } else {
+              // OpenCode answers a prompt it queues mid-turn (a finished
+              // background agent's notice) in the same busy period, so its
+              // reply belongs to this turn and counts toward its usage.
+              context.turnTokenUsage?.promptMessageIds.add(info.id);
             }
           }
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
@@ -2528,6 +2729,13 @@ export function makeOpenCodeAdapter(
               payload,
             };
             yield* emit(runtimeEvent);
+            if (part.tool === "task") {
+              yield* emitSubagentEvents(
+                context,
+                observeOpenCodeTaskToolPart(context.subagents, part, { turnId }),
+                event,
+              );
+            }
           }
           break;
         }
@@ -2589,6 +2797,16 @@ export function makeOpenCodeAdapter(
         case "session.status": {
           if (event.properties.status.type === "busy" || event.properties.status.type === "retry") {
             if (turnId === undefined) {
+              const promptMessageId = context.pendingForeignPromptId;
+              if (
+                promptMessageId !== undefined &&
+                context.promptAdmission === undefined &&
+                context.cancellation === undefined &&
+                !context.compacting
+              ) {
+                context.pendingForeignPromptId = undefined;
+                yield* startProviderInitiatedTurn(context, promptMessageId, event);
+              }
               break;
             }
             yield* cancelIdleReconciliation(context);
@@ -2619,6 +2837,9 @@ export function makeOpenCodeAdapter(
             break;
           }
 
+          if (event.properties.status.type === "idle" && !turnId) {
+            context.pendingForeignPromptId = undefined;
+          }
           if (event.properties.status.type === "idle" && turnId) {
             if (context.cancellation?.turnId === turnId) {
               context.cancellation.deferredIdleEvent = event;
@@ -2686,6 +2907,10 @@ export function makeOpenCodeAdapter(
             { clearActiveTurnId: true },
           );
           if (activeTurnId) {
+            yield* emitSubagentEvents(
+              context,
+              settleForegroundOpenCodeSubagents(context.subagents, "stopped"),
+            );
             yield* emit({
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
@@ -3021,6 +3246,10 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          subagents: makeOpenCodeSubagentTracker(),
+          sentMessageIds: new Set(),
+          pendingForeignPromptId: undefined,
+          compacting: false,
           cancellation: undefined,
           interruptedTurnId: undefined,
           reconcileIdleStatus: false,
@@ -3146,6 +3375,8 @@ export function makeOpenCodeAdapter(
         Effect.gen(function* () {
           const freshTurnId = TurnId.make(`opencode-turn-${yield* randomUUIDv4}`);
           const messageId = yield* makeOpenCodeMessageId();
+          context.sentMessageIds.add(messageId);
+          context.pendingForeignPromptId = undefined;
           const pendingCancellation = context.cancellation;
           if (pendingCancellation) {
             const cancellationResult = yield* Deferred.await(pendingCancellation.completion).pipe(
@@ -3572,6 +3803,7 @@ export function makeOpenCodeAdapter(
               issue: "OpenCode cannot compact while a turn is running.",
             });
           }
+          context.compacting = true;
           yield* runOpenCodeSdk("session.summarize", (signal) =>
             context.client.session.summarize(
               {
@@ -3596,6 +3828,11 @@ export function makeOpenCodeAdapter(
                 ),
             }),
             Effect.asVoid,
+            Effect.ensuring(
+              Effect.sync(() => {
+                context.compacting = false;
+              }),
+            ),
           );
         }),
       );
@@ -3725,6 +3962,10 @@ export function makeOpenCodeAdapter(
           yield* Deferred.done(cancellation.completion, failedExit).pipe(Effect.ignore);
           return yield* Effect.failCause(failedExit.cause);
         }
+        // OpenCode's abort of the parent cascades to every child, background
+        // runs included, and suppression hides the parent's task results
+        // after a stop, so settle the aborted agents here.
+        yield* emitSubagentEvents(context, stopOpenCodeSubagents(context.subagents));
 
         if (context.cancellation === cancellation) {
           if (cancellation.turnSettled) {
@@ -3863,6 +4104,8 @@ export function makeOpenCodeAdapter(
         if (!stopped) {
           return;
         }
+        // Stopping the session aborted its whole tree.
+        yield* emitSubagentEvents(context, stopOpenCodeSubagents(context.subagents));
         yield* emit({
           ...(yield* buildEventBase({ threadId })),
           type: "session.exited",
@@ -3971,6 +4214,16 @@ export function makeOpenCodeAdapter(
             }),
           ).pipe(Effect.mapError(toRequestError));
           yield* clearPendingOpenCodeRequests(context, { type: "session.fork" });
+          // Subagents still running under the old session would report to a
+          // conversation the thread no longer follows. Stopping the old
+          // session also keeps a late result from waking it unwatched.
+          const orphanedSubagents = stopOpenCodeSubagents(context.subagents);
+          if (orphanedSubagents.length > 0) {
+            yield* abortOpenCodeSessionForTeardown(context);
+            yield* emitSubagentEvents(context, orphanedSubagents);
+          }
+          resetOpenCodeSubagentTracker(context.subagents);
+          context.pendingForeignPromptId = undefined;
           context.openCodeSessionId = forkedSessionId;
           context.relatedSessionIds.clear();
           context.relatedSessionIds.add(forkedSessionId);

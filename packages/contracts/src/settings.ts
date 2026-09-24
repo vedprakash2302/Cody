@@ -870,13 +870,22 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    backgroundSubagents: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Background subagents",
+        description:
+          "Let the agent keep working while subagents run. Uses OpenCode's experimental background mode on servers T3 Code starts.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
-    order: ["binaryPath", "serverUrl", "serverPassword"],
+    order: ["binaryPath", "serverUrl", "serverPassword", "backgroundSubagents"],
   },
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
@@ -1434,6 +1443,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   serverUrl: Schema.optionalKey(TrimmedString),
   serverPassword: Schema.optionalKey(TrimmedString),
+  backgroundSubagents: Schema.optionalKey(Schema.Boolean),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
