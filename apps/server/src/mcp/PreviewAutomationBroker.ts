@@ -25,6 +25,7 @@ import {
   type PreviewAutomationResponse,
   type PreviewAutomationStreamEvent,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -99,6 +100,20 @@ interface HostAssignment {
   readonly tabSequence?: number;
 }
 
+/**
+ * A lease whose host stream dropped. Desktop hosts keep their `clientId` for
+ * the life of the window and reconnect on their own, usually within seconds,
+ * so the lease waits for that client for {@link RECONNECT_GRACE_MS} instead of
+ * handing the session to another runtime with different cookies and tabs.
+ */
+interface DetachedAssignment {
+  readonly clientId: ClientConnection["clientId"];
+  readonly detachedAtMs: number;
+  readonly reconnected: Deferred.Deferred<void>;
+}
+
+const RECONNECT_GRACE_MS = 30_000;
+
 interface PreviewAutomationRequestErrorContext {
   readonly operation: PreviewAutomationOperation;
   readonly environmentId: McpInvocationContext.McpInvocationScope["environmentId"];
@@ -117,23 +132,39 @@ interface PreviewAutomationRequestErrorContext {
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly detached: ReadonlyMap<string, DetachedAssignment>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly requestSequence: number;
   readonly focusSequence: number;
 }
 
+/**
+ * `retainAtMs` keeps the connection's leases as detached so the same client can
+ * reclaim them; without it (an unresponsive host was evicted) they are dropped.
+ */
 const removeConnectionFromState = (
   current: BrokerState,
   clientId: string,
   queue: ClientConnection["queue"],
+  retainAtMs?: number,
 ): { readonly state: BrokerState; readonly disconnected: ReadonlyArray<PendingRequest> } => {
   const clients = new Map(current.clients);
   const assignments = new Map(current.assignments);
+  const detached = new Map(current.detached);
   const pending = new Map(current.pending);
   const disconnected: PendingRequest[] = [];
   if (current.clients.get(clientId)?.queue === queue) clients.delete(clientId);
+  const reconnected = retainAtMs === undefined ? undefined : Deferred.makeUnsafe<void>();
   for (const [assignmentKey, assignment] of assignments) {
-    if (assignment.queue === queue) assignments.delete(assignmentKey);
+    if (assignment.queue !== queue) continue;
+    assignments.delete(assignmentKey);
+    if (reconnected !== undefined && retainAtMs !== undefined) {
+      detached.set(assignmentKey, {
+        clientId: assignment.clientId,
+        detachedAtMs: retainAtMs,
+        reconnected,
+      });
+    }
   }
   for (const [requestId, entry] of pending) {
     if (entry.queue !== queue) continue;
@@ -141,7 +172,7 @@ const removeConnectionFromState = (
     disconnected.push(entry);
   }
   return {
-    state: { ...current, clients, assignments, pending },
+    state: { ...current, clients, assignments, detached, pending },
     disconnected,
   };
 };
@@ -319,6 +350,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
     assignments: new Map(),
+    detached: new Map(),
     pending: new Map(),
     requestSequence: 0,
     focusSequence: 0,
@@ -351,12 +383,20 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     queue: ClientConnection["queue"],
     completeStream = false,
   ) {
+    const nowMs = yield* Clock.currentTimeMillis;
     yield* SynchronizedRef.modifyEffect(state, (current) => {
       // Retired generations were already closed by their replacement or eviction.
       if (current.clients.get(clientId)?.queue !== queue) {
         return Effect.succeed([undefined, current] as const);
       }
-      const removed = removeConnectionFromState(current, clientId, queue);
+      // A dropped stream keeps its leases for the client's reconnect; an
+      // evicted, unresponsive host (completeStream) gives them up.
+      const removed = removeConnectionFromState(
+        current,
+        clientId,
+        queue,
+        completeStream ? undefined : nowMs,
+      );
       return closeConnection(queue, removed.disconnected, completeStream).pipe(
         Effect.as([undefined, removed.state] as const),
       );
@@ -379,27 +419,47 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       focusOrder: 0,
       queue,
     };
+    const nowMs = yield* Clock.currentTimeMillis;
     const registration = yield* SynchronizedRef.modify(state, (current) => {
       const previousConnection = current.clients.get(clientId);
       const removed = previousConnection
-        ? removeConnectionFromState(current, clientId, previousConnection.queue)
+        ? removeConnectionFromState(current, clientId, previousConnection.queue, nowMs)
         : { state: current, disconnected: [] };
       const clients = new Map(removed.state.clients);
       const focusSequence = removed.state.focusSequence + 1;
       const registeredConnection = { ...connection, focusOrder: focusSequence };
       clients.set(clientId, registeredConnection);
+      // The same window is back: its provider sessions return to it. Tab ids do
+      // not carry over; the host resolves its active tab locally.
+      const assignments = new Map(removed.state.assignments);
+      const detached = new Map(removed.state.detached);
+      const reclaimed: Deferred.Deferred<void>[] = [];
+      for (const [assignmentKey, lease] of removed.state.detached) {
+        if (lease.clientId !== clientId || assignments.has(assignmentKey)) continue;
+        detached.delete(assignmentKey);
+        assignments.set(assignmentKey, {
+          clientId,
+          connectionId: registeredConnection.connectionId,
+          queue: registeredConnection.queue,
+        });
+        reclaimed.push(lease.reconnected);
+      }
       return [
         {
           previousConnection,
           disconnected: removed.disconnected,
           registeredConnection,
+          reclaimed,
         },
-        { ...removed.state, clients, focusSequence },
+        { ...removed.state, clients, assignments, detached, focusSequence },
       ] as const;
     });
     if (registration.previousConnection) {
       yield* closeConnection(registration.previousConnection.queue, registration.disconnected);
     }
+    yield* Effect.forEach(registration.reclaimed, (reconnected) =>
+      Deferred.succeed(reconnected, undefined),
+    );
     return registration.registeredConnection;
   });
 
@@ -472,6 +532,40 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   ): Effect.fn.Return<A, PreviewAutomationError> {
     const timeoutMs = input.timeoutMs ?? 15_000;
     const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
+    // A session whose client just dropped waits for that client to come back
+    // rather than moving to another runtime; after the grace period it may.
+    const pinnedLease = (nowMs: number) =>
+      SynchronizedRef.modify(
+        state,
+        (current): readonly [DetachedAssignment | undefined, BrokerState] => {
+          const assignmentKey = hostAssignmentKey(input.scope);
+          const lease = current.detached.get(assignmentKey);
+          if (lease === undefined || current.assignments.has(assignmentKey)) {
+            return [undefined, current];
+          }
+          if (nowMs < lease.detachedAtMs + RECONNECT_GRACE_MS) return [lease, current];
+          const detached = new Map(current.detached);
+          detached.delete(assignmentKey);
+          return [undefined, { ...current, detached }];
+        },
+      );
+    const waitingOn = yield* pinnedLease(yield* Clock.currentTimeMillis);
+    if (waitingOn !== undefined) {
+      const remainingMs =
+        waitingOn.detachedAtMs + RECONNECT_GRACE_MS - (yield* Clock.currentTimeMillis);
+      yield* Deferred.await(waitingOn.reconnected).pipe(
+        Effect.timeoutOption(Math.min(remainingMs, timeoutMs)),
+      );
+      if ((yield* pinnedLease(yield* Clock.currentTimeMillis)) !== undefined) {
+        return yield* new PreviewAutomationNoAvailableHostError({
+          operation: input.operation,
+          environmentId: input.scope.environmentId,
+          threadId: input.scope.threadId,
+          providerSessionId: input.scope.providerSessionId,
+          providerInstanceId: input.scope.providerInstanceId,
+        });
+      }
+    }
     const route = yield* SynchronizedRef.modify(state, (current) => {
       const assignments = new Map(
         Array.from(current.assignments).filter(([, assignment]) => {
