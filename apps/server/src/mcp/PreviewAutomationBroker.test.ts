@@ -1061,7 +1061,7 @@ it.effect("fails over a pinned provider session only after its host disconnects"
         .invoke<string>({ scope, operation: "status", input: {}, timeoutMs: 60_000 })
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("30 seconds");
+      yield* TestClock.adjust("10 seconds");
       expect(yield* Fiber.join(failover)).toBe("second");
       expect(secondRoutedTabId).toBeUndefined();
     }),
@@ -1345,7 +1345,13 @@ it.effect("evicts an unanswered host and lets later calls use a healthy runtime"
         environmentId: scope.environmentId,
         focused: true,
       });
-      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("healthy");
+      // The evicted desktop never comes back, so the session moves after the grace period.
+      const failover = yield* broker
+        .invoke({ scope, operation: "status", input: {}, timeoutMs: 30_000 })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(failover)).toBe("healthy");
       expect(healthyRequests).toHaveLength(1);
       expect(healthyRequests[0]?.tabId).toBeUndefined();
     }),
@@ -1584,6 +1590,83 @@ it.effect("reports no host when the pinned client outlasts the request timeout",
       yield* Effect.yieldNow;
       yield* TestClock.adjust("5 seconds");
       expect(yield* Fiber.join(held)).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+    }),
+  ),
+);
+
+it.effect("keeps a session on a desktop that missed a deadline and reconnected", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      // A remote desktop busy loading a page leaves one request unanswered.
+      let answer = true;
+      let connectionId = "";
+      const slowRequests = requestsFrom(
+        yield* broker.connect(makeHost({ clientId: "client-remote" })),
+        (id) => {
+          connectionId = id;
+        },
+      );
+      yield* Stream.runForEach(slowRequests, (request) =>
+        answer
+          ? broker.respond({
+              clientId: "client-remote",
+              connectionId: request.connectionId,
+              requestId: request.requestId,
+              ok: true,
+              result: request.operation === "open" ? { tabId: "remote-tab" } : "remote",
+            })
+          : Effect.void,
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      const other = yield* serveHost(broker, "client-local", "local");
+      yield* broker.focusHost({
+        clientId: "client-local",
+        environmentId: scope.environmentId,
+        connectionId: other.connectionId(),
+        focused: true,
+      });
+
+      answer = false;
+      const missed = yield* broker
+        .invoke<string>({ scope, operation: "status", input: {}, timeoutMs: 500 })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(500);
+      expect(yield* Fiber.join(missed)).toMatchObject({ _tag: "PreviewAutomationTimeoutError" });
+      expect(connectionId).not.toBe("");
+
+      // The evicted desktop re-registers a second later and keeps the session.
+      yield* TestClock.adjust("1 second");
+      yield* serveHost(broker, "client-remote", "remote again");
+      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe(
+        "remote again",
+      );
+    }),
+  ),
+);
+
+it.effect("moves at once when another desktop is showing the thread's tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const first = yield* serveHost(broker, "client-first", "first");
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      const second = yield* serveHost(broker, "client-second", "second");
+      yield* broker.focusHost({
+        clientId: "client-second",
+        environmentId: scope.environmentId,
+        connectionId: second.connectionId(),
+        focused: true,
+        liveTabs: [{ threadId: scope.threadId, tabId: PreviewTabId.make("tab-2"), visible: true }],
+      });
+
+      yield* Fiber.interrupt(first.consumer);
+      // No clock advance: the visible tab on the other desktop ends the wait.
+      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe(
+        "second",
+      );
     }),
   ),
 );

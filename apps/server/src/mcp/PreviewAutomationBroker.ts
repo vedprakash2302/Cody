@@ -102,10 +102,12 @@ interface HostAssignment {
 }
 
 /**
- * A lease whose host stream dropped. Desktop hosts keep their `clientId` for
- * the life of the window and reconnect on their own, usually within seconds,
- * so the lease waits for that client for {@link RECONNECT_GRACE_MS} instead of
- * handing the session to another runtime with different cookies and tabs.
+ * A lease whose host stream dropped or was evicted. Desktop hosts keep their
+ * `clientId` for the life of the window and reconnect on their own, usually
+ * within seconds (a remote desktop busy loading a page often misses a short
+ * deadline), so the lease waits for that client for {@link RECONNECT_GRACE_MS}
+ * instead of handing the session to another runtime with different cookies
+ * and tabs. A host showing the thread's tab ends the wait at once.
  */
 interface DetachedAssignment {
   readonly clientId: ClientConnection["clientId"];
@@ -113,7 +115,7 @@ interface DetachedAssignment {
   readonly reconnected: Deferred.Deferred<void>;
 }
 
-const RECONNECT_GRACE_MS = 30_000;
+const RECONNECT_GRACE_MS = 10_000;
 
 interface PreviewAutomationRequestErrorContext {
   readonly operation: PreviewAutomationOperation;
@@ -141,7 +143,7 @@ interface BrokerState {
 
 /**
  * `retainAtMs` keeps the connection's leases as detached so the same client can
- * reclaim them; without it (an unresponsive host was evicted) they are dropped.
+ * reclaim them; without it they are dropped.
  */
 const removeConnectionFromState = (
   current: BrokerState,
@@ -390,14 +392,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       if (current.clients.get(clientId)?.queue !== queue) {
         return Effect.succeed([undefined, current] as const);
       }
-      // A dropped stream keeps its leases for the client's reconnect; an
-      // evicted, unresponsive host (completeStream) gives them up.
-      const removed = removeConnectionFromState(
-        current,
-        clientId,
-        queue,
-        completeStream ? undefined : nowMs,
-      );
+      // Dropped and evicted streams both keep their leases for the client's
+      // reconnect; an evicted desktop re-registers as soon as its stream ends.
+      const removed = removeConnectionFromState(current, clientId, queue, nowMs);
       return closeConnection(queue, removed.disconnected, completeStream).pipe(
         Effect.as([undefined, removed.state] as const),
       );
@@ -437,6 +434,11 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       const detached = new Map(removed.state.detached);
       const reclaimed: Deferred.Deferred<void>[] = [];
       for (const [assignmentKey, lease] of removed.state.detached) {
+        // Leases nobody asked for again expire here instead of piling up.
+        if (nowMs >= lease.detachedAtMs + RECONNECT_GRACE_MS) {
+          detached.delete(assignmentKey);
+          continue;
+        }
         if (lease.clientId !== clientId || assignments.has(assignmentKey)) continue;
         detached.delete(assignmentKey);
         assignments.set(assignmentKey, {
@@ -546,7 +548,21 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           if (lease === undefined || current.assignments.has(assignmentKey)) {
             return [undefined, current];
           }
-          if (nowMs < lease.detachedAtMs + RECONNECT_GRACE_MS) return [lease, current];
+          // Another desktop is showing this thread's tab: the user moved there.
+          const shownElsewhere = Array.from(current.clients.values()).some(
+            (host) =>
+              host.clientId !== lease.clientId &&
+              host.environmentId === input.scope.environmentId &&
+              host.liveTabs.some(
+                (tab) =>
+                  tab.threadId === input.scope.threadId &&
+                  tab.visible === true &&
+                  (input.tabId === undefined || tab.tabId === input.tabId),
+              ),
+          );
+          if (!shownElsewhere && nowMs < lease.detachedAtMs + RECONNECT_GRACE_MS) {
+            return [lease, current];
+          }
           const detached = new Map(current.detached);
           detached.delete(assignmentKey);
           return [undefined, { ...current, detached }];
