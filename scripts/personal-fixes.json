@@ -21,6 +21,7 @@
   "apps/server/src/mcp/PreviewAutomationBroker.test.ts",
   "apps/desktop/src/preview/PreviewTunnelProxy.test.ts",
   "apps/web/src/state/previewTunnel.test.ts",
+  "apps/web/src/state/previewTunnel.reconnect.test.ts",
   "apps/web/src/browser/browserTargetResolver.test.ts",
   "apps/web/src/branding.test.ts",
   "apps/desktop/src/app/DesktopEnvironment.test.ts",
