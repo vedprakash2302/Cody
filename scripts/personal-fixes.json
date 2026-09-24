@@ -13,6 +13,7 @@
   "packages/shared/src/usageMerge.test.ts",
   "apps/web/src/lib/previewAnnotation.test.ts",
   "apps/server/src/preview/PreviewTunnel.test.ts",
+  "apps/server/src/mcp/PreviewAutomationBroker.test.ts",
   "apps/desktop/src/preview/PreviewTunnelProxy.test.ts",
   "apps/web/src/state/previewTunnel.test.ts",
   "apps/web/src/browser/browserTargetResolver.test.ts",
