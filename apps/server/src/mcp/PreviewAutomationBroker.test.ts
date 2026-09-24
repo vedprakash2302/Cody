@@ -930,9 +930,13 @@ it.effect("fails over a pinned provider session only after its host disconnects"
       yield* Fiber.interrupt(firstConsumer);
       yield* Effect.yieldNow;
 
-      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe(
-        "second",
-      );
+      // The session waits for its own client first, then fails over.
+      const failover = yield* broker
+        .invoke<string>({ scope, operation: "status", input: {}, timeoutMs: 60_000 })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* Fiber.join(failover)).toBe("second");
       expect(secondRoutedTabId).toBeUndefined();
     }),
   ),
@@ -1356,6 +1360,104 @@ it.effect("keeps a host that responds with an operation timeout", () =>
         yield* broker.invoke<void>({ scope, operation: "waitFor", input: {} }).pipe(Effect.flip),
       ).toMatchObject({ _tag: "PreviewAutomationTimeoutError" });
       expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("responsive");
+    }),
+  ),
+);
+
+/** A host that answers every request with `name`, until its consumer fiber stops. */
+const serveHost = (
+  broker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  clientId: string,
+  name: string,
+  routed: RoutedRequest[] = [],
+) =>
+  Effect.gen(function* () {
+    let connectionId = "";
+    const requests = requestsFrom(yield* broker.connect(makeHost({ clientId })), (id) => {
+      connectionId = id;
+    });
+    const consumer = yield* Stream.runForEach(requests, (request) => {
+      routed.push(request);
+      return broker.respond({
+        clientId,
+        connectionId: request.connectionId,
+        requestId: request.requestId,
+        ok: true,
+        result: request.operation === "open" ? { host: name, tabId: `${name}-tab` } : name,
+      });
+    }).pipe(Effect.forkScoped);
+    yield* Effect.yieldNow;
+    return { consumer, connectionId: () => connectionId };
+  });
+
+it.effect("returns a pinned session to its client when that client reconnects", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const first = yield* serveHost(broker, "client-first", "first");
+      expect(yield* broker.invoke({ scope, operation: "open", input: {} })).toEqual({
+        host: "first",
+        tabId: "first-tab",
+      });
+
+      yield* Fiber.interrupt(first.consumer);
+      const second = yield* serveHost(broker, "client-second", "second");
+      // Another runtime is focused while the pinned client is away.
+      yield* broker.focusHost({
+        clientId: "client-second",
+        environmentId: scope.environmentId,
+        connectionId: second.connectionId(),
+        focused: true,
+      });
+      const reconnectedRequests: RoutedRequest[] = [];
+      yield* serveHost(broker, "client-first", "first again", reconnectedRequests);
+
+      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe(
+        "first again",
+      );
+      // The reconnected stream resolves its own active tab.
+      expect(reconnectedRequests.at(-1)?.tabId).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("holds a request while the pinned client reconnects instead of failing over", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const first = yield* serveHost(broker, "client-first", "first");
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      const secondRequests: RoutedRequest[] = [];
+      yield* serveHost(broker, "client-second", "second", secondRequests);
+
+      yield* Fiber.interrupt(first.consumer);
+      const held = yield* broker
+        .invoke<string>({ scope, operation: "status", input: {} })
+        .pipe(Effect.forkScoped);
+      yield* TestClock.adjust("2 seconds");
+      yield* serveHost(broker, "client-first", "first again");
+
+      expect(yield* Fiber.join(held)).toBe("first again");
+      expect(secondRequests).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("reports no host when the pinned client outlasts the request timeout", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const first = yield* serveHost(broker, "client-first", "first");
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      yield* serveHost(broker, "client-second", "second");
+
+      yield* Fiber.interrupt(first.consumer);
+      const held = yield* broker
+        .invoke<string>({ scope, operation: "status", input: {}, timeoutMs: 5_000 })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(held)).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
     }),
   ),
 );
