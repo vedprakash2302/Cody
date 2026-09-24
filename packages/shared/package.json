@@ -59,6 +59,10 @@
       "types": "./src/observability.ts",
       "import": "./src/observability.ts"
     },
+    "./otelEnvironment": {
+      "types": "./src/otelEnvironment.ts",
+      "import": "./src/otelEnvironment.ts"
+    },
     "./httpObservability": {
       "types": "./src/httpObservability.ts",
       "import": "./src/httpObservability.ts"
@@ -334,6 +338,10 @@
     "./dateTime": {
       "types": "./src/dateTime.ts",
       "import": "./src/dateTime.ts"
+    },
+    "./threadRevert": {
+      "types": "./src/threadRevert.ts",
+      "import": "./src/threadRevert.ts"
     },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",

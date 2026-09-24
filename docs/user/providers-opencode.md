@@ -32,6 +32,24 @@ using the same workspace. It is broader than the current thread, especially on a
 shared external server. Use **Allow once** for a single request. Denying an action
 does not stop the whole turn.
 
+## Subagents
+
+When OpenCode delegates work to a subagent, **Agents** shows each subagent's
+status, latest step, tokens, and result. By default the agent waits for a
+subagent to finish before it continues.
+
+To let the agent keep working while subagents run, turn on **Background
+subagents** in the OpenCode provider settings. This uses OpenCode's experimental
+background mode. Changing the setting stops running OpenCode sessions, including
+their turns and subagents, and applies from the next message. When a background
+subagent finishes, the agent picks up its result. The result joins the current
+turn if one is running, and starts a new turn otherwise. For an external server,
+start it with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` instead.
+
+**Stop** ends the turn and every running subagent, background ones included,
+because OpenCode stops a session's subagents with it. To keep background
+subagents running, send a message instead of stopping.
+
 ## Refresh models, commands, and skills
 
 After changing an OpenCode login or configuration, use **Refresh provider status**
