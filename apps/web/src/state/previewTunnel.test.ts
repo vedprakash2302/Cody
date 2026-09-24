@@ -10,16 +10,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { shouldTunnelPreview } from "./previewTunnel";
 
 const environmentId = EnvironmentId.make("environment-1");
-const base = {
-  isElectron: true,
-  serverSupportsTunnel: true,
-  hasAuthorization: true,
-  httpBaseUrl: "http://127.0.0.1:49152",
-};
+const base = { isElectron: true, serverSupportsTunnel: true };
 const saved = new BearerConnectionTarget({
   environmentId,
-  label: "Devbox",
-  connectionId: "saved:devbox",
+  label: "Cloud PC",
+  connectionId: "saved:cloud-pc",
 });
 
 describe("shouldTunnelPreview", () => {
@@ -33,43 +28,34 @@ describe("shouldTunnelPreview", () => {
     }
   });
 
-  it("loads the desktop's own backend directly only when it shares this machine's loopback", () => {
-    const primary = (httpBaseUrl: string) =>
-      new PrimaryConnectionTarget({
-        environmentId,
-        label: "This machine",
-        httpBaseUrl,
-        wsBaseUrl: httpBaseUrl.replace(/^http/, "ws"),
-      });
+  it("loads the desktop's own backends directly, including WSL on its NAT address", () => {
+    const primary = new PrimaryConnectionTarget({
+      environmentId,
+      label: "This machine",
+      httpBaseUrl: "http://172.30.75.225:4773",
+      wsBaseUrl: "ws://172.30.75.225:4773",
+    });
     const wsl = new BearerConnectionTarget({
       environmentId,
       label: "WSL",
       connectionId: "local:wsl:Ubuntu",
     });
-    for (const httpBaseUrl of [
-      "http://127.0.0.1:4773",
-      "http://localhost:4773",
-      "http://[::1]:4773",
-    ]) {
-      expect(shouldTunnelPreview({ ...base, httpBaseUrl, target: primary(httpBaseUrl) })).toBe(
-        false,
-      );
-    }
-    // WSL-only mode binds the WSL NAT address, whose loopback is not this machine's.
-    const natUrl = "http://172.30.75.225:4773";
-    expect(shouldTunnelPreview({ ...base, httpBaseUrl: natUrl, target: primary(natUrl) })).toBe(
-      true,
-    );
-    expect(shouldTunnelPreview({ ...base, httpBaseUrl: natUrl, target: wsl })).toBe(true);
+    expect(shouldTunnelPreview({ ...base, target: primary })).toBe(false);
     expect(shouldTunnelPreview({ ...base, target: wsl })).toBe(false);
   });
 
-  it("falls back to direct loading without Electron, server support, or a ticketable session", () => {
+  it("stays unknown until the catalog and the remote server's capabilities load", () => {
+    expect(shouldTunnelPreview({ ...base, target: undefined })).toBeUndefined();
+    expect(shouldTunnelPreview({ ...base, target: saved, serverSupportsTunnel: undefined })).toBe(
+      undefined,
+    );
+  });
+
+  it("loads directly without Electron, server support, or a catalog entry", () => {
     expect(shouldTunnelPreview({ ...base, target: saved, isElectron: false })).toBe(false);
     expect(shouldTunnelPreview({ ...base, target: saved, serverSupportsTunnel: false })).toBe(
       false,
     );
-    expect(shouldTunnelPreview({ ...base, target: saved, hasAuthorization: false })).toBe(false);
     expect(shouldTunnelPreview({ ...base, target: null })).toBe(false);
   });
 });

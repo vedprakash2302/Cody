@@ -3,14 +3,17 @@
  * through its preview tunnel, and the credentials the tunnel needs.
  *
  * `localhost` in a preview tab means the machine the environment runs on.
- * Only a desktop-managed backend reached over loopback shares this machine's
- * `localhost`, so only its tabs load directly. Every other environment,
- * including a desktop-managed WSL backend on its NAT address, gets its
- * loopback traffic proxied over the environment's `/api/preview-tunnel`,
- * which rides whatever connection already reaches that server: LAN,
- * Tailscale, SSH, or T3 Connect. A remote environment tunnels even when its
- * URL is loopback, because an SSH forward or a port forward into WSL makes a
- * remote server look local.
+ * The desktop's own backends (its primary and its local WSL backends) share
+ * this machine, so their tabs load directly as they always have. Every other
+ * environment gets its loopback traffic proxied over the environment's
+ * `/api/preview-tunnel`, which rides whatever connection already reaches that
+ * server: LAN, Tailscale, SSH, or T3 Connect. A remote environment tunnels
+ * even when its URL is loopback, because an SSH forward or a port forward
+ * into WSL makes a remote server look local.
+ *
+ * The answer only uses facts that survive a reconnect: the environment's
+ * connection target and its server's capability. Remote targets always
+ * authenticate with a bearer or DPoP token, which the ticket needs.
  */
 import { useAtomValue } from "@effect/atom-react";
 import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
@@ -19,7 +22,6 @@ import {
   resolveEnvironmentSocketAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -38,57 +40,53 @@ export const PREVIEW_TUNNEL_PATH = "/api/preview-tunnel";
 /** Tickets live five minutes; refresh with room for a slow round trip. */
 const CREDENTIAL_REFRESH_MS = 4 * 60_000;
 
+/**
+ * `undefined` while the answer is unknown: the catalog has not loaded, or a
+ * remote server has not reported its capabilities yet. Callers hold the
+ * webview until it is known so a tab never starts on the wrong machine.
+ */
 export function shouldTunnelPreview(input: {
   readonly isElectron: boolean;
-  readonly target: ConnectionTarget | null;
-  /** The URL this client uses to reach the environment. */
-  readonly httpBaseUrl: string | null;
-  readonly serverSupportsTunnel: boolean;
-  /** Cookie sessions have no ticket to hand the desktop's main process. */
-  readonly hasAuthorization: boolean;
-}): boolean {
-  if (!input.isElectron || input.target === null) return false;
-  if (!input.serverSupportsTunnel || !input.hasAuthorization) return false;
-  const desktopManaged =
-    input.target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(input.target);
-  if (!desktopManaged) return true;
-  // A desktop-managed backend in WSL (NAT networking) has its own loopback,
-  // which the WSL address cannot reach from here.
-  return !isOnThisMachinesLoopback(input.httpBaseUrl);
-}
-
-function isOnThisMachinesLoopback(httpBaseUrl: string | null): boolean {
-  if (httpBaseUrl === null) return false;
-  try {
-    return isLocalLoopbackHost(new URL(httpBaseUrl).hostname);
-  } catch {
+  /** `undefined` until the catalog loads; `null` when it has no entry. */
+  readonly target: ConnectionTarget | null | undefined;
+  /** `undefined` until the server's capabilities arrive. */
+  readonly serverSupportsTunnel: boolean | undefined;
+}): boolean | undefined {
+  if (!input.isElectron) return false;
+  if (input.target === undefined) return undefined;
+  if (input.target === null) return false;
+  if (
+    input.target._tag === "PrimaryConnectionTarget" ||
+    isDesktopLocalConnectionTarget(input.target)
+  ) {
     return false;
   }
+  return input.serverSupportsTunnel;
 }
 
 const previewTunnelAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make((get) => {
-    const prepared = Option.getOrNull(
-      get(environmentSession.preparedConnectionValueAtom(environmentId)),
-    );
-    return shouldTunnelPreview({
+  Atom.make((get): boolean | undefined => {
+    const catalog = get(environmentCatalog.catalogValueAtom);
+    const capabilities = get(environmentServerConfigsAtom).get(environmentId)?.environment
+      .capabilities;
+    const decision = shouldTunnelPreview({
       isElectron,
-      target: get(environmentCatalog.catalogValueAtom).entries.get(environmentId)?.target ?? null,
-      httpBaseUrl: prepared?.httpBaseUrl ?? null,
+      target: catalog.isReady ? (catalog.entries.get(environmentId)?.target ?? null) : undefined,
       serverSupportsTunnel:
-        get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-          .previewTunnel === true,
-      hasAuthorization: prepared !== null && prepared.httpAuthorization !== null,
+        capabilities === undefined ? undefined : capabilities.previewTunnel === true,
     });
-  }).pipe(Atom.withLabel(`preview-tunnel:${environmentId}`)),
+    // A reconnect briefly drops the server's config; keep the settled answer
+    // rather than flipping open tabs to the other machine.
+    return decision ?? Option.getOrUndefined(get.self<boolean | undefined>());
+  }).pipe(Atom.keepAlive, Atom.withLabel(`preview-tunnel:${environmentId}`)),
 );
 
-export function usePreviewTunnel(environmentId: EnvironmentId): boolean {
+export function usePreviewTunnel(environmentId: EnvironmentId): boolean | undefined {
   return useAtomValue(previewTunnelAtom(environmentId));
 }
 
 export function readPreviewTunnel(environmentId: EnvironmentId): boolean {
-  return appAtomRegistry.get(previewTunnelAtom(environmentId));
+  return appAtomRegistry.get(previewTunnelAtom(environmentId)) === true;
 }
 
 const previewTunnelAccessAtom = Atom.family((environmentId: EnvironmentId) =>

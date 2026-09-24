@@ -15,7 +15,13 @@ import { AuthTerminalOperateScope } from "@t3tools/contracts";
 import * as NodeSocket from "@effect/platform-node-shared/NodeSocket";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import * as Layer from "effect/Layer";
+import {
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import type * as Socket from "effect/unstable/socket/Socket";
 
 import { requireUpgradeScope } from "../auth/http.ts";
@@ -80,3 +86,12 @@ const handler = Effect.gen(function* () {
 });
 
 export const previewTunnelRouteLayer = HttpRouter.add("GET", PREVIEW_TUNNEL_ROUTE, handler);
+
+/**
+ * Tunnel requests stay out of traces: each one carries a reusable session
+ * ticket in its query string, and a page load opens dozens of them.
+ */
+export const previewTunnelTracerLayer = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(
+  (request) =>
+    request.url === PREVIEW_TUNNEL_ROUTE || request.url.startsWith(`${PREVIEW_TUNNEL_ROUTE}?`),
+);

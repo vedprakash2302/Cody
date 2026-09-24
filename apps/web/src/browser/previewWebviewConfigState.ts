@@ -105,13 +105,21 @@ const previewWebviewConfigAtom = Atom.family((key: string) => {
   );
 });
 
+const PENDING_CONFIG_ATOM = Atom.make(
+  AsyncResult.initial<DesktopPreviewWebviewConfig, PreviewWebviewConfigError>(),
+).pipe(Atom.withLabel("preview:webview-config:pending"));
+
 export function usePreviewWebviewConfig(
   environmentId: EnvironmentId,
   profileId?: string,
 ): DesktopPreviewWebviewConfig | null {
   const tunnel = usePreviewTunnel(environmentId);
+  // Until the route is known the webview stays unmounted, so it never loads
+  // a page on the wrong machine first.
   const result = useAtomValue(
-    previewWebviewConfigAtom(configKey(environmentId, profileId, tunnel)),
+    tunnel === undefined
+      ? PENDING_CONFIG_ATOM
+      : previewWebviewConfigAtom(configKey(environmentId, profileId, tunnel)),
   );
   return Option.getOrNull(AsyncResult.value(result));
 }

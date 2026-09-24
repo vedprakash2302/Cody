@@ -64,9 +64,10 @@ cookies, and secure-context APIs depend on. Rewriting URLs to the
 environment's host breaks those, and fails outright for SSH forwards and port
 forwards, whose URLs are loopback on the client.
 [Whether a tab tunnels](../../apps/web/src/state/previewTunnel.ts) depends on
-the connection target first: a remote environment tunnels even behind a
-loopback URL. Only a desktop-managed backend reached over loopback loads
-directly; a WSL backend on its NAT address has its own loopback and tunnels. Chromium's
+the connection target, not its URL: a remote environment tunnels even behind a
+loopback URL, and the desktop's own backends never do. The decision uses only
+facts that survive a reconnect, because flipping an open tab's route reloads it
+against the other machine. Chromium's
 PAC mode always bypasses loopback, so the session uses fixed rules with
 `<-loopback>` and the listener dials other hosts directly. Hosted web and
 mobile cannot reroute their own loopback traffic and do not tunnel.

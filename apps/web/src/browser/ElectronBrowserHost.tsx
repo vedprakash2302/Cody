@@ -16,7 +16,7 @@ import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 /** Keeps one remote environment's tunnel credentials current while it has tabs. */
 function PreviewTunnelCredentials({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  usePreviewTunnelCredentials(environmentId, usePreviewTunnel(environmentId));
+  usePreviewTunnelCredentials(environmentId, usePreviewTunnel(environmentId) === true);
   return null;
 }
 
