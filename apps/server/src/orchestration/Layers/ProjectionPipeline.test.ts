@@ -3968,6 +3968,134 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("drops the rewound prompt when a kept turn was provider-initiated", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-revert-wake");
+      let sequence = 0;
+      const appendAndProject = (
+        event: Omit<
+          Parameters<typeof eventStore.append>[0],
+          "eventId" | "commandId" | "causationEventId" | "correlationId" | "metadata"
+        >,
+      ) => {
+        sequence += 1;
+        const commandId = CommandId.make(`cmd-revert-wake-${sequence}`);
+        return eventStore
+          .append({
+            ...event,
+            eventId: EventId.make(`evt-revert-wake-${sequence}`),
+            commandId,
+            causationEventId: null,
+            correlationId: CorrelationId.make(commandId),
+            metadata: {},
+          } as Parameters<typeof eventStore.append>[0])
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      };
+      const message = (
+        messageId: string,
+        role: "user" | "assistant",
+        at: string,
+        turnId: string | null,
+      ) =>
+        appendAndProject({
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at,
+          payload: {
+            threadId,
+            messageId: MessageId.make(messageId),
+            role,
+            text: messageId,
+            turnId: turnId === null ? null : TurnId.make(turnId),
+            streaming: false,
+            createdAt: at,
+            updatedAt: at,
+          },
+        });
+      const checkpoint = (turnId: string, count: number, at: string) =>
+        appendAndProject({
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at,
+          payload: {
+            threadId,
+            turnId: TurnId.make(turnId),
+            checkpointTurnCount: count,
+            checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/${threadId}/turn/${count}`),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: at,
+          },
+        });
+
+      yield* appendAndProject({
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-revert-wake"),
+        occurredAt: "2026-02-26T12:00:00.000Z",
+        payload: {
+          projectId: ProjectId.make("project-revert-wake"),
+          title: "Project Revert Wake",
+          workspaceRoot: "/tmp/project-revert-wake",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T12:00:00.000Z",
+          updatedAt: "2026-02-26T12:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-02-26T12:00:00.500Z",
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-revert-wake"),
+          title: "Thread Revert Wake",
+          modelSelection: { instanceId: ProviderInstanceId.make("opencode"), model: "a/b" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T12:00:00.500Z",
+          updatedAt: "2026-02-26T12:00:00.500Z",
+        },
+      });
+      yield* message("user-launch", "user", "2026-02-26T12:00:01.000Z", null);
+      yield* message("assistant-launched", "assistant", "2026-02-26T12:00:02.000Z", null);
+      yield* checkpoint("turn-1", 1, "2026-02-26T12:00:03.000Z");
+      // turn-2 is a background agent waking the thread: no user message.
+      yield* message("assistant-wake", "assistant", "2026-02-26T12:00:04.000Z", "turn-2");
+      yield* checkpoint("turn-2", 2, "2026-02-26T12:00:05.000Z");
+      yield* message("user-rewound", "user", "2026-02-26T12:00:06.000Z", null);
+      yield* message("assistant-rewound", "assistant", "2026-02-26T12:00:07.000Z", null);
+      yield* checkpoint("turn-3", 3, "2026-02-26T12:00:08.000Z");
+      yield* appendAndProject({
+        type: "thread.reverted",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-02-26T12:00:09.000Z",
+        payload: { threadId, turnCount: 2 },
+      });
+
+      const messageRows = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+        ORDER BY created_at ASC, message_id ASC
+      `;
+      assert.deepEqual(
+        messageRows.map((row) => row.messageId),
+        ["user-launch", "assistant-launched", "assistant-wake"],
+      );
+    }),
+  );
+
   it.effect("does not let a later missing placeholder clobber a ready checkpoint", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

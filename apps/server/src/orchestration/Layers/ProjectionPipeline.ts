@@ -204,6 +204,19 @@ function derivePendingUserInputCountFromActivities(
   return openRequestIds.size;
 }
 
+/**
+ * Boundary for the revert fallback below, which adopts unlinked user messages
+ * to fill each kept turn and so overruns on provider-initiated turns (no
+ * prompt). Mirrors `retainMessagesAfterRevert` in `@t3tools/shared/threadRevert`,
+ * which explains the rule. This copy reads the turn row's `completedAt`; the
+ * read model reads the checkpoint's. They match except for a turn whose only
+ * checkpoint is a "missing" placeholder, where the row keeps the session end.
+ */
+function revertBoundaryFilter(keptUntil: string | undefined): (createdAt: string) => boolean {
+  return (createdAt) =>
+    keptUntil === undefined || compareDateTimeStrings(createdAt, keptUntil) <= 0;
+}
+
 function retainProjectionMessagesAfterRevert(
   messages: ReadonlyArray<ProjectionThreadMessage>,
   turns: ReadonlyArray<ProjectionTurn>,
@@ -217,6 +230,7 @@ function retainProjectionMessagesAfterRevert(
       turn.checkpointTurnCount !== null &&
       turn.checkpointTurnCount <= turnCount,
   );
+  let latestKeptTurn: ProjectionTurn | undefined;
   for (const turn of keptTurns) {
     if (turn.turnId !== null) {
       retainedTurnIds.add(turn.turnId);
@@ -227,7 +241,16 @@ function retainProjectionMessagesAfterRevert(
     if (turn.assistantMessageId !== null) {
       retainedMessageIds.add(turn.assistantMessageId);
     }
+    if (
+      latestKeptTurn === undefined ||
+      (turn.checkpointTurnCount ?? 0) > (latestKeptTurn.checkpointTurnCount ?? 0)
+    ) {
+      latestKeptTurn = turn;
+    }
   }
+  const isPromptBeforeRevertBoundary = revertBoundaryFilter(
+    latestKeptTurn?.completedAt ?? undefined,
+  );
 
   for (const message of messages) {
     if (message.role === "system" || isImportedAgentSessionMessageId(message.messageId)) {
@@ -252,7 +275,8 @@ function retainProjectionMessagesAfterRevert(
         (message) =>
           message.role === "user" &&
           !retainedMessageIds.has(message.messageId) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+          (message.turnId === null || retainedTurnIds.has(message.turnId)) &&
+          isPromptBeforeRevertBoundary(message.createdAt),
       )
       .toSorted(
         (left, right) =>

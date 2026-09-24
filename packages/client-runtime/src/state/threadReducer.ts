@@ -14,8 +14,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
-import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { retainMessagesAfterRevert } from "@t3tools/shared/threadRevert";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -628,6 +627,7 @@ export function applyThreadDetailEvent(
         thread.messages,
         retainedTurnIds,
         event.payload.turnCount,
+        checkpoints.at(-1)?.completedAt,
       );
       const proposedPlans = pipe(
         thread.proposedPlans,
@@ -816,49 +816,4 @@ function rebindCheckpointAssistantMessage(
   return Arr.map(checkpoints, (entry) =>
     entry.turnId === turnId ? { ...entry, assistantMessageId: messageId } : entry,
   );
-}
-
-function retainMessagesAfterRevert(
-  messages: ReadonlyArray<OrchestrationMessage>,
-  retainedTurnIds: ReadonlySet<string>,
-  turnCount: number,
-): OrchestrationMessage[] {
-  const retainedMessageIds = new Set<string>();
-  for (const message of messages) {
-    if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
-      retainedMessageIds.add(message.id);
-    } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
-      retainedMessageIds.add(message.id);
-    }
-  }
-
-  for (const role of ["user", "assistant"] as const) {
-    const retainedCount = messages.filter(
-      (message) =>
-        message.role === role &&
-        !isImportedAgentSessionMessageId(message.id) &&
-        retainedMessageIds.has(message.id),
-    ).length;
-    const missingCount = Math.max(0, turnCount - retainedCount);
-    const fallbackMessages = messages
-      .filter(
-        (message) =>
-          message.role === role &&
-          !retainedMessageIds.has(message.id) &&
-          (message.turnId === null || retainedTurnIds.has(message.turnId)),
-      )
-      // `.sort()`, not `.toSorted()`: `.filter()` above already returned a fresh array, and
-      // this is shared with mobile, which runs on Hermes and has no ES2023 array methods.
-      .sort(
-        (left, right) =>
-          compareDateTimeStrings(left.createdAt, right.createdAt) ||
-          left.id.localeCompare(right.id),
-      )
-      .slice(0, missingCount);
-    for (const message of fallbackMessages) {
-      retainedMessageIds.add(message.id);
-    }
-  }
-
-  return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

@@ -1647,6 +1647,142 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
       }
     });
+
+    it("drops the rewound prompt when a kept turn was provider-initiated", () => {
+      const message = (
+        id: string,
+        role: "user" | "assistant",
+        createdAt: string,
+        turnId: string | null,
+      ) => ({
+        id: MessageId.make(id),
+        role,
+        text: id,
+        turnId: turnId === null ? null : TurnId.make(turnId),
+        streaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      const checkpoint = (turnId: string, count: number, completedAt: string) => ({
+        turnId: TurnId.make(turnId),
+        checkpointTurnCount: count,
+        checkpointRef: CheckpointRef.make(`ref-${count}`),
+        status: "ready" as const,
+        files: [],
+        assistantMessageId: null,
+        completedAt,
+      });
+      // turn-2 is a background agent waking the thread: no user message.
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          message("user-launch", "user", "2026-04-01T01:00:00.000Z", null),
+          message("assistant-launched", "assistant", "2026-04-01T01:01:00.000Z", null),
+          message("assistant-wake", "assistant", "2026-04-01T01:03:00.000Z", "turn-2"),
+          message("user-rewound", "user", "2026-04-01T01:05:00.000Z", null),
+          message("assistant-rewound", "assistant", "2026-04-01T01:06:00.000Z", null),
+        ],
+        checkpoints: [
+          checkpoint("turn-1", 1, "2026-04-01T01:02:00.000Z"),
+          checkpoint("turn-2", 2, "2026-04-01T01:04:00.000Z"),
+          checkpoint("turn-3", 3, "2026-04-01T01:07:00.000Z"),
+        ],
+      };
+
+      const result = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-04-01T02:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.reverted",
+        payload: { threadId: ThreadId.make("thread-1"), turnCount: 2 },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+          "user-launch",
+          "assistant-launched",
+          "assistant-wake",
+        ]);
+      }
+    });
+  });
+
+  describe("thread.reverted after an early turn completion", () => {
+    it("keeps a kept turn's reply that arrived after the turn was marked complete", () => {
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("user-launch"),
+            role: "user",
+            text: "launch",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T01:00:00.000Z",
+            updatedAt: "2026-04-01T01:00:00.000Z",
+          },
+          {
+            id: MessageId.make("assistant-late"),
+            role: "assistant",
+            text: "late reply",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T01:03:00.000Z",
+            updatedAt: "2026-04-01T01:03:00.000Z",
+          },
+          {
+            id: MessageId.make("user-rewound"),
+            role: "user",
+            text: "rewound",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T01:05:00.000Z",
+            updatedAt: "2026-04-01T01:05:00.000Z",
+          },
+        ],
+        checkpoints: [
+          {
+            turnId: TurnId.make("turn-1"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("ref-1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-04-01T01:02:00.000Z",
+          },
+          {
+            turnId: TurnId.make("turn-2"),
+            checkpointTurnCount: 2,
+            checkpointRef: CheckpointRef.make("ref-2"),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-04-01T01:06:00.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-04-01T02:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.reverted",
+        payload: { threadId: ThreadId.make("thread-1"), turnCount: 1 },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+          "user-launch",
+          "assistant-late",
+        ]);
+      }
+    });
   });
 
   describe("no-op events", () => {
