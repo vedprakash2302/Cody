@@ -1,3 +1,10 @@
+import * as NodeModule from "node:module";
+
+// @napi-rs/keyring stays external to the CLI bundle because it loads a native
+// addon. Inside a Node single-executable, `import()` can only load built-ins,
+// while `require` reads the real filesystem, so the keyring resolves through it.
+const requireForKeyring = NodeModule.createRequire(import.meta.url);
+
 const CACHE_MS = 5 * 60_000;
 
 /** Share one Keychain request across usage history and limits in this server process. */
@@ -24,6 +31,7 @@ export function makeCachedCursorAccessTokenReader(
 
 /** Read the Cursor CLI's default macOS credential without invoking the shared security binary. */
 export const readMacCursorAccessToken = makeCachedCursorAccessTokenReader(async () => {
-  const { AsyncEntry } = await import("@napi-rs/keyring");
+  // Required on first use, so platforms that never read the Keychain never load the addon.
+  const { AsyncEntry } = requireForKeyring("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
   return (await new AsyncEntry("cursor-access-token", "cursor-user").getPassword()) ?? null;
 });
