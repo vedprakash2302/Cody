@@ -16,9 +16,9 @@ which for GitHub Copilot is Copilot's own credit charge rather than your bill. O
 connected to an external server are not included, and deleting an OpenCode session removes its
 usage.
 
-OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
-databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
-server to read a different data directory; comma-separated paths read multiple directories.
+Antigravity reads local conversation databases, including T3-managed profiles. Set
+`ANTIGRAVITY_DATA_DIR` on the server to read a different data directory; comma-separated paths
+read multiple directories.
 
 Cursor reads account usage from Cursor's dashboard API using the CLI login saved on the server.
 This includes headless T3 sessions and desktop usage across machines; the same account counts

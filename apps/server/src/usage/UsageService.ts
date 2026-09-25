@@ -51,7 +51,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
-import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
 import { readAntigravityUsage } from "./antigravityUsageReader.ts";
 import { readCursorAccountUsage } from "./cursorUsageReader.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
@@ -512,23 +511,9 @@ export const make = Effect.gen(function* () {
       }
       return [...canonical];
     });
-    const dataHome = hostEnvironment["XDG_DATA_HOME"]?.trim();
-    for (const dir of yield* envRoots("OPENCODE_DATA_DIR", [
-      path.join(
-        dataHome && path.isAbsolute(dataHome) ? dataHome : path.join(home, ".local", "share"),
-        "opencode",
-      ),
-    ])) {
-      const result = yield* Effect.promise(() => readOpenCodeUsage(dir, windowStartMs));
-      scanned.push({
-        provider: "opencode",
-        dir,
-        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
-        files: result.missing && !result.error ? null : result.files,
-        status: result.error ? "partial" : "ok",
-        ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
-      });
-    }
+    // Cody reads OpenCode in collectOpenCodeSources instead of upstream's
+    // readOpenCodeUsage. That reader counts messages a forked session copies
+    // under new ids once, and follows each instance's data dir and OPENCODE_DB.
     const antigravityRoots = yield* envRoots("ANTIGRAVITY_DATA_DIR", [
       ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) =>
         path.join(home, ".gemini", name),
@@ -866,7 +851,7 @@ export const make = Effect.gen(function* () {
     for (const { databasePath, volumeId, records } of openCodeSources) {
       const sessionIds = new Set<string>();
       for (const record of records ?? []) {
-        if (aggregator.add(record) && record.sessionId.length > 0) {
+        if (aggregator.add(record, databasePath) && record.sessionId.length > 0) {
           sessionIds.add(record.sessionId);
         }
       }

@@ -438,15 +438,9 @@ describe("UsageService", () => {
     () =>
       Effect.gen(function* () {
         const { settings, home } = yield* setup;
-        const root = NodePath.join(home, "opencode");
-        const message = yield* encodeUnknownJson({
-          id: "msg_1",
-          sessionID: "session-1",
-          role: "assistant",
-          modelID: "example-model",
-          time: { created: Date.parse("2026-08-01T10:00:00Z") },
-          tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 20, write: 3 } },
-        });
+        // Cody reads OpenCode per database from the instance's data dir.
+        const root = NodePath.join(home, "data", "opencode");
+        const databasePath = NodePath.join(root, "opencode.db");
         const bubble = yield* encodeUnknownJson({
           type: 2,
           createdAt: "2026-08-01T10:00:00Z",
@@ -454,9 +448,20 @@ describe("UsageService", () => {
           tokenCount: { inputTokens: 100, outputTokens: 20 },
         });
         yield* Effect.promise(async () => {
-          const directory = NodePath.join(root, "storage", "message", "session-1");
-          await NodeFSP.mkdir(directory, { recursive: true });
-          await NodeFSP.writeFile(NodePath.join(directory, "msg_1.json"), message);
+          await NodeFSP.mkdir(root, { recursive: true });
+          writeOpenCodeDatabase(databasePath, [
+            {
+              id: "msg_1",
+              sessionId: "session-1",
+              createdAt: "2026-08-01T10:00:00Z",
+              data: {
+                role: "assistant",
+                modelID: "example-model",
+                time: { created: Date.parse("2026-08-01T10:00:00Z"), completed: 1 },
+                tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 20, write: 3 } },
+              },
+            },
+          ]);
           const desktop = NodePath.join(home, "config", "Cursor", "User", "globalStorage");
           await NodeFSP.mkdir(desktop, { recursive: true });
           const db = new NodeSqlite.DatabaseSync(NodePath.join(desktop, "state.vscdb"));
@@ -482,7 +487,7 @@ describe("UsageService", () => {
         );
         assert.strictEqual(
           summary.buckets[0]?.sourcePath,
-          yield* Effect.promise(() => NodeFSP.realpath(root)),
+          yield* Effect.promise(() => NodeFSP.realpath(databasePath)),
         );
         assert.strictEqual(summary.buckets[0]?.totals.outputTokens, 7);
         assert.strictEqual(
@@ -497,17 +502,15 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live("counts aliased OpenCode and Antigravity directories once", () =>
+  // Cody reads OpenCode through its own per-database reader, covered above, so
+  // only upstream's Antigravity half of this test applies.
+  it.live("counts aliased Antigravity directories once", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
-      const opencode = NodePath.join(home, "opencode-store");
-      const opencodeAlias = NodePath.join(home, "opencode-alias");
       const conversations = NodePath.join(home, "antigravity-conversations");
       const antigravityA = NodePath.join(home, "antigravity-a");
       const antigravityB = NodePath.join(home, "antigravity-b");
       yield* Effect.promise(async () => {
-        await NodeFSP.mkdir(opencode);
-        await NodeFSP.symlink(opencode, opencodeAlias, "junction");
         await NodeFSP.mkdir(conversations);
         await NodeFSP.mkdir(antigravityA);
         await NodeFSP.mkdir(antigravityB);
@@ -529,7 +532,6 @@ describe("UsageService", () => {
             home,
             settings,
             environment: {
-              OPENCODE_DATA_DIR: `${opencode},${opencodeAlias}`,
               ANTIGRAVITY_DATA_DIR: `${antigravityA},${antigravityB}`,
             },
           }),
@@ -538,12 +540,7 @@ describe("UsageService", () => {
       const summary = yield* service.readSummary(WINDOW);
       const sourcesFor = (provider: "opencode" | "antigravity") =>
         summary.sources.filter((source) => source.fingerprint.provider === provider);
-      assert.strictEqual(sourcesFor("opencode").length, 1);
       assert.strictEqual(sourcesFor("antigravity").length, 1);
-      assert.strictEqual(
-        sourcesFor("opencode")[0]?.fingerprint.resolvedHomePath,
-        yield* Effect.promise(() => NodeFSP.realpath(opencode)),
-      );
       assert.strictEqual(
         sourcesFor("antigravity")[0]?.fingerprint.resolvedHomePath,
         yield* Effect.promise(() => NodeFSP.realpath(conversations)),
