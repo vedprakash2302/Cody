@@ -18,3 +18,16 @@ the import wizard afterward. You can revoke Full Disk Access once the import is 
 On Windows, import supports Firefox and Helium profiles that use standard profile encryption.
 Other Chromium-based browsers use app-bound encryption and cannot be imported. Partitioned cookies
 are skipped on all platforms.
+
+## Windows work-account sign-in
+
+For Microsoft sites that require a managed device, enable **Windows work-account
+sign-in** in **Settings → Integrations → Browser**. The browser uses the work
+account on the Windows device running the desktop app, even when your project
+runs remotely. That device must meet your organization's access requirements.
+Sites that require a corporate network still need your VPN.
+
+This is off by default and applies to all persistent browser profiles, including
+agent browsing. Incognito profiles do not use it. Turning it off stops Windows
+SSO for new requests but does not sign out website sessions. Sign out on the site
+or clear the browser profile's cookies to remove those sessions.

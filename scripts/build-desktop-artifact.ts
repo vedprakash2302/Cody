@@ -950,6 +950,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/resources/browser-secret/**/*",
   "!apps/desktop/prod-resources/browser-secret",
   "!apps/desktop/prod-resources/browser-secret/**/*",
+  "!apps/desktop/resources/windows-sso",
+  "!apps/desktop/resources/windows-sso/**/*",
+  "!apps/desktop/prod-resources/windows-sso",
+  "!apps/desktop/prod-resources/windows-sso/**/*",
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
@@ -2651,6 +2655,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
+      ...(platform === "win"
+        ? [{ from: "apps/desktop/prod-resources/windows-sso", to: "windows-sso" }]
+        : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
   };
@@ -3579,6 +3586,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     arch: options.arch,
     verbose: options.verbose,
   });
+  if (options.platform === "win") {
+    yield* runCommand(
+      ChildProcess.make(
+        "node",
+        [
+          path.join(repoRoot, "apps/desktop/scripts/build-windows-sso.mjs"),
+          "--arch",
+          options.arch,
+          "--output",
+          path.join(stageResourcesDir, "windows-sso", "t3-windows-sso.exe"),
+        ],
+        { cwd: repoRoot },
+      ),
+      { label: "build Windows browser SSO helper", verbose: options.verbose },
+    );
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,

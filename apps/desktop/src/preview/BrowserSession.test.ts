@@ -28,8 +28,12 @@ vi.mock("electron", () => ({
 }));
 
 import * as BrowserSession from "./BrowserSession.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 
-const layer = BrowserSession.layer.pipe(Layer.provide(NodeServices.layer));
+const layer = BrowserSession.layer.pipe(
+  Layer.provide(NodeServices.layer),
+  Layer.provide(DesktopClientSettings.layerTest()),
+);
 
 describe("BrowserSession", () => {
   beforeEach(() => {
@@ -218,7 +222,14 @@ describe("BrowserSession", () => {
         "Failed to derive a desktop preview browser partition for scope environment-a.",
       );
       assert.notInclude(error.message, nativeCause.message);
-    }).pipe(Effect.provide(BrowserSession.layer.pipe(Layer.provide(failingCryptoLayer))));
+    }).pipe(
+      Effect.provide(
+        BrowserSession.layer.pipe(
+          Layer.provide(failingCryptoLayer),
+          Layer.provide(DesktopClientSettings.layerTest()),
+        ),
+      ),
+    );
   });
 
   it.effect("preserves session scope, partition, and the Electron failure", () =>

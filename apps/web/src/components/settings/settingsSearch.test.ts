@@ -128,6 +128,14 @@ describe("searchSettings", () => {
     expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
     expect(searchSettings("hold to quit")).toEqual([]);
     expect(searchSettings("wsl")).toEqual([]);
+    expect(searchSettings("Windows work-account sign-in")).toEqual([]);
+  });
+
+  it("limits Windows SSO search to Windows desktop clients", () => {
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "browser-windows-sso")).toMatchObject({
+      desktopOnly: true,
+      windowsOnly: true,
+    });
   });
 
   it("hides macOS-only settings on other platforms", () => {

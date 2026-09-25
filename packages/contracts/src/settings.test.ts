@@ -64,6 +64,19 @@ describe("storage cleanup settings", () => {
   });
 });
 
+describe("Windows browser SSO", () => {
+  it("defaults off and persists an explicit opt-in", () => {
+    expect(decodeClientSettings({}).browserWindowsSso).toBe(false);
+    expect(
+      encodeClientSettings(decodeClientSettings({ browserWindowsSso: true })).browserWindowsSso,
+    ).toBe(true);
+    expect(decodeClientSettingsPatch({ browserWindowsSso: false })).toEqual({
+      browserWindowsSso: false,
+    });
+    expect(() => decodeClientSettings({ browserWindowsSso: "true" })).toThrow();
+  });
+});
+
 describe("ClientSettings rich text composer", () => {
   it("enables rich text for new and existing settings without a saved preference", () => {
     expect(decodeClientSettings({}).composerRichTextEnabled).toBe(true);

@@ -854,6 +854,40 @@ function DeviceIntegrationControls({
   );
 }
 
+function BrowserWindowsSsoSetting() {
+  const enabled = useClientSettings((settings) => settings.browserWindowsSso);
+  const [saving, setSaving] = useState(false);
+  const save = async (checked: boolean) => {
+    setSaving(true);
+    try {
+      await persistClientSettingsUpdate((current) => ({ ...current, browserWindowsSso: checked }));
+    } catch {
+      toastManager.add({
+        type: "error",
+        title: "Could not save Windows sign-in setting",
+        description: "The setting has not changed. Try again.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (!isElectron || !navigator.platform.toLowerCase().startsWith("win")) return null;
+  return (
+    <SettingsRow
+      {...searchableSetting("browser-windows-sso")}
+      description="Use this Windows device's work account for Microsoft sign-in, including agent browsing. Excludes incognito. Turning this off does not sign out existing website sessions."
+      control={
+        <Switch
+          disabled={saving}
+          checked={enabled}
+          onCheckedChange={(checked) => void save(Boolean(checked))}
+          aria-label="Windows work-account sign-in"
+        />
+      }
+    />
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -1431,6 +1465,7 @@ export function IntegrationsSettingsPanel() {
   const previewDefaults = (
     <>
       <BrowserProfilesSetting disabled={previewDefaultsDisabled} />
+      <BrowserWindowsSsoSetting />
       <BrowserViewportSetting disabled={previewDefaultsDisabled} />
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />

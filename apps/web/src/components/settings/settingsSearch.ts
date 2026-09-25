@@ -604,6 +604,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "browser",
   },
   {
+    id: "browser-windows-sso",
+    title: "Windows work-account sign-in",
+    to: "/settings/integrations",
+    targetId: "browser",
+    desktopOnly: true,
+    windowsOnly: true,
+    searchTerms: ["microsoft entra azure ado device compliance sso"],
+  },
+  {
     id: "browser-default-profile",
     title: "Default browser profile",
     to: "/settings/integrations",
