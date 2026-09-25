@@ -109,6 +109,7 @@ export function openCodeRowToRecord(row: OpenCodeMessageRow): UsageRecord | null
     // Zero means OpenCode's catalog had no price, not that the tokens were
     // free; leave it to the rate table.
     reportedCostUsd: cost,
+    fast: false,
     dedupeKey: `opencode:${row.createdMs}:${model}:${input}:${output}:${reasoning}:${cacheRead}:${cacheWrite}`,
   };
 }

@@ -33,8 +33,9 @@ const ALLOWED_PATHS: ReadonlyArray<RegExp> = [
   /^\/vendor\/serve-sim\/api\/screenshot$/,
   /^\/vendor\/serve-sim\/api\/event-log(\/events)?$/,
   /^\/vendor\/serve-sim\/helper\/[^/]+\/(stream\.mjpeg|stream\.avcc|config|health|ax|foreground)$/,
+  /^\/vendor\/serve-sim\/helper\/[^/]+\/panel\/(1|3)\/stream\.avcc$/,
   /^\/vendor\/serve-sim\/appstate$/,
-  /^\/vendor\/serve-emu\/api\/(devices|screenshot|stream-mode|stream-settings|accessibility)$/,
+  /^\/vendor\/serve-emu\/api\/(devices|screenshot|stream-mode|stream-settings|accessibility|fold)$/,
   /^\/vendor\/serve-emu\/health$/,
 ];
 
@@ -42,6 +43,7 @@ const ALLOWED_PATHS: ReadonlyArray<RegExp> = [
 const MUTABLE_PATHS: ReadonlyArray<RegExp> = [
   /^\/vendor\/serve-sim\/api\/screenshot$/,
   /^\/vendor\/serve-emu\/api\/(screenshot|stream-mode|stream-settings)$/,
+  /^\/vendor\/serve-emu\/api\/fold$/,
 ];
 
 const ALLOWED_WS_PATHS: ReadonlyArray<RegExp> = [
@@ -103,7 +105,7 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
         pumpFrames(client, writeToUpstream),
       );
     }),
-  ).pipe(Effect.catchCause(() => Effect.void));
+  ).pipe(Effect.ignoreCause);
   return HttpServerResponse.empty();
 });
 
@@ -165,7 +167,7 @@ const handler = Effect.gen(function* () {
   }
   const controlsDevice =
     (upgrade && hubPath !== "/api/devices/ws") ||
-    (!readOnly && /\/api\/stream-(mode|settings)$/.test(hubPath));
+    (!readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath));
   yield* requireUpgradeScope(
     controlsDevice ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
   );

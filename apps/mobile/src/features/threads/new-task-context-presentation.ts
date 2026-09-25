@@ -1,4 +1,4 @@
-import { worktreeBaseLabel } from "@t3tools/shared/git";
+import { sanitizeNewRefName, worktreeBaseLabel } from "@t3tools/shared/git";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -91,4 +91,14 @@ export function shouldCheckoutNewTaskBranch(input: {
   readonly workspaceMode: WorkspaceMode;
 }): boolean {
   return input.workspaceMode === "local" && !input.branchIsCurrent && !input.branchWorktreePath;
+}
+
+export function filterNewTaskBranches<T extends { readonly name: string }>(
+  branches: ReadonlyArray<T>,
+  rawQuery: string,
+): ReadonlyArray<T> {
+  const query = sanitizeNewRefName(rawQuery).toLowerCase();
+  return query.length === 0
+    ? branches
+    : branches.filter((branch) => branch.name.toLowerCase().includes(query));
 }
