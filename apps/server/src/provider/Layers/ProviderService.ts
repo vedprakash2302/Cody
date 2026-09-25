@@ -72,6 +72,8 @@ import {
 import {
   ProviderAdapterRequestError,
   type ProviderAdapterError,
+  ProviderSessionNotFoundError,
+  ProviderUnsupportedError,
   ProviderValidationError,
   ProviderWorkspaceMissingError,
 } from "../Errors.ts";
@@ -2294,6 +2296,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const readSubagentTranscript: NonNullable<ProviderServiceMethod<"readSubagentTranscript">> =
+    Effect.fn("readSubagentTranscript")(function* (input) {
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.readSubagentTranscript",
+        allowRecovery: false,
+      });
+      const read = routed.adapter.readSubagentTranscript;
+      if (read === undefined) {
+        return yield* new ProviderUnsupportedError({ provider: routed.adapter.provider });
+      }
+      // A read never restarts a stopped session: resuming one re-applies
+      // permissions and can fork or replace it, which a viewer must not cause.
+      if (!routed.isActive) {
+        return yield* new ProviderSessionNotFoundError({ threadId: input.threadId });
+      }
+      return yield* read(input);
+    });
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     // Continuation is project-scopable, so decide it per session's project;
     // without orchestration the environment value is all there is.
@@ -2412,6 +2433,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     assertConversationRollbackSupported,
     rollbackConversation,
     uploadFeedback,
+    readSubagentTranscript,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

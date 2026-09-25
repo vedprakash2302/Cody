@@ -11,6 +11,8 @@ import type {
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  SubagentTranscript,
+  SubagentTranscriptInput,
 } from "@t3tools/contracts";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
@@ -25,6 +27,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -55,6 +58,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderSessionNotFoundError,
   ProviderUnsupportedError,
   ProviderValidationError,
   ProviderWorkspaceMissingError,
@@ -264,6 +268,11 @@ function makeFakeCodexAdapter(
       Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
   );
 
+  const readSubagentTranscript = vi.fn(
+    (input: SubagentTranscriptInput): Effect.Effect<SubagentTranscript, ProviderAdapterError> =>
+      Effect.succeed({ taskId: input.taskId, entries: [], truncated: false }),
+  );
+
   const stopAll = vi.fn((): Effect.Effect<void, ProviderAdapterError> =>
     Effect.sync(() => {
       sessions.clear();
@@ -294,7 +303,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
+    ...(provider === CODEX_DRIVER ? { uploadFeedback, readSubagentTranscript } : {}),
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -332,6 +341,7 @@ function makeFakeCodexAdapter(
     readThread,
     rollbackThread,
     uploadFeedback,
+    readSubagentTranscript,
     stopAll,
   };
 }
@@ -2114,6 +2124,34 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepStrictEqual(result, { feedbackId: `feedback-${threadId}` });
       assert.strictEqual(routing.codex.startSession.mock.calls.length, 1);
       assert.deepStrictEqual(routing.codex.uploadFeedback.mock.calls, [[{ threadId }]]);
+    }),
+  );
+
+  it.effect("reads a subagent transcript only from a running session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-transcript-stopped");
+      const taskId = RuntimeTaskId.make("ses_child");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("transcript-project"),
+        runtimeMode: "full-access",
+      });
+      const read = provider.readSubagentTranscript;
+      assert.ok(read);
+      const transcript = yield* read({ threadId, taskId });
+      assert.deepStrictEqual(transcript.entries, []);
+
+      yield* routing.codex.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+      routing.codex.readSubagentTranscript.mockClear();
+      const error = yield* read({ threadId, taskId }).pipe(Effect.flip);
+
+      assert.instanceOf(error, ProviderSessionNotFoundError);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, 0);
+      assert.strictEqual(routing.codex.readSubagentTranscript.mock.calls.length, 0);
     }),
   );
 

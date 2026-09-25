@@ -28,6 +28,7 @@ import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
+import { AgentTranscriptView } from "~/components/AgentTranscriptView";
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -136,8 +137,19 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
   );
 }
 
-/** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+/**
+ * Flat agent status line. With `onToggle` the row opens the agent's
+ * transcript below it; the row itself never changes height.
+ */
+function AgentRow({
+  agent,
+  expanded,
+  onToggle,
+}: {
+  agent: RuntimeSubagent;
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
   const visuals = STATUS_VISUALS[agent.status];
   const statusLabel =
     agent.kind === "subagent_batch" && agent.status === "idle" ? "Idle" : visuals.label;
@@ -154,8 +166,18 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
     agent.activationCount > 1 ? `run ${agent.activationCount}` : null,
   ].filter((value): value is string => value !== null);
 
+  const Row = onToggle ? "button" : "div";
   return (
-    <div className="grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1">
+    <Row
+      {...(onToggle
+        ? { type: "button" as const, onClick: onToggle, "aria-expanded": expanded === true }
+        : {})}
+      className={cn(
+        "grid h-[3.875rem] w-full grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1 text-left",
+        onToggle && "hover:bg-accent/40",
+        expanded && "bg-accent/30",
+      )}
+    >
       <span className="col-start-1 row-start-1 flex items-center">
         <StatusDot status={agent.status} />
       </span>
@@ -187,7 +209,29 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
         {metadata.join(" · ")}
       </span>
       <span className="sr-only">{statusLabel}</span>
-    </div>
+    </Row>
+  );
+}
+
+/** A direct agent whose row opens its transcript when the provider has one. */
+function DirectAgent({
+  agent,
+  transcriptTarget,
+}: {
+  agent: RuntimeSubagent;
+  transcriptTarget: {
+    environmentId: EnvironmentId;
+    threadId: ThreadId;
+    markdownCwd: string | undefined;
+  } | null;
+}) {
+  const [open, setOpen] = useState(false);
+  if (transcriptTarget === null) return <AgentRow agent={agent} />;
+  return (
+    <>
+      <AgentRow agent={agent} expanded={open} onToggle={() => setOpen((value) => !value)} />
+      {open ? <AgentTranscriptView agent={agent} {...transcriptTarget} /> : null}
+    </>
   );
 }
 
@@ -525,11 +569,21 @@ export function AgentsPanel({
   model,
   environmentId = null,
   threadId = null,
+  canReadTranscripts = false,
+  markdownCwd,
 }: {
   model: AgentPanelModel;
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
+  /** The thread's provider can serve subagent transcripts on demand. */
+  canReadTranscripts?: boolean;
+  /** Workspace that transcript links and images resolve against. */
+  markdownCwd?: string | undefined;
 }) {
+  const transcriptTarget =
+    canReadTranscripts && environmentId !== null && threadId !== null
+      ? { environmentId, threadId, markdownCwd }
+      : null;
   if (!model.hasAgents) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -561,7 +615,7 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <DirectAgent key={agent.id} agent={agent} transcriptTarget={transcriptTarget} />
               ))}
             </section>
           ) : null}
