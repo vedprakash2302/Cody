@@ -35,6 +35,11 @@ import {
 } from "@t3tools/client-runtime/work-log/presentation";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import { commandProgramName } from "@t3tools/client-runtime/work-log/command-label";
+import {
+  classifyWorkEntry,
+  findAnswerBeforeWrapUp,
+  type TurnSequenceItem,
+} from "@t3tools/client-runtime/work-log/turn-answer";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -1625,6 +1630,20 @@ export function deriveUnsettledTurnId(latestTurn: ThreadFeedLatestTurn | null): 
   return settled ? null : latestTurn.turnId;
 }
 
+function toTurnSequenceItem(entry: ThreadFeedEntry): ReadonlyArray<TurnSequenceItem> {
+  if (entry.type === "activity-group") {
+    return entry.activities.flatMap((activity) => {
+      const item = classifyWorkEntry(activity.workEntry);
+      return item === null ? [] : [item];
+    });
+  }
+  if (entry.type !== "message") return [];
+  if (entry.message.role === "reasoning") return [{ kind: "reasoning" }];
+  return entry.message.role === "assistant"
+    ? [{ kind: "assistant", id: entry.id, text: entry.message.text }]
+    : [];
+}
+
 interface ThreadFeedTurnFold {
   readonly turnId: TurnId;
   readonly createdAt: string;
@@ -1705,12 +1724,15 @@ function deriveThreadFeedTurnFolds(
 
     const firstAssistantMessageId = firstAssistantMessageIdByTurn.get(turnId);
     const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
+    // A short wrap-up after the answer would otherwise fold the answer away.
+    const answerBeforeWrapUpId = findAnswerBeforeWrapUp(entries.flatMap(toTurnSequenceItem));
     const hiddenEntryIds = new Set(
       entries
         .filter(
           (entry) =>
             entry.id !== firstAssistantMessageId &&
             entry.id !== terminalAssistantMessageId &&
+            entry.id !== answerBeforeWrapUpId &&
             !(entry.type === "activity-group" && isUserInputActivityGroup(entry)),
         )
         .map((entry) => entry.id),
