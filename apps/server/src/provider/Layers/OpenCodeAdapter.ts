@@ -46,6 +46,10 @@ import {
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  toOpenCodeSubagentTranscript,
+  TRANSCRIPT_MESSAGE_LIMIT,
+} from "./OpenCodeSubagentTranscript.ts";
+import {
   makeOpenCodeSubagentTracker,
   observeOpenCodeChildEvent,
   observeOpenCodeTaskNotification,
@@ -521,6 +525,18 @@ const toProcessError = (threadId: ThreadId, cause: unknown): ProviderAdapterProc
     detail: OpenCodeRuntimeError.is(cause) ? cause.detail : openCodeRuntimeErrorDetail(cause),
     cause,
   });
+
+const toTranscriptReadError = (
+  cause: OpenCodeRuntimeError | Cause.TimeoutError,
+): ProviderAdapterRequestError =>
+  OpenCodeRuntimeError.is(cause)
+    ? toRequestError(cause)
+    : new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "session.messages",
+        detail: "OpenCode did not return the subagent transcript within 10 seconds.",
+        cause,
+      });
 
 type EventBaseInput = {
   readonly threadId: ThreadId;
@@ -1830,9 +1846,13 @@ export function makeOpenCodeAdapter(
       }
     };
 
+    // `record: false` only answers the question. Membership routes the child's
+    // events and marks the running turn, so lookups about past work (reading a
+    // transcript) must leave it to the event path.
     const isRelatedOpenCodeSession = Effect.fn("isRelatedOpenCodeSession")(function* (
       context: OpenCodeSessionContext,
       candidateSessionId: string,
+      options: { readonly record: boolean } = { record: true },
     ) {
       if (context.relatedSessionIds.has(candidateSessionId)) {
         return true;
@@ -1861,7 +1881,7 @@ export function makeOpenCodeAdapter(
       let sessionId: string | undefined = candidateSessionId;
       for (let depth = 0; sessionId !== undefined && depth < 32; depth += 1) {
         if (context.relatedSessionIds.has(sessionId)) {
-          addRelatedOpenCodeSession(context, candidateSessionId);
+          if (options.record) addRelatedOpenCodeSession(context, candidateSessionId);
           return true;
         }
         if (seen.has(sessionId)) {
@@ -4154,6 +4174,52 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const readSubagentTranscript: NonNullable<OpenCodeAdapterShape["readSubagentTranscript"]> =
+      Effect.fn("readSubagentTranscript")(function* (input) {
+        const context = yield* ensureSessionContext(sessions, input.threadId);
+        yield* awaitOpenCodeContextReady(context);
+        const childSessionId: string = input.taskId;
+        const notASubagent = new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "readSubagentTranscript",
+          issue: `Task '${childSessionId}' is not a subagent of this thread.`,
+        });
+        // The task id is a client value: only read sessions below this thread's.
+        if (childSessionId === context.openCodeSessionId) {
+          return yield* notASubagent;
+        }
+        const related = yield* isRelatedOpenCodeSession(context, childSessionId, {
+          record: false,
+        }).pipe(Effect.mapError(toRequestError));
+        if (!related) {
+          return yield* notASubagent;
+        }
+        // One message past the limit tells a cut history from a complete one.
+        const response = yield* runOpenCodeSdk("session.messages", (signal) =>
+          context.client.session.messages(
+            { sessionID: childSessionId, limit: TRANSCRIPT_MESSAGE_LIMIT + 1 },
+            { signal },
+          ),
+        ).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.catchIf(
+            (cause) => OpenCodeRuntimeError.is(cause) && isOpenCodeNotFound(cause),
+            () =>
+              Effect.fail(
+                new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: "readSubagentTranscript",
+                  issue: `Subagent session '${childSessionId}' no longer exists.`,
+                }),
+              ),
+          ),
+          Effect.mapError((cause) =>
+            cause._tag === "ProviderAdapterValidationError" ? cause : toTranscriptReadError(cause),
+          ),
+        );
+        return toOpenCodeSubagentTranscript(childSessionId, response.data ?? []);
+      });
+
     const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
       function* (threadId, numTurns) {
         const context = yield* ensureSessionContext(sessions, threadId);
@@ -4290,6 +4356,7 @@ export function makeOpenCodeAdapter(
       listSessions,
       hasSession,
       readThread,
+      readSubagentTranscript,
       rollbackThread,
       stopAll,
       get streamEvents() {

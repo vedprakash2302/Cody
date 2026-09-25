@@ -30,6 +30,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
+  RuntimeTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -128,6 +129,8 @@ const runtimeMock = {
       | ((sessionID: string, signal?: AbortSignal) => Promise<void>)
       | null,
     missingSessionIds: new Set<string>(),
+    /** Sessions that `session.get` still finds but `session.messages` reports gone. */
+    messagesMissingSessionIds: new Set<string>(),
     transientErrorSessionIds: new Set<string>(),
     sessionDirectoryById: new Map<string, string>(),
     sessionParentById: new Map<string, string>(),
@@ -188,6 +191,7 @@ const runtimeMock = {
     this.state.sessionGetObserved = null;
     this.state.sessionGetImplementation = null;
     this.state.missingSessionIds.clear();
+    this.state.messagesMissingSessionIds.clear();
     this.state.transientErrorSessionIds.clear();
     this.state.sessionDirectoryById.clear();
     this.state.sessionParentById.clear();
@@ -411,10 +415,17 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           await runtimeMock.state.summarizeImplementation?.();
           return { data: true };
         },
-        messages: async ({ sessionID }: { sessionID: string }) => ({
-          data:
-            runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages,
-        }),
+        messages: async ({ sessionID }: { sessionID: string }) => {
+          if (runtimeMock.state.messagesMissingSessionIds.has(sessionID)) {
+            throw new Error(`Session not found: ${sessionID}`, {
+              cause: { status: 404, body: { name: "NotFoundError" } },
+            });
+          }
+          return {
+            data:
+              runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages,
+          };
+        },
         message: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
           runtimeMock.state.messageCalls.push({ sessionID, messageID });
           if (runtimeMock.state.messageFailures > 0) {
@@ -8700,6 +8711,190 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapter turn lifecycle", (it) => {
         new Set([rootSessionId, "ses_bg"]),
       );
 
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("reads a subagent transcript and refuses sessions outside the thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-subagent-transcript");
+      makeOpenCodeEventQueue();
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      runtimeMock.state.sessionParentById.set("ses_child", rootSessionId);
+      runtimeMock.state.sessionParentById.set("ses_grandchild", "ses_child");
+      runtimeMock.state.forkMessagesBySession.set("ses_grandchild", [
+        {
+          info: { id: "msg-grandchild", role: "assistant" },
+          parts: [{ id: "prt-answer", type: "text", text: "Found it." }],
+        },
+      ]);
+      const read = adapter.readSubagentTranscript;
+      NodeAssert.ok(read);
+
+      const transcript = yield* read({
+        threadId,
+        taskId: RuntimeTaskId.make("ses_grandchild"),
+      });
+      NodeAssert.deepEqual(transcript.entries, [
+        { kind: "text", id: "prt-answer", text: "Found it." },
+      ]);
+
+      for (const taskId of [rootSessionId, "ses_elsewhere"]) {
+        const rejected: { readonly _tag: string } = yield* read({
+          threadId,
+          taskId: RuntimeTaskId.make(taskId),
+        }).pipe(Effect.flip);
+        NodeAssert.equal(rejected._tag, "ProviderAdapterValidationError");
+      }
+
+      // Deleted between the ownership check and the read: gone, not a
+      // transient failure (which would be a ProviderAdapterRequestError).
+      runtimeMock.state.messagesMissingSessionIds.add("ses_grandchild");
+      const deleted = yield* read({
+        threadId,
+        taskId: RuntimeTaskId.make("ses_grandchild"),
+      }).pipe(Effect.flip);
+      NodeAssert.ok(deleted._tag === "ProviderAdapterValidationError");
+      NodeAssert.match(deleted.issue, /no longer exists/);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("reading a transcript mid-turn does not mark the turn as using subagents", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-transcript-read-usage");
+      // A child from earlier work, known only through ancestry.
+      runtimeMock.state.sessionParentById.set("ses_old_child", rootSessionId);
+      runtimeMock.state.sessionStatus = "busy";
+      const busy = promiseWithResolvers<unknown>();
+      const idle = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [busy.promise, idle.promise];
+      const completedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "Keep working",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            "opencode/kimi-k3",
+          ),
+        })
+        .pipe(Effect.forkChild);
+      busy.resolve({
+        id: "evt-transcript-read-busy",
+        type: "session.status",
+        properties: { sessionID: rootSessionId, status: { type: "busy" } },
+      });
+      yield* Fiber.join(sendFiber);
+
+      const read = adapter.readSubagentTranscript;
+      NodeAssert.ok(read);
+      yield* read({ threadId, taskId: RuntimeTaskId.make("ses_old_child") });
+
+      runtimeMock.state.sessionStatus = "idle";
+      idle.resolve({
+        id: "evt-transcript-read-idle",
+        type: "session.status",
+        properties: { sessionID: rootSessionId, status: { type: "idle" } },
+      });
+      const [completed] = Array.from(
+        yield* Fiber.join(completedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.ok(completed?.type === "turn.completed");
+      NodeAssert.equal(completed.payload.tokenUsage?.hasSubagents, false);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("a child read before it acts still marks the turn once it does", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-transcript-read-then-child-acts");
+      runtimeMock.state.sessionParentById.set("ses_child", rootSessionId);
+      runtimeMock.state.sessionStatus = "busy";
+      const busy = promiseWithResolvers<unknown>();
+      const childPermission = promiseWithResolvers<unknown>();
+      const idle = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [busy.promise, childPermission.promise, idle.promise];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "request.opened" || event.type === "turn.completed"),
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "Delegate to a child",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            "opencode/kimi-k3",
+          ),
+        })
+        .pipe(Effect.forkChild);
+      busy.resolve({
+        id: "evt-read-then-acts-busy",
+        type: "session.status",
+        properties: { sessionID: rootSessionId, status: { type: "busy" } },
+      });
+      yield* Fiber.join(sendFiber);
+
+      const read = adapter.readSubagentTranscript;
+      NodeAssert.ok(read);
+      yield* read({ threadId, taskId: RuntimeTaskId.make("ses_child") });
+
+      const requestOpened = promiseWithResolvers<void>();
+      runtimeMock.state.sessionGetObserved = (sessionID) => {
+        if (sessionID === "ses_child") requestOpened.resolve(undefined);
+      };
+      childPermission.resolve({
+        id: "evt-read-then-acts-permission",
+        type: "permission.asked",
+        properties: permissionRequest("per_read_then_acts", "ses_child"),
+      });
+      yield* Effect.promise(() => requestOpened.promise);
+      yield* Effect.yieldNow;
+      runtimeMock.state.sessionStatus = "idle";
+      idle.resolve({
+        id: "evt-read-then-acts-idle",
+        type: "session.status",
+        properties: { sessionID: rootSessionId, status: { type: "idle" } },
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => event.type),
+        ["request.opened", "turn.completed"],
+      );
+      const completed = events[1];
+      NodeAssert.ok(completed?.type === "turn.completed");
+      NodeAssert.equal(completed.payload.tokenUsage?.hasSubagents, true);
       yield* adapter.stopSession(threadId);
     }),
   );

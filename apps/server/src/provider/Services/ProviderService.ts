@@ -26,6 +26,8 @@ import type {
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
+  SubagentTranscript,
+  SubagentTranscriptInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -127,6 +129,14 @@ export interface ProviderServiceShape {
   readonly uploadFeedback: (
     input: ProviderUploadFeedbackInput,
   ) => Effect.Effect<ProviderUploadFeedbackResult, ProviderServiceError>;
+
+  /**
+   * Read one subagent's transcript through the thread's provider. Optional so
+   * test doubles need not implement it; the live service always does.
+   */
+  readonly readSubagentTranscript?: (
+    input: SubagentTranscriptInput,
+  ) => Effect.Effect<SubagentTranscript, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

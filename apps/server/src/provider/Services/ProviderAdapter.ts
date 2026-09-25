@@ -21,6 +21,8 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
+  SubagentTranscript,
+  SubagentTranscriptInput,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -145,6 +147,14 @@ export interface ProviderAdapterShape<TError> {
   readonly uploadFeedback?: (
     input: ProviderUploadFeedbackInput,
   ) => Effect.Effect<ProviderUploadFeedbackResult, TError>;
+
+  /**
+   * Read one subagent's transcript from the provider's own storage, on demand.
+   * Adapters must check the task belongs to this thread before reading it.
+   */
+  readonly readSubagentTranscript?: (
+    input: SubagentTranscriptInput,
+  ) => Effect.Effect<SubagentTranscript, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

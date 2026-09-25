@@ -133,6 +133,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
+import { readSubagentTranscriptRpc } from "./provider/subagentTranscriptRpc.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -2445,6 +2446,12 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerReadSubagentTranscript]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerReadSubagentTranscript,
+            readSubagentTranscriptRpc(providerService, input),
             { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
