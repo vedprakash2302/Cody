@@ -1662,6 +1662,56 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
+  it("keeps the answer and its copy row visible when a short wrap-up follows it", () => {
+    const message = (id: string, role: "user" | "assistant", text: string, at: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt: at,
+      message: {
+        id: id as never,
+        role,
+        text,
+        turnId: role === "user" ? null : ("turn-1" as never),
+        createdAt: at,
+        updatedAt: at,
+        streaming: false,
+      },
+    });
+    const work = (id: string, at: string) => ({
+      id: `${id}-entry`,
+      kind: "work" as const,
+      createdAt: at,
+      entry: { id, createdAt: at, turnId: "turn-1" as never, label: id, tone: "tool" as const },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        message("user-1", "user", "Check both", "2026-01-01T00:00:00Z"),
+        message("opening", "assistant", "I'll run both checks.", "2026-01-01T00:00:02Z"),
+        work("research-1", "2026-01-01T00:00:03Z"),
+        work("research-2", "2026-01-01T00:00:04Z"),
+        work("research-3", "2026-01-01T00:00:05Z"),
+        work("research-4", "2026-01-01T00:00:06Z"),
+        message("answer", "assistant", "Findings. ".repeat(60), "2026-01-01T00:00:20Z"),
+        work("cleanup-1", "2026-01-01T00:00:21Z"),
+        work("cleanup-2", "2026-01-01T00:00:22Z"),
+        message("wrap-up", "assistant", "I've disconnected the tools.", "2026-01-01T00:00:23Z"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-1-entry",
+      "turn-fold:turn-1",
+      "answer-entry",
+      "wrap-up-entry",
+    ]);
+    const answerRow = rows.find((row) => row.id === "answer-entry");
+    expect(answerRow?.kind === "message" && answerRow.showAssistantCopyButton).toBe(true);
+  });
+
   it("folds the first assistant message and settled work before the terminal response", () => {
     const timelineEntries = [
       {

@@ -247,6 +247,10 @@
       "types": "./src/work-log/userInput.ts",
       "default": "./src/work-log/userInput.ts"
     },
+    "./work-log/turn-answer": {
+      "types": "./src/work-log/turnAnswer.ts",
+      "default": "./src/work-log/turnAnswer.ts"
+    },
     "./work-log/presentation": {
       "types": "./src/work-log/presentation.ts",
       "default": "./src/work-log/presentation.ts"

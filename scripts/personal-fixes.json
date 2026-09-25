@@ -50,5 +50,7 @@
   "scripts/merge-update-manifests.test.ts",
   "apps/desktop/src/updates/DesktopUpdates.test.ts",
   "apps/desktop/src/updates/updateChannels.test.ts",
-  "apps/web/src/components/desktopUpdate.logic.test.ts"
+  "apps/web/src/components/desktopUpdate.logic.test.ts",
+  "packages/client-runtime/src/work-log/turnAnswer.test.ts",
+  "apps/web/src/components/chat/MessagesTimeline.logic.test.ts"
 ]

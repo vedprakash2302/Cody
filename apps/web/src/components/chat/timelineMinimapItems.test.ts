@@ -78,4 +78,23 @@ describe("timeline minimap previews", () => {
     });
     expect(resolveTimelineMinimapPreview(first)?.assistantText).toBe("First");
   });
+
+  it("previews the answer, not the wrap-up after it, from the last turn", () => {
+    const source = rows([
+      ["user", "Check it"],
+      ["assistant", "LAUNCHED"],
+      ["assistant", "Findings in full."],
+      ["assistant", "I closed the browser."],
+    ]).map((row, index) =>
+      row.kind === "message" && index > 0
+        ? {
+            ...row,
+            message: { ...row.message, turnId: (index === 1 ? "turn-1" : "turn-2") as never },
+            showAssistantMeta: true,
+          }
+        : row,
+    );
+    const [item] = deriveTimelineMinimapItems(source);
+    expect(resolveTimelineMinimapPreview(item!)?.assistantText).toBe("Findings in full.");
+  });
 });

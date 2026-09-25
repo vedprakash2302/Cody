@@ -1771,6 +1771,167 @@ describe("buildThreadFeed", () => {
     expect(serializedToolOutputs).toBe(1);
   });
 
+  it("keeps the answer visible when a short wrap-up follows it", () => {
+    const turnId = TurnId.make("turn-wrap-up");
+    const message = (id: string, text: string, at: string) => ({
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId,
+      streaming: false,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const tool = (id: string, at: string) =>
+      makeActivity({
+        id: EventId.make(id),
+        kind: "tool.completed",
+        tone: "tool",
+        summary: id,
+        createdAt: at,
+        turnId,
+        payload: { title: id, itemType: "dynamic_tool_call", status: "completed" },
+      });
+    const thread = makeThread({
+      id: ThreadId.make("thread-wrap-up"),
+      projectId: ProjectId.make("project-1"),
+      title: "Wrap-up",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:30.000Z",
+        assistantMessageId: MessageId.make("assistant-wrap-up"),
+      },
+      messages: [
+        message(
+          "assistant-opening",
+          "I'll run both checks in parallel.",
+          "2026-04-01T00:00:02.000Z",
+        ),
+        message("assistant-answer", "Findings. ".repeat(60), "2026-04-01T00:00:20.000Z"),
+        message(
+          "assistant-wrap-up",
+          "I've disconnected the tools while I wait.",
+          "2026-04-01T00:00:29.000Z",
+        ),
+      ],
+      activities: [
+        tool("research-1", "2026-04-01T00:00:05.000Z"),
+        tool("research-2", "2026-04-01T00:00:06.000Z"),
+        tool("research-3", "2026-04-01T00:00:07.000Z"),
+        tool("research-4", "2026-04-01T00:00:08.000Z"),
+        tool("cleanup-1", "2026-04-01T00:00:25.000Z"),
+        tool("cleanup-2", "2026-04-01T00:00:26.000Z"),
+      ],
+    });
+
+    const collapsed = deriveThreadFeedPresentation(
+      buildThreadFeed(thread),
+      thread.latestTurn,
+      new Set(),
+    );
+    expect(collapsed.map((entry) => entry.id)).toEqual([
+      "assistant-opening",
+      "turn-fold:turn-wrap-up",
+      "assistant-answer",
+      "assistant-wrap-up",
+    ]);
+  });
+
+  it("keeps the answer visible past a compaction and folds commentary before subagents", () => {
+    const turnId = TurnId.make("turn-wrap-up-edges");
+    const message = (id: string, text: string, at: string) => ({
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId,
+      streaming: false,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const tool = (id: string, at: string) =>
+      makeActivity({
+        id: EventId.make(id),
+        kind: "tool.completed",
+        tone: "tool",
+        summary: id,
+        createdAt: at,
+        turnId,
+        payload: { title: id, itemType: "dynamic_tool_call", status: "completed" },
+      });
+    const latestTurn = {
+      turnId,
+      state: "completed" as const,
+      requestedAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:01.000Z",
+      completedAt: "2026-04-01T00:01:00.000Z",
+      assistantMessageId: MessageId.make("assistant-wrap-up"),
+    };
+    const base = {
+      id: ThreadId.make("thread-wrap-up-edges"),
+      projectId: ProjectId.make("project-1"),
+      title: "Wrap-up edges",
+      latestTurn,
+    };
+
+    // Answer, three cleanup calls with a compaction between them, wrap-up.
+    const compacted = makeThread({
+      ...base,
+      messages: [
+        message("assistant-answer", "Findings. ".repeat(60), "2026-04-01T00:00:20.000Z"),
+        message("assistant-wrap-up", "I closed the browser.", "2026-04-01T00:00:40.000Z"),
+      ],
+      activities: [
+        tool("cleanup-1", "2026-04-01T00:00:21.000Z"),
+        tool("cleanup-2", "2026-04-01T00:00:22.000Z"),
+        makeActivity({
+          id: EventId.make("compaction"),
+          kind: "context-compaction",
+          tone: "info",
+          summary: "Context compacted",
+          createdAt: "2026-04-01T00:00:23.000Z",
+          turnId,
+          payload: {},
+        }),
+        tool("cleanup-3", "2026-04-01T00:00:24.000Z"),
+      ],
+    });
+    expect(
+      deriveThreadFeedPresentation(buildThreadFeed(compacted), latestTurn, new Set()).map(
+        (entry) => entry.id,
+      ),
+    ).toContain("assistant-answer");
+
+    // Long commentary, then subagent launches, then a short final answer.
+    const delegated = makeThread({
+      ...base,
+      messages: [
+        message("assistant-opening", "I'll delegate this.", "2026-04-01T00:00:02.000Z"),
+        message("assistant-commentary", "Plan. ".repeat(80), "2026-04-01T00:00:05.000Z"),
+        message("assistant-wrap-up", "All five agents are done.", "2026-04-01T00:00:50.000Z"),
+      ],
+      activities: [
+        tool("research-1", "2026-04-01T00:00:03.000Z"),
+        makeActivity({
+          id: EventId.make("spawn-1"),
+          kind: "task.started",
+          tone: "info",
+          summary: "subagent task started",
+          createdAt: "2026-04-01T00:00:10.000Z",
+          turnId,
+          payload: { taskId: "ses_a", agentKind: "agent", taskType: "subagent", title: "A" },
+        }),
+      ],
+    });
+    expect(
+      deriveThreadFeedPresentation(buildThreadFeed(delegated), latestTurn, new Set()).map(
+        (entry) => entry.id,
+      ),
+    ).not.toContain("assistant-commentary");
+  });
+
   it("keeps the first and terminal assistant messages visible around settled work", () => {
     const turnId = TurnId.make("turn-1");
     const thread = makeThread({

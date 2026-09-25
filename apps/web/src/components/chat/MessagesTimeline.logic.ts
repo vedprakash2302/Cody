@@ -5,6 +5,11 @@ import { shallow } from "zustand/vanilla/shallow";
 import { renderCodexDirectivesForCopy } from "@t3tools/client-runtime/codex-markdown-directives";
 import { commandProgramName } from "@t3tools/client-runtime/work-log/command-label";
 import {
+  classifyWorkEntry,
+  findAnswerBeforeWrapUp,
+  type TurnSequenceItem,
+} from "@t3tools/client-runtime/work-log/turn-answer";
+import {
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   omitSupersededLifecycleMarkers,
@@ -532,6 +537,38 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
   return new Set(lastAssistantMessageIdByResponseKey.values());
 }
 
+/**
+ * Answers that a turn's short wrap-up message follows. They stay visible
+ * beside the wrap-up instead of folding away as work.
+ */
+function deriveWrapUpAnswerMessageIds(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+): ReadonlySet<string> {
+  const itemsByTurnId = new Map<TurnId, TurnSequenceItem[]>();
+  for (const entry of timelineEntries) {
+    const turnId = timelineEntryTurnId(entry);
+    if (turnId === null) continue;
+    const item: TurnSequenceItem | null =
+      entry.kind === "work"
+        ? classifyWorkEntry(entry.entry)
+        : entry.kind === "message" && entry.message.role === "reasoning"
+          ? { kind: "reasoning" }
+          : entry.kind === "message" && entry.message.role === "assistant"
+            ? { kind: "assistant", id: entry.message.id, text: entry.message.text }
+            : null;
+    if (item === null) continue;
+    const items = itemsByTurnId.get(turnId) ?? [];
+    items.push(item);
+    itemsByTurnId.set(turnId, items);
+  }
+  const answerIds = new Set<string>();
+  for (const items of itemsByTurnId.values()) {
+    const answerId = findAnswerBeforeWrapUp(items);
+    if (answerId !== null) answerIds.add(answerId);
+  }
+  return answerIds;
+}
+
 interface TurnFold {
   turnId: TurnId;
   anchorEntryId: string;
@@ -627,6 +664,7 @@ export function workEntryIsActiveTurnActivity(entry: WorkLogEntry): boolean {
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   terminalAssistantMessageIds: ReadonlySet<string>;
+  wrapUpAnswerMessageIds: ReadonlySet<string>;
   latestTurn: TimelineLatestTurn | null;
   unfoldedTurnIds: ReadonlySet<TurnId>;
 }): ReadonlyMap<string, TurnFold> {
@@ -715,6 +753,9 @@ function deriveTurnFolds(input: {
     ).length;
     for (const [index, entry] of group.entries.entries()) {
       if (entry.id === group.terminalEntry?.id) {
+        continue;
+      }
+      if (entry.kind === "message" && input.wrapUpAnswerMessageIds.has(entry.message.id)) {
         continue;
       }
       const isCompaction =
@@ -974,6 +1015,7 @@ export function deriveMessagesTimelineRows(input: {
     input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const wrapUpAnswerMessageIds = deriveWrapUpAnswerMessageIds(input.timelineEntries);
   const unsettledTurnId = deriveUnsettledTurnId(
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
@@ -986,6 +1028,7 @@ export function deriveMessagesTimelineRows(input: {
   const foldsByAnchorEntryId = deriveTurnFolds({
     timelineEntries: input.timelineEntries,
     terminalAssistantMessageIds,
+    wrapUpAnswerMessageIds,
     latestTurn: input.latestTurn ?? null,
     unfoldedTurnIds: activeVisualResponseTurnIds,
   });
@@ -1365,9 +1408,11 @@ export function deriveMessagesTimelineRows(input: {
     // While the turn is still running, the latest assistant message is only
     // provisionally terminal — withhold the metadata row until the turn
     // settles so commentary doesn't flash timestamps mid-work.
+    // A wrap-up's answer keeps its copy button: it is the text worth copying.
     const showAssistantMeta =
       timelineEntry.message.role === "assistant" &&
-      terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      (terminalAssistantMessageIds.has(timelineEntry.message.id) ||
+        wrapUpAnswerMessageIds.has(timelineEntry.message.id)) &&
       !assistantResponseStillInProgress;
 
     nextRows.push({

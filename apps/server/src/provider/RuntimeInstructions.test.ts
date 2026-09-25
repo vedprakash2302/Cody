@@ -10,6 +10,13 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).toContain("call list_thread_pull_requests and link any PR");
   });
 
+  it("asks agents to finish cleanup before the answer so the answer stays visible", () => {
+    const instructions = buildRuntimeInstructions({ harness: "OpenCode" });
+    expect(instructions).toContain("final tool calls before writing your final answer");
+    expect(instructions).toContain("keep resources running when the user needs them");
+    expect(instructions).toContain("Do not append a separate status-only message");
+  });
+
   it("keeps known model and effort metadata on one line", () => {
     expect(
       buildRuntimeInstructions({

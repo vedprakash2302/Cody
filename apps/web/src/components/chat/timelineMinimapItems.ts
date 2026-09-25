@@ -33,6 +33,12 @@ function resolveFinalAssistantTextForTurn(
   userRowIndex: number,
 ) {
   let finalAssistantText: string | null = null;
+  // A settled turn marks its answer with a metadata row. When a short wrap-up
+  // follows the answer, both carry one and the answer comes first. Several
+  // turns can follow one prompt (a background agent waking the thread), so the
+  // last turn's first marked row wins.
+  let answerText: string | null = null;
+  let answerTurnId: string | null = null;
   for (let index = userRowIndex + 1; index < rows.length; index += 1) {
     const row = rows[index];
     if (row?.kind !== "message") {
@@ -43,9 +49,13 @@ function resolveFinalAssistantTextForTurn(
     }
     if (row.message.role === "assistant") {
       finalAssistantText = row.message.text ?? null;
+      if (row.showAssistantMeta && (answerText === null || row.message.turnId !== answerTurnId)) {
+        answerText = row.message.text ?? null;
+        answerTurnId = row.message.turnId ?? null;
+      }
     }
   }
-  return finalAssistantText;
+  return answerText ?? finalAssistantText;
 }
 
 function compactMinimapPreview(text: string | null | undefined) {
