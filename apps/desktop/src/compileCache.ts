@@ -21,7 +21,8 @@ try {
       process.platform === "linux"
         ? process.env.XDG_CACHE_HOME || NodePath.join(NodeOS.homedir(), ".cache")
         : NodeOS.tmpdir();
-    NodeModule.enableCompileCache(NodePath.join(cacheRoot, "t3code", "compile-cache"));
+    // Cody keeps its own directory so it never shares cache files with T3 Code.
+    NodeModule.enableCompileCache(NodePath.join(cacheRoot, "cody", "compile-cache"));
   }
 } catch {
   // The cache is only a speedup. Never let it stop the app from starting.

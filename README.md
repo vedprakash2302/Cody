@@ -8,7 +8,7 @@ settings in `~/.cody/userdata`, including inside WSL, and uses a separate Electr
 It starts with an empty history and does not import T3's existing data.
 
 Build the Windows installer with `vp run dist:desktop:win:x64`, the macOS installer with
-`vp run dist:desktop:dmg`, or the Linux AppImage with `vp run dist:desktop:linux`.
+`vp run dist:desktop:dmg`, or the Linux AppImage and `.deb` with `vp run dist:desktop:linux`.
 Install the resulting `Cody-*` artifact. The download links below install the official T3 app.
 
 Published Cody nightlies use this fork's in-app update feed. Keep the update channel
