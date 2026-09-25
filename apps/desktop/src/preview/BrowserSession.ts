@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type { Session } from "electron";
 import { session } from "electron";
 import * as Context from "effect/Context";
@@ -5,9 +6,14 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+
+import { installWindowsSso } from "./WindowsSso.ts";
+import { WindowsSsoPath } from "./WindowsSsoPath.ts";
+import { DesktopClientSettings } from "../settings/DesktopClientSettings.ts";
 
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 /**
@@ -162,6 +168,16 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
+  const platform = yield* HostProcessPlatform;
+  const helper = yield* WindowsSsoPath;
+  const clientSettings = yield* DesktopClientSettings;
+  const ssoEnabled = () =>
+    Effect.runPromise(
+      clientSettings.get.pipe(
+        Effect.map((settings) => Option.getOrUndefined(settings)?.browserWindowsSso === true),
+        Effect.orElseSucceed(() => false),
+      ),
+    );
   const sessionsRef = yield* SynchronizedRef.make<ReadonlyMap<string, Session>>(new Map());
 
   const getPartition = Effect.fn("BrowserSession.getPartition")(function* (
@@ -197,6 +213,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
+          installWindowsSso(browserSession, persistent, platform, helper, ssoEnabled);
           // The guest keeps Electron's native User-Agent. Rewriting it in any
           // form — even variants that keep the Electron token — makes Cloudflare
           // Turnstile fail its integrity check with error 600010 and recreate

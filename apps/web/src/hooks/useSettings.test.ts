@@ -191,6 +191,19 @@ describe("persistClientSettingsPatch", () => {
 });
 
 describe("persistClientSettingsUpdate", () => {
+  it("keeps Windows SSO visibly enabled if an opt-out cannot be persisted, then allows retry", async () => {
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, browserWindowsSso: true });
+    const failure = new Error("disk full");
+    const persist = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(undefined);
+    const disable = (current: typeof DEFAULT_CLIENT_SETTINGS) => ({
+      ...current,
+      browserWindowsSso: false,
+    });
+    await expect(persistClientSettingsUpdate(disable, persist)).rejects.toBe(failure);
+    expect(getClientSettings().browserWindowsSso).toBe(true);
+    await persistClientSettingsUpdate(disable, persist);
+    expect(getClientSettings().browserWindowsSso).toBe(false);
+  });
   it("publishes the update only after persistence succeeds", async () => {
     let finishPersistence!: () => void;
     const persistence = new Promise<void>((resolve) => {

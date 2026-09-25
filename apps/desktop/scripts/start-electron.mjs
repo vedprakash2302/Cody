@@ -10,6 +10,11 @@ NodeChildProcess.execFileSync(
 );
 
 const childEnv = { ...process.env };
+NodeChildProcess.execFileSync(
+  process.execPath,
+  [NodePath.join(desktopDir, "scripts/build-windows-sso.mjs")],
+  { stdio: "inherit" },
+);
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
 const electronCommand = resolveElectronLaunchCommand(["dist-electron/main.cjs"]);

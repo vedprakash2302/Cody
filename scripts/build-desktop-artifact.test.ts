@@ -634,6 +634,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/resources/browser-secret/**/*",
       "!apps/desktop/prod-resources/browser-secret",
       "!apps/desktop/prod-resources/browser-secret/**/*",
+      "!apps/desktop/resources/windows-sso",
+      "!apps/desktop/resources/windows-sso/**/*",
+      "!apps/desktop/prod-resources/windows-sso",
+      "!apps/desktop/prod-resources/windows-sso/**/*",
       "!apps/desktop/prod-resources/windows-server",
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -714,6 +718,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           to: "resource-monitor",
         },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
+        { from: "apps/desktop/prod-resources/windows-sso", to: "windows-sso" },
         ...WSL_RUNTIME_EXTRA_RESOURCES,
       ]);
       // No Linux CLI archive means staging never writes the runtime, so
@@ -724,6 +729,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           to: "resource-monitor",
         },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
+        { from: "apps/desktop/prod-resources/windows-sso", to: "windows-sso" },
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
       // The Claude SDK platform packages and .bin shims never ship.
