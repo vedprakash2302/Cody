@@ -719,10 +719,18 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<Pr
     requestId: Schema.optional(TrimmedNonEmptyString),
     tabId: Schema.optional(PreviewTabId),
     timeoutMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+    /**
+     * Set when the thread's desktop is reconnecting and the call timed out
+     * waiting for it. That host is expected back, so agents should retry.
+     */
+    reason: Schema.optional(Schema.Literal("reconnecting")),
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
   },
 ) {
   override get message(): string {
+    if (this.reason === "reconnecting") {
+      return `The desktop app running preview tools for this thread is reconnecting, and ${this.operation} ran out of time waiting for it. Retry in a few seconds.`;
+    }
     return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. Preview tools run in a T3 Code desktop app that is open and connected to this environment; a headless server has no browser of its own. Do not retry. To check a page, use a headless browser from the shell, such as Playwright, or curl, or ask the user to open this thread in the T3 Code desktop app.`;
   }
 }

@@ -1575,7 +1575,7 @@ it.effect("holds a request while the pinned client reconnects instead of failing
   ),
 );
 
-it.effect("reports no host when the pinned client outlasts the request timeout", () =>
+it.effect("asks for a retry when the pinned client outlasts the request timeout", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* makeBroker;
@@ -1589,7 +1589,11 @@ it.effect("reports no host when the pinned client outlasts the request timeout",
         .pipe(Effect.flip, Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("5 seconds");
-      expect(yield* Fiber.join(held)).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+      const error = yield* Fiber.join(held);
+      expect(error).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+      // The grace period is still running, so the agent should try again.
+      expect(error.message).toContain("Retry in a few seconds");
+      expect(error.message).not.toContain("Do not retry");
     }),
   ),
 );

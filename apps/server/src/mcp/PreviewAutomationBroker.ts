@@ -576,12 +576,17 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         Effect.timeoutOption(Math.min(remainingMs, timeoutMs)),
       );
       if ((yield* pinnedLease(yield* Clock.currentTimeMillis)) !== undefined) {
+        // The call's own timeout ran out inside the grace period, so the
+        // desktop may still return; tell the agent to retry, not to give up.
         return yield* new PreviewAutomationNoAvailableHostError({
           operation: input.operation,
           environmentId: input.scope.environmentId,
           threadId: input.scope.threadId,
           providerSessionId: input.scope.providerSessionId,
           providerInstanceId: input.scope.providerInstanceId,
+          clientId: waitingOn.clientId,
+          timeoutMs,
+          reason: "reconnecting",
         });
       }
     }
