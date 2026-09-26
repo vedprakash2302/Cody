@@ -66,6 +66,17 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+/**
+ * `stoppedSession` is set when the thread has no live session: read from that
+ * stored state without starting or resuming the session.
+ */
+export interface ProviderSubagentTranscriptReadInput extends SubagentTranscriptInput {
+  readonly stoppedSession?: {
+    readonly cwd?: string;
+    readonly resumeCursor: unknown;
+  };
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -153,7 +164,7 @@ export interface ProviderAdapterShape<TError> {
    * Adapters must check the task belongs to this thread before reading it.
    */
   readonly readSubagentTranscript?: (
-    input: SubagentTranscriptInput,
+    input: ProviderSubagentTranscriptReadInput,
   ) => Effect.Effect<SubagentTranscript, TError>;
 
   /**

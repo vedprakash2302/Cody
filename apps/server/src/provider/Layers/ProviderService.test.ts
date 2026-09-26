@@ -12,7 +12,6 @@ import type {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
   SubagentTranscript,
-  SubagentTranscriptInput,
 } from "@t3tools/contracts";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
@@ -64,7 +63,10 @@ import {
   ProviderWorkspaceMissingError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterShape,
+  ProviderSubagentTranscriptReadInput,
+} from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -269,7 +271,9 @@ function makeFakeCodexAdapter(
   );
 
   const readSubagentTranscript = vi.fn(
-    (input: SubagentTranscriptInput): Effect.Effect<SubagentTranscript, ProviderAdapterError> =>
+    (
+      input: ProviderSubagentTranscriptReadInput,
+    ): Effect.Effect<SubagentTranscript, ProviderAdapterError> =>
       Effect.succeed({ taskId: input.taskId, entries: [], truncated: false }),
   );
 
@@ -1187,6 +1191,69 @@ antigravityInstanceRouting.layer("ProviderServiceLive instance-owned conversatio
           }
         }
       }),
+  );
+});
+
+// A stopped Codex thread whose binding flips to Claude after the first read,
+// as a concurrent provider switch would.
+const switchedThreadId = asThreadId("thread-transcript-binding-switch");
+const switchedCodexBinding = {
+  threadId: switchedThreadId,
+  provider: CODEX_DRIVER,
+  providerInstanceId: codexInstanceId,
+  status: "stopped",
+  runtimeMode: "full-access",
+  resumeCursor: { codexSession: "codex-root" },
+  runtimePayload: { cwd: "/work/codex-project" },
+} satisfies ProviderSessionDirectory.ProviderRuntimeBinding;
+let switchedBindingReads = 0;
+const bindingSwitch = makeProviderServiceLayer({
+  directory: {
+    upsert: () => Effect.void,
+    recordImportedTranscript: () => Effect.void,
+    getProvider: () => Effect.succeed(CODEX_DRIVER),
+    getBinding: (threadId) => {
+      if (threadId !== switchedThreadId) return Effect.succeed(Option.none());
+      switchedBindingReads += 1;
+      return Effect.succeed(
+        Option.some(
+          switchedBindingReads === 1
+            ? switchedCodexBinding
+            : {
+                ...switchedCodexBinding,
+                provider: CLAUDE_AGENT_DRIVER,
+                providerInstanceId: claudeAgentInstanceId,
+                resumeCursor: { claudeSession: "claude-root" },
+                runtimePayload: { cwd: "/work/claude-project" },
+              },
+        ),
+      );
+    },
+    listThreadIds: () => Effect.succeed([]),
+    listBindings: () => Effect.succeed([]),
+  },
+});
+bindingSwitch.layer("ProviderServiceLive subagent transcript routing", (it) => {
+  it.effect("reads resume state from the binding it routed with", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const read = provider.readSubagentTranscript;
+      assert.ok(read);
+      const taskId = RuntimeTaskId.make("ses_child");
+      yield* read({ threadId: switchedThreadId, taskId });
+      assert.deepStrictEqual(bindingSwitch.codex.readSubagentTranscript.mock.calls, [
+        [
+          {
+            threadId: switchedThreadId,
+            taskId,
+            stoppedSession: {
+              resumeCursor: switchedCodexBinding.resumeCursor,
+              cwd: "/work/codex-project",
+            },
+          },
+        ],
+      ]);
+    }),
   );
 });
 
@@ -2127,31 +2194,49 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("reads a subagent transcript only from a running session", () =>
+  it.effect("reads a stopped thread's transcript from stored state, never resuming it", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const threadId = asThreadId("thread-transcript-stopped");
       const taskId = RuntimeTaskId.make("ses_child");
+      const cwd = fixtureCwd("transcript-project");
       yield* provider.startSession(threadId, {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: fixtureCwd("transcript-project"),
+        cwd,
         runtimeMode: "full-access",
       });
       const read = provider.readSubagentTranscript;
       assert.ok(read);
-      const transcript = yield* read({ threadId, taskId });
-      assert.deepStrictEqual(transcript.entries, []);
+      yield* read({ threadId, taskId });
+      assert.deepStrictEqual(routing.codex.readSubagentTranscript.mock.calls.at(-1), [
+        { threadId, taskId },
+      ]);
 
-      yield* routing.codex.stopSession(threadId);
+      yield* provider.stopSession({ threadId });
       routing.codex.startSession.mockClear();
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.strictEqual(binding.status, "stopped");
+      yield* read({ threadId, taskId });
+      assert.deepStrictEqual(routing.codex.readSubagentTranscript.mock.calls.at(-1), [
+        { threadId, taskId, stoppedSession: { resumeCursor: binding.resumeCursor, cwd } },
+      ]);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, 0);
+      assert.deepStrictEqual(
+        Option.getOrThrow(yield* directory.getBinding(threadId)),
+        binding,
+        "reading leaves the stopped binding as it was",
+      );
+
+      // Nothing stored to read from: the session has to run first.
+      yield* directory.upsert({ ...binding, resumeCursor: null });
       routing.codex.readSubagentTranscript.mockClear();
       const error = yield* read({ threadId, taskId }).pipe(Effect.flip);
-
       assert.instanceOf(error, ProviderSessionNotFoundError);
-      assert.strictEqual(routing.codex.startSession.mock.calls.length, 0);
       assert.strictEqual(routing.codex.readSubagentTranscript.mock.calls.length, 0);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, 0);
     }),
   );
 

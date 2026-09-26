@@ -1345,6 +1345,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         threadId: input.threadId,
         runtimeMode: binding.runtimeMode,
         isActive: false,
+        // The binding this route came from, so callers read resume state
+        // belonging to the same provider instance.
+        binding,
       } as const;
     }
 
@@ -2307,12 +2310,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (read === undefined) {
         return yield* new ProviderUnsupportedError({ provider: routed.adapter.provider });
       }
+      if (routed.isActive) {
+        return yield* read(input);
+      }
       // A read never restarts a stopped session: resuming one re-applies
       // permissions and can fork or replace it, which a viewer must not cause.
-      if (!routed.isActive) {
+      // The adapter reads the stored session instead.
+      const { binding } = routed;
+      if (binding.resumeCursor === null || binding.resumeCursor === undefined) {
         return yield* new ProviderSessionNotFoundError({ threadId: input.threadId });
       }
-      return yield* read(input);
+      const cwd = readPersistedCwd(binding.runtimePayload);
+      return yield* read({
+        ...input,
+        stoppedSession: { resumeCursor: binding.resumeCursor, ...(cwd ? { cwd } : {}) },
+      });
     });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {

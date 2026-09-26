@@ -146,11 +146,6 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         ),
       );
 
-      const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
-        instanceId,
-        environment: openCodeSessionEnvironment(effectiveConfig, processEnv),
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-      });
       const serverOwner = yield* OpenCodeServerOwner.make({
         binaryPath: effectiveConfig.binaryPath,
         directory: serverConfig.cwd,
@@ -158,6 +153,12 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
           ? { serverPassword: effectiveConfig.serverPassword }
           : {}),
         environment: processEnv,
+      });
+      const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
+        instanceId,
+        environment: openCodeSessionEnvironment(effectiveConfig, processEnv),
+        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        sharedServer: serverOwner,
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig).pipe(
         Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
