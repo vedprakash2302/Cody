@@ -372,6 +372,7 @@ describe("CheckpointReactor", () => {
     const layer = CheckpointReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(RuntimeReceiptBusTest),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(Layer.mock(PullRequestService)({ refreshAfterTurn })),
@@ -1073,6 +1074,135 @@ describe("CheckpointReactor", () => {
           followUp?.checkpoints.find((checkpoint) => checkpoint.turnId === followUpTurnId),
         ).toMatchObject({ checkpointTurnCount: 2, files: [] });
       }),
+  );
+
+  effectIt.effect("links a turn stopped before any assistant output to its user message", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ seedFilesystemCheckpoints: false }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const turnId = asTurnId("turn-stopped");
+      const userMessageId = MessageId.make("message-stopped");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const setSession = (status: "running" | "interrupted", suffix: string) =>
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-stopped-session-${suffix}`),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: status === "running" ? turnId : null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-stopped-turn-start"),
+        threadId,
+        message: { messageId: userMessageId, role: "user", text: "stop me", attachments: [] },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "checkpoint.baseline.captured" });
+      yield* setSession("running", "running");
+      harness.provider.emit({
+        type: "turn.started",
+        eventId: EventId.make("evt-stopped-turn-start"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId,
+        turnId,
+      });
+      yield* Effect.promise(harness.drain);
+
+      yield* setSession("interrupted", "interrupted");
+      harness.provider.emit({
+        type: "turn.aborted",
+        eventId: EventId.make("evt-stopped-turn-abort"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId,
+        turnId,
+        payload: { reason: "Interrupted by user." },
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({
+        type: "checkpoint.diff.finalized",
+        turnId,
+        checkpointTurnCount: 1,
+      });
+      yield* Effect.promise(harness.drain);
+
+      // Live clients read the event; reconnecting clients read the snapshot.
+      const events = Array.from(yield* Stream.runCollect(harness.engine.readEvents(0)));
+      const diffCompleted = events.find(
+        (event) => event.type === "thread.turn-diff-completed" && event.payload.turnId === turnId,
+      );
+      expect(diffCompleted?.payload).toMatchObject({ userMessageId });
+      const thread = (yield* Effect.promise(harness.readModel)).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.messages.some((message) => message.role === "assistant")).toBe(false);
+      expect(thread?.checkpoints).toEqual([
+        expect.objectContaining({ turnId, checkpointTurnCount: 1, userMessageId }),
+      ]);
+    }),
+  );
+
+  effectIt.effect("links a stopped turn to its pending start before ingestion binds it", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ seedFilesystemCheckpoints: false }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const turnId = asTurnId("turn-unbound");
+      const userMessageId = MessageId.make("message-unbound");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-unbound-turn-start"),
+        threadId,
+        message: { messageId: userMessageId, role: "user", text: "stop me", attachments: [] },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({ type: "checkpoint.baseline.captured" });
+
+      // No running session was projected, as when runtime ingestion lags
+      // behind the checkpoint worker, so no turn row carries the message yet.
+      for (const type of ["turn.started", "turn.aborted"] as const) {
+        harness.provider.emit({
+          eventId: EventId.make(`evt-unbound-${type}`),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt,
+          threadId,
+          turnId,
+          ...(type === "turn.started"
+            ? { type }
+            : { type, payload: { reason: "Interrupted by user." } }),
+        });
+      }
+      expect(yield* harness.nextReceipt).toMatchObject({
+        type: "checkpoint.diff.finalized",
+        turnId,
+      });
+      yield* Effect.promise(harness.drain);
+
+      const events = Array.from(yield* Stream.runCollect(harness.engine.readEvents(0)));
+      expect(
+        events.find(
+          (event) => event.type === "thread.turn-diff-completed" && event.payload.turnId === turnId,
+        )?.payload,
+      ).toMatchObject({ userMessageId });
+    }),
   );
 
   it("does not capture an aborted turn without a matching start or active session", async () => {

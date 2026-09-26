@@ -579,6 +579,11 @@ export function applyThreadDetailEvent(
         status: event.payload.status,
         files: event.payload.files,
         assistantMessageId: event.payload.assistantMessageId,
+        userMessageId:
+          event.payload.userMessageId ??
+          thread.checkpoints.find((entry) => entry.turnId === event.payload.turnId)
+            ?.userMessageId ??
+          null,
         completedAt: event.payload.completedAt,
       };
 

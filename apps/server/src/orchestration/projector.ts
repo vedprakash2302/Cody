@@ -954,6 +954,10 @@ export function projectEvent(
             status: payload.status,
             files: payload.files,
             assistantMessageId: payload.assistantMessageId,
+            userMessageId:
+              payload.userMessageId ??
+              thread.checkpoints.find((entry) => entry.turnId === payload.turnId)?.userMessageId ??
+              null,
             completedAt: payload.completedAt,
           },
           event.type,

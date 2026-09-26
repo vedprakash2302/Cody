@@ -2134,6 +2134,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           status: command.status,
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
+          userMessageId: command.userMessageId ?? null,
           completedAt: command.completedAt,
         },
       };
