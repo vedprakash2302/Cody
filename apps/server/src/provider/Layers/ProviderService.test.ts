@@ -110,6 +110,8 @@ const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const openCodeInstanceId = ProviderInstanceId.make("opencode");
 
 const assistantQuoteText = 'Keep the shared parser for "résumé".\nPreserve line breaks.';
 const assistantCitation = {
@@ -438,12 +440,14 @@ function makeProviderServiceLayer(
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
+  const opencode = makeFakeCodexAdapter(OPENCODE_DRIVER);
   const registry =
     input.registry ??
     makeAdapterRegistryMock({
       [ProviderDriverKind.make("codex")]: codex.adapter,
       [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
       [ProviderDriverKind.make("cursor")]: cursor.adapter,
+      [OPENCODE_DRIVER]: opencode.adapter,
     });
 
   const providerAdapterLayer = Layer.succeed(
@@ -485,6 +489,7 @@ function makeProviderServiceLayer(
     codex,
     claude,
     cursor,
+    opencode,
     layer,
   };
 }
@@ -1979,6 +1984,49 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert(Option.isSome(replacementBinding));
       assert.equal(replacementBinding.value.providerInstanceId, codexInstanceId);
       assert.deepEqual(replacementBinding.value.resumeCursor, replacement.resumeCursor);
+    }),
+  );
+
+  it.effect("persists an OpenCode turn boundary when the turn ends without a sendTurn result", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-opencode-aborted-boundary");
+      yield* provider.startSession(threadId, {
+        provider: OPENCODE_DRIVER,
+        providerInstanceId: openCodeInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      // A failed submission records its slot, then ends the turn without
+      // returning a cursor for sendTurn to persist.
+      const cursor = {
+        schemaVersion: 1,
+        sessionId: "ses_aborted",
+        turnStartMessageIds: ["msg-stored", "msg-failed"],
+      };
+      routing.opencode.updateSession(threadId, (session) => ({ ...session, resumeCursor: cursor }));
+      const aborted = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === "evt-opencode-aborted-boundary"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      routing.opencode.emit({
+        type: "turn.aborted",
+        eventId: asEventId("evt-opencode-aborted-boundary"),
+        provider: OPENCODE_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("failed-turn"),
+        payload: { reason: "OpenCode prompt submission failed." },
+      });
+      yield* Fiber.join(aborted);
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.deepEqual(binding.value.resumeCursor, cursor);
+      yield* provider.stopSession({ threadId });
     }),
   );
 

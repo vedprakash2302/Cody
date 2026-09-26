@@ -29,7 +29,14 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
+import type {
+  AssistantMessage,
+  Message,
+  OpencodeClient,
+  Part,
+  PermissionRequest,
+  QuestionRequest,
+} from "@opencode-ai/sdk/v2";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -92,7 +99,9 @@ const OPENCODE_RESUME_VERSION = 1 as const;
  * rather than an error. Re-adopting the session id IS the resume mechanism —
  * OpenCode scopes a conversation's history by session id.
  */
-function parseOpenCodeResume(raw: unknown): { readonly sessionId: string } | undefined {
+function parseOpenCodeResume(
+  raw: unknown,
+): { readonly sessionId: string; readonly turnStartMessageIds: ReadonlyArray<string> } | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return undefined;
   }
@@ -103,7 +112,24 @@ function parseOpenCodeResume(raw: unknown): { readonly sessionId: string } | und
   if (typeof record.sessionId !== "string" || record.sessionId.trim().length === 0) {
     return undefined;
   }
-  return { sessionId: record.sessionId.trim() };
+  const turnStartMessageIds =
+    Array.isArray(record.turnStartMessageIds) &&
+    record.turnStartMessageIds.every((id) => typeof id === "string")
+      ? (record.turnStartMessageIds as ReadonlyArray<string>)
+      : [];
+  return { sessionId: record.sessionId.trim(), turnStartMessageIds };
+}
+
+/**
+ * The persisted cursor. `turnStartMessageIds` is optional so older builds keep
+ * reading the same schema version and simply ignore it.
+ */
+function openCodeResumeCursor(sessionId: string, turnStartMessageIds: ReadonlyArray<string>) {
+  return {
+    schemaVersion: OPENCODE_RESUME_VERSION,
+    sessionId,
+    ...(turnStartMessageIds.length > 0 ? { turnStartMessageIds: [...turnStartMessageIds] } : {}),
+  };
 }
 
 /**
@@ -190,6 +216,110 @@ export function isSameOpenCodeDirectory(
 interface OpenCodeTurnSnapshot {
   readonly id: TurnId;
   readonly items: Array<unknown>;
+}
+
+interface OpenCodeMessageEntry {
+  readonly info: Message;
+  readonly parts: ReadonlyArray<Part>;
+}
+
+/** Thread snapshot turns: each assistant message before the native revert boundary. */
+function openCodeSnapshotTurns(
+  entries: ReadonlyArray<OpenCodeMessageEntry>,
+  revertMessageId: string | undefined,
+): Array<OpenCodeTurnSnapshot> {
+  const turns: Array<OpenCodeTurnSnapshot> = [];
+  for (const entry of entries) {
+    if (entry.info.id === revertMessageId) break;
+    if (entry.info.role === "assistant") {
+      turns.push({ id: TurnId.make(entry.info.id), items: [entry.info, ...entry.parts] });
+    }
+  }
+  return turns;
+}
+
+/**
+ * Best-effort indexes of the user messages that started T3 turns, before the
+ * native revert boundary, for turns no recorded start covers. OpenCode also
+ * writes user messages for compaction, the continuation after a compaction
+ * summary, and synthetic follow-ups; none of those are turns. A prompt sent
+ * while the previous reply was still running is a steer inside that turn,
+ * unless that reply was aborted or failed.
+ */
+function openCodeTurnStartIndexes(
+  entries: ReadonlyArray<OpenCodeMessageEntry>,
+  revertMessageId: string | undefined,
+): Array<number> {
+  const starts: Array<number> = [];
+  let lastAssistant: AssistantMessage | undefined;
+  let lastCompactionAuto = false;
+  for (const [index, entry] of entries.entries()) {
+    if (entry.info.id === revertMessageId) break;
+    if (entry.info.role === "assistant") {
+      lastAssistant = entry.info;
+      continue;
+    }
+    const compaction = entry.parts.find((part) => part.type === "compaction");
+    if (compaction) {
+      lastCompactionAuto = compaction.auto;
+      continue;
+    }
+    // Only automatic compaction continues the run with a follow-up prompt.
+    const afterSummary =
+      entries[index - 1]?.info.role === "assistant" && lastAssistant?.summary === true;
+    if (afterSummary && lastCompactionAuto) continue;
+    if (
+      entry.parts.length > 0 &&
+      entry.parts.every((part) => part.type === "text" && part.synthetic === true)
+    ) {
+      continue;
+    }
+    // Without timing, fall back to treating the prompt as a new turn.
+    const replyCompletedAt = lastAssistant?.time?.completed;
+    const promptCreatedAt = entry.info.time?.created;
+    const steer =
+      lastAssistant?.time !== undefined &&
+      lastAssistant.error === undefined &&
+      promptCreatedAt !== undefined &&
+      (replyCompletedAt === undefined || replyCompletedAt > promptCreatedAt);
+    if (!steer) starts.push(index);
+  }
+  return starts;
+}
+
+/**
+ * Index of the first message to drop when rewinding `numTurns` T3 turns, or
+ * undefined when OpenCode holds nothing from those turns. Recorded turn starts
+ * are exact; turns older than the record (from before an older build recorded
+ * them) are inferred from the history that precedes the recorded ones.
+ */
+function openCodeRewindBoundary(input: {
+  readonly entries: ReadonlyArray<OpenCodeMessageEntry>;
+  readonly revertMessageId: string | undefined;
+  readonly numTurns: number;
+  readonly turnStartMessageIds: ReadonlyArray<string>;
+}): number | undefined {
+  if (input.numTurns <= 0) return undefined;
+  const revertIndex = input.entries.findIndex((entry) => entry.info.id === input.revertMessageId);
+  const visible = revertIndex < 0 ? input.entries : input.entries.slice(0, revertIndex);
+  const recorded = input.turnStartMessageIds;
+  // A prompt whose submission failed never reached history, so the earliest
+  // stored prompt among the removed turns is where they begin.
+  const firstStored = (ids: ReadonlyArray<string>) => {
+    const wanted = new Set(ids);
+    const index = visible.findIndex((entry) => wanted.has(entry.info.id));
+    return index < 0 ? undefined : index;
+  };
+  if (input.numTurns <= recorded.length) {
+    return firstStored(recorded.slice(-input.numTurns));
+  }
+  const recordedStart = firstStored(recorded);
+  const olderStarts = openCodeTurnStartIndexes(
+    recordedStart === undefined ? visible : visible.slice(0, recordedStart),
+    undefined,
+  );
+  const olderTurns = input.numTurns - recorded.length;
+  return olderStarts[Math.max(0, olderStarts.length - olderTurns)] ?? recordedStart;
 }
 
 type OpenCodeSubscribedEvent =
@@ -377,6 +507,13 @@ interface OpenCodeSessionContext {
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
   openCodeSessionId: string;
+  /**
+   * OpenCode ids of the prompts that started the most recent T3 turns, oldest
+   * first; steers are not turns. It may cover only the latest turns, such as
+   * after resuming a session recorded by an older build. A prompt OpenCode
+   * never stored keeps its slot so positions stay aligned with T3's turns.
+   */
+  turnStartMessageIds: Array<string>;
   readonly relatedSessionIds: Set<string>;
   readonly resolvedRequestIds: Set<string>;
   readonly autoRepliedRequestIds: Set<string>;
@@ -1925,6 +2062,12 @@ export function makeOpenCodeAdapter(
       context.reconcileIdleStatus = false;
       context.awaitingBusyAfterInterruption = false;
       yield* updateProviderSession(context, { status: "running", activeTurnId: turnId });
+      // A wake-up turn starts at OpenCode's own prompt; rewinding it cuts there.
+      context.turnStartMessageIds.push(promptMessageId);
+      context.session = {
+        ...context.session,
+        resumeCursor: openCodeResumeCursor(context.openCodeSessionId, context.turnStartMessageIds),
+      };
       yield* emit({
         ...(yield* buildEventBase({ threadId: context.session.threadId, turnId, raw })),
         type: "turn.started",
@@ -3175,7 +3318,8 @@ export function makeOpenCodeAdapter(
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
-        const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        const resume = parseOpenCodeResume(input.resumeCursor);
+        const resumeSessionId = resume?.sessionId;
         const existing = sessions.get(input.threadId);
         if (existing) {
           if (existing.session.status === "connecting" && !(yield* Ref.get(existing.stopped))) {
@@ -3258,7 +3402,11 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: reusable, created: false };
+                  return {
+                    openCodeSession: reusable,
+                    created: false,
+                    turnStartMessageIds: [...(resume?.turnStartMessageIds ?? [])],
+                  };
                 }
 
                 // The session lives under a different cwd (e.g. the thread
@@ -3285,7 +3433,34 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: forked, created: true };
+                  // The fork copies history in order under new ids, so recorded
+                  // turn starts carry over by position. Unstored prompts keep
+                  // their slot; if either history is unavailable the record
+                  // starts over.
+                  const recorded = resume?.turnStartMessageIds ?? [];
+                  const histories =
+                    recorded.length === 0
+                      ? Option.none()
+                      : yield* Effect.all([
+                          runOpenCodeSdk("session.messages", () =>
+                            client.session.messages({ sessionID: adopted.id }),
+                          ),
+                          runOpenCodeSdk("session.messages", () =>
+                            client.session.messages({ sessionID: forked.id }),
+                          ),
+                        ]).pipe(Effect.option);
+                  const turnStartMessageIds = Option.match(histories, {
+                    onNone: () => [] as Array<string>,
+                    onSome: ([original, copy]) => {
+                      const originalIds = (original.data ?? []).map((entry) => entry.info.id);
+                      const copyIds = (copy.data ?? []).map((entry) => entry.info.id);
+                      return recorded.map((id) => {
+                        const index = originalIds.indexOf(id);
+                        return index >= 0 ? (copyIds[index] ?? id) : id;
+                      });
+                    },
+                  });
+                  return { openCodeSession: forked, created: true, turnStartMessageIds };
                 }
 
                 if (resumeSessionId) {
@@ -3305,7 +3480,11 @@ export function makeOpenCodeAdapter(
                     detail: "OpenCode session.create returned no session payload.",
                   });
                 }
-                return { openCodeSession: createdSession.data, created: true };
+                return {
+                  openCodeSession: createdSession.data,
+                  created: true,
+                  turnStartMessageIds: [] as Array<string>,
+                };
               });
 
               return {
@@ -3314,6 +3493,7 @@ export function makeOpenCodeAdapter(
                 client,
                 openCodeSession: resolved.openCodeSession,
                 created: resolved.created,
+                turnStartMessageIds: resolved.turnStartMessageIds,
               };
             }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
           );
@@ -3325,6 +3505,7 @@ export function makeOpenCodeAdapter(
         });
 
         const createdAt = yield* nowIso;
+        const turnStartMessageIds = started.turnStartMessageIds;
         const session: ProviderSession = {
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
@@ -3336,10 +3517,7 @@ export function makeOpenCodeAdapter(
           // ProviderService persists this cursor and feeds it back into
           // `startSession` after the in-memory session is lost (reaper /
           // restart), so follow-ups continue the same conversation (#3604).
-          resumeCursor: {
-            schemaVersion: OPENCODE_RESUME_VERSION,
-            sessionId: started.openCodeSession.id,
-          },
+          resumeCursor: openCodeResumeCursor(started.openCodeSession.id, turnStartMessageIds),
           createdAt,
           updatedAt: createdAt,
         };
@@ -3350,6 +3528,7 @@ export function makeOpenCodeAdapter(
           server: started.server,
           directory,
           openCodeSessionId: started.openCodeSession.id,
+          turnStartMessageIds,
           relatedSessionIds: new Set([started.openCodeSession.id]),
           resolvedRequestIds: new Set(),
           autoRepliedRequestIds: new Set(),
@@ -3573,6 +3752,14 @@ export function makeOpenCodeAdapter(
           );
 
           if (steeringTurnId === undefined) {
+            context.turnStartMessageIds.push(messageId);
+            context.session = {
+              ...context.session,
+              resumeCursor: openCodeResumeCursor(
+                context.openCodeSessionId,
+                context.turnStartMessageIds,
+              ),
+            };
             yield* emit({
               ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
               type: "turn.started",
@@ -4255,20 +4442,9 @@ export function makeOpenCodeAdapter(
           }),
         ).pipe(Effect.mapError(toRequestError));
 
-        const turns: Array<OpenCodeTurnSnapshot> = [];
-        for (const entry of messages.data ?? []) {
-          if (entry.info.id === session.data?.revert?.messageID) break;
-          if (entry.info.role === "assistant") {
-            turns.push({
-              id: TurnId.make(entry.info.id),
-              items: [entry.info, ...entry.parts],
-            });
-          }
-        }
-
         return {
           threadId,
-          turns,
+          turns: openCodeSnapshotTurns(messages.data ?? [], session.data?.revert?.messageID),
         };
       },
     );
@@ -4395,27 +4571,28 @@ export function makeOpenCodeAdapter(
     const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
       function* (threadId, numTurns) {
         const context = yield* ensureSessionContext(sessions, threadId);
-        const snapshot = yield* readThread(threadId);
-        const targetIndex = Math.max(0, snapshot.turns.length - numTurns);
-        const target = snapshot.turns[targetIndex];
-        if (target) {
-          const messages = yield* runOpenCodeSdk("session.messages", () =>
-            context.client.session.messages({ sessionID: context.openCodeSessionId }),
-          ).pipe(Effect.mapError(toRequestError));
-          const entries = messages.data ?? [];
-          const targetMessageIndex = entries.findIndex((entry) => entry.info.id === target.id);
-          if (targetMessageIndex < 0) {
-            return yield* toRequestError(
-              new OpenCodeRuntimeError({
-                operation: "session.fork",
-                detail: "The OpenCode rewind boundary is no longer available.",
-              }),
-            );
-          }
-          const firstRemovedMessage =
-            entries
-              .slice(0, targetMessageIndex + 1)
-              .findLast((entry) => entry.info.role === "user") ?? entries[targetMessageIndex]!;
+        const session = yield* runOpenCodeSdk("session.get", () =>
+          context.client.session.get({ sessionID: context.openCodeSessionId }),
+        ).pipe(Effect.mapError(toRequestError));
+        const messages = yield* runOpenCodeSdk("session.messages", () =>
+          context.client.session.messages({ sessionID: context.openCodeSessionId }),
+        ).pipe(Effect.mapError(toRequestError));
+        const entries = messages.data ?? [];
+        const revertMessageId = session.data?.revert?.messageID;
+        // T3 counts turns by the prompts that started them. OpenCode writes one
+        // assistant message per step, so its assistant count is not a turn count.
+        const firstRemovedIndex = openCodeRewindBoundary({
+          entries,
+          revertMessageId,
+          numTurns,
+          turnStartMessageIds: context.turnStartMessageIds,
+        });
+        const keptTurnStarts = context.turnStartMessageIds.slice(
+          0,
+          Math.max(0, context.turnStartMessageIds.length - Math.max(0, numTurns)),
+        );
+        if (firstRemovedIndex !== undefined) {
+          const firstRemovedMessage = entries[firstRemovedIndex]!;
           // Native revert also rewrites workspace files. Fork only the retained
           // conversation so T3 alone decides whether filesystem changes survive.
           const fork = yield* runOpenCodeSdk("session.fork", () =>
@@ -4437,7 +4614,7 @@ export function makeOpenCodeAdapter(
           const forkMessages = yield* runOpenCodeSdk("session.messages", () =>
             context.client.session.messages({ sessionID: forkedSessionId }),
           ).pipe(Effect.mapError(toRequestError));
-          if (forkMessages.data?.length !== entries.indexOf(firstRemovedMessage)) {
+          if (forkMessages.data?.length !== firstRemovedIndex) {
             return yield* toRequestError(
               new OpenCodeRuntimeError({
                 operation: "session.fork",
@@ -4475,9 +4652,15 @@ export function makeOpenCodeAdapter(
           context.reconcileIdleStatus = false;
           context.awaitingBusyAfterInterruption = false;
           context.pendingIdleReconciliation = undefined;
+          // Forked messages get new ids in the same order.
+          const forkedIds = forkMessages.data.map((entry) => entry.info.id);
+          context.turnStartMessageIds = keptTurnStarts.map((id) => {
+            const index = entries.findIndex((entry) => entry.info.id === id);
+            return index >= 0 && index < firstRemovedIndex ? (forkedIds[index] ?? id) : id;
+          });
           context.session = {
             ...context.session,
-            resumeCursor: { schemaVersion: OPENCODE_RESUME_VERSION, sessionId: forkedSessionId },
+            resumeCursor: openCodeResumeCursor(forkedSessionId, context.turnStartMessageIds),
             updatedAt: yield* nowIso,
           };
           yield* emit({
@@ -4496,7 +4679,15 @@ export function makeOpenCodeAdapter(
           };
         }
 
-        return snapshot;
+        if (keptTurnStarts.length !== context.turnStartMessageIds.length) {
+          context.turnStartMessageIds = keptTurnStarts;
+          context.session = {
+            ...context.session,
+            resumeCursor: openCodeResumeCursor(context.openCodeSessionId, keptTurnStarts),
+            updatedAt: yield* nowIso,
+          };
+        }
+        return { threadId, turns: openCodeSnapshotTurns(entries, revertMessageId) };
       },
     );
 
