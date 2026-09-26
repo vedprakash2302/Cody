@@ -961,18 +961,39 @@ function attachTrailingToolGroupsToAssistant(
   return result;
 }
 
-/** Match each user message to the next assistant checkpoint. */
+/**
+ * Match each user message to the checkpoint of the turn it started. Servers
+ * that record the turn's user message link it directly, which also covers a
+ * turn stopped before any assistant message; otherwise fall back to the next
+ * assistant checkpoint.
+ */
 function buildRevertTurnCountByUserMessageId(input: {
   supportsConversationRollback: boolean;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   inferredCheckpointTurnCountByTurnId: Readonly<Record<string, number | undefined>>;
 }): Map<MessageId, number> {
   const byUserMessageId = new Map<MessageId, number>();
-  const entryCount = input.supportsConversationRollback ? input.timelineEntries.length : 0;
-  for (let index = 0; index < entryCount; index += 1) {
+  if (!input.supportsConversationRollback) return byUserMessageId;
+  const turnCountOf = (summary: TurnDiffSummary) =>
+    summary.checkpointTurnCount ?? input.inferredCheckpointTurnCountByTurnId[summary.turnId];
+  const summaryByUserMessageId = new Map<MessageId, TurnDiffSummary>();
+  for (const summary of input.turnDiffSummaries) {
+    if (summary.userMessageId) summaryByUserMessageId.set(summary.userMessageId, summary);
+  }
+  for (let index = 0; index < input.timelineEntries.length; index += 1) {
     const entry = input.timelineEntries[index];
     if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+      continue;
+    }
+
+    const linkedSummary = summaryByUserMessageId.get(entry.message.id);
+    if (linkedSummary) {
+      const turnCount = turnCountOf(linkedSummary);
+      if (typeof turnCount === "number") {
+        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
+      }
       continue;
     }
 
@@ -988,8 +1009,7 @@ function buildRevertTurnCountByUserMessageId(input: {
       if (!summary) {
         continue;
       }
-      const turnCount =
-        summary.checkpointTurnCount ?? input.inferredCheckpointTurnCountByTurnId[summary.turnId];
+      const turnCount = turnCountOf(summary);
       if (typeof turnCount !== "number") {
         break;
       }
@@ -1026,6 +1046,7 @@ export function deriveMessagesTimelineRows(input: {
   const revertTurnCountByUserMessageId = buildRevertTurnCountByUserMessageId({
     supportsConversationRollback: input.supportsConversationRollback,
     timelineEntries: input.timelineEntries,
+    turnDiffSummaries: input.turnDiffSummaries,
     turnDiffSummaryByAssistantMessageId,
     inferredCheckpointTurnCountByTurnId: input.supportsConversationRollback
       ? inferCheckpointTurnCountByTurnId(input.turnDiffSummaries)

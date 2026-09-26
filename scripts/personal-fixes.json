@@ -62,5 +62,6 @@
   "apps/server/src/provider/Layers/OpenCodeSubagentTranscript.test.ts",
   "apps/server/src/provider/subagentTranscriptRpc.test.ts",
   "apps/web/src/components/AgentTranscriptView.logic.test.ts",
-  "apps/server/src/provider/Layers/ProviderService.test.ts"
+  "apps/server/src/provider/Layers/ProviderService.test.ts",
+  "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts"
 ]

@@ -646,6 +646,10 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  // The user message that started the turn. Lets clients offer rewind for a
+  // turn stopped before any assistant message existed. Optional so payloads
+  // from older servers still decode.
+  userMessageId: Schema.optional(Schema.NullOr(MessageId)),
   completedAt: IsoDateTime,
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
@@ -1590,6 +1594,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
+  userMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
   createdAt: IsoDateTime,
 });
@@ -1995,6 +2000,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  userMessageId: Schema.optional(Schema.NullOr(MessageId)),
   completedAt: IsoDateTime,
 });
 

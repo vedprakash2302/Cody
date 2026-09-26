@@ -1717,6 +1717,54 @@ describe("deriveMessagesTimelineRows", () => {
     expect(answerRow?.kind === "message" && answerRow.showAssistantCopyButton).toBe(true);
   });
 
+  it("offers rewind for a turn stopped before any assistant message", () => {
+    const userMessage = (id: string, createdAt: string) => ({
+      id,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: MessageId.make(id),
+        role: "user" as const,
+        text: id,
+        turnId: null,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        userMessage("stopped-user", "2026-01-01T00:00:00Z"),
+        userMessage("next-user", "2026-01-01T00:01:00Z"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [
+        {
+          turnId: TurnId.make("stopped-turn"),
+          completedAt: "2026-01-01T00:00:01Z",
+          // The server's placeholder: no timeline message has this id.
+          assistantMessageId: MessageId.make("assistant:stopped-turn"),
+          userMessageId: MessageId.make("stopped-user"),
+          checkpointTurnCount: 4,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/stopped-turn"),
+          status: "ready",
+          files: [],
+        },
+      ],
+      supportsConversationRollback: true,
+    });
+
+    const revertTurnCountById = new Map(
+      rows.flatMap((row) =>
+        row.kind === "message" ? [[row.message.id, row.revertTurnCount] as const] : [],
+      ),
+    );
+    expect(revertTurnCountById.get(MessageId.make("stopped-user"))).toBe(3);
+    // A message sent later in the same turn is not the turn's start.
+    expect(revertTurnCountById.get(MessageId.make("next-user"))).toBeUndefined();
+  });
+
   it("folds the first assistant message and settled work before the terminal response", () => {
     const timelineEntries = [
       {

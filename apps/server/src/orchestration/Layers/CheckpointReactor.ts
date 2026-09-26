@@ -34,6 +34,8 @@ import { CheckpointReactor, type CheckpointReactorShape } from "../Services/Chec
 import { forkParked } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
@@ -85,6 +87,7 @@ const make = Effect.gen(function* () {
     randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const receiptBus = yield* RuntimeReceiptBus;
@@ -254,6 +257,7 @@ const make = Effect.gen(function* () {
     readonly turnCount: number;
     readonly status: "ready" | "missing" | "error";
     readonly assistantMessageId: MessageId | undefined;
+    readonly userMessageId: MessageId | undefined;
     readonly createdAt: string;
   }) {
     const fromTurnCount = Math.max(0, input.turnCount - 1);
@@ -349,6 +353,7 @@ const make = Effect.gen(function* () {
       status: input.status,
       files,
       assistantMessageId,
+      ...(input.userMessageId ? { userMessageId: input.userMessageId } : {}),
       checkpointTurnCount: input.turnCount,
       createdAt: input.createdAt,
     });
@@ -441,6 +446,30 @@ const make = Effect.gen(function* () {
       const nextTurnCount = existingPlaceholder
         ? existingPlaceholder.checkpointTurnCount
         : currentTurnCount + 1;
+      // The message that started the turn; a turn stopped before any
+      // assistant output has no other anchor for rewind. Runtime ingestion
+      // binds the pending start to the turn on its own worker, so this can
+      // run first; fall back to the same pending start it will bind, unless
+      // that start was requested after this turn ended.
+      const userMessageId = yield* Effect.gen(function* () {
+        const turn = yield* projectionTurnRepository.getByTurnId({ threadId: thread.id, turnId });
+        const bound = Option.getOrUndefined(turn)?.pendingMessageId;
+        if (bound) return bound;
+        const pending = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+          threadId: thread.id,
+        });
+        return Option.isSome(pending) && pending.value.requestedAt <= event.createdAt
+          ? pending.value.messageId
+          : undefined;
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to resolve the user message for a checkpoint", {
+            threadId: thread.id,
+            turnId,
+            detail: error.message,
+          }).pipe(Effect.as(undefined)),
+        ),
+      );
 
       yield* captureAndDispatchCheckpoint({
         threadId: thread.id,
@@ -453,6 +482,7 @@ const make = Effect.gen(function* () {
             ? "ready"
             : checkpointStatusFromRuntime(event.payload.state),
         assistantMessageId: existingPlaceholder?.assistantMessageId ?? undefined,
+        userMessageId,
         createdAt: event.createdAt,
       });
     },
@@ -1060,4 +1090,6 @@ const make = Effect.gen(function* () {
   } satisfies CheckpointReactorShape;
 });
 
-export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make);
+export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

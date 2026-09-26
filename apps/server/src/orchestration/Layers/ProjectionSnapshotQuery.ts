@@ -159,6 +159,7 @@ const ProjectionCheckpointDbRowSchema = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   assistantMessageId: Schema.NullOr(MessageId),
+  userMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
 });
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
@@ -979,6 +980,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
+          pending_message_id AS "userMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
         WHERE checkpoint_turn_count IS NOT NULL
@@ -1712,6 +1714,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
+          pending_message_id AS "userMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
         WHERE thread_id = ${threadId}
@@ -2286,6 +2289,7 @@ pending_approval_requests AS (
                   status: row.status,
                   files: row.files,
                   assistantMessageId: row.assistantMessageId,
+                  userMessageId: row.userMessageId,
                   completedAt: row.completedAt,
                 });
                 checkpointsByThread.set(row.threadId, threadCheckpoints);
@@ -3228,6 +3232,7 @@ pending_approval_requests AS (
           status: row.status,
           files: row.files,
           assistantMessageId: row.assistantMessageId,
+          userMessageId: row.userMessageId,
           completedAt: row.completedAt,
         })),
       });
@@ -3666,6 +3671,7 @@ pending_approval_requests AS (
           status: row.status,
           files: row.files,
           assistantMessageId: row.assistantMessageId,
+          userMessageId: row.userMessageId,
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
