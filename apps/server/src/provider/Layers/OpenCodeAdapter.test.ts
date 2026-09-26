@@ -61,6 +61,9 @@ type MessageEntry = {
   info: {
     id: string;
     role: "user" | "assistant";
+    time?: { created: number; completed?: number };
+    summary?: boolean;
+    error?: { name: string };
   };
   parts: Array<unknown>;
 };
@@ -1102,14 +1105,14 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         ),
       });
 
-      // The prompt targets the resumed id, and the turn re-surfaces the cursor.
-      NodeAssert.deepEqual(
-        (runtimeMock.state.promptCalls[0] as { sessionID: string }).sessionID,
-        "ses_persisted",
-      );
+      // The prompt targets the resumed id, and the turn re-surfaces the cursor
+      // with the prompt recorded as the turn's start for later rewinds.
+      const prompt = runtimeMock.state.promptCalls[0] as { sessionID: string; messageID: string };
+      NodeAssert.deepEqual(prompt.sessionID, "ses_persisted");
       NodeAssert.deepEqual(result.resumeCursor, {
         schemaVersion: 1,
         sessionId: "ses_persisted",
+        turnStartMessageIds: [prompt.messageID],
       });
 
       yield* adapter.stopSession(threadId);
@@ -1923,6 +1926,13 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const session = sessions.find((candidate) => candidate.threadId === threadId);
       NodeAssert.equal(session?.status, "running");
       NodeAssert.equal(session?.activeTurnId, activeTurn.turnId);
+      // Two turns started; the steer joined the second rather than starting one.
+      const prompts = runtimeMock.state.promptCalls as Array<{ messageID: string }>;
+      NodeAssert.deepEqual(
+        (session?.resumeCursor as { turnStartMessageIds?: Array<string> } | undefined)
+          ?.turnStartMessageIds,
+        [prompts[0]?.messageID, prompts[1]?.messageID],
+      );
 
       idleAfterSteer.resolve({
         id: "evt-idle-after-steer",
@@ -6644,6 +6654,290 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(runtimeMock.state.promptCalls, []);
     }).pipe(Effect.provide(adapterLayer));
   });
+
+  it.effect("rewinds OpenCode to the recorded start of each T3 turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-rollback-recorded-turns");
+      const user = (id: string, created: number, parts: Array<unknown> = []): MessageEntry => ({
+        info: { id, role: "user", time: { created } },
+        parts,
+      });
+      const assistant = (id: string, created: number, completed: number): MessageEntry => ({
+        info: { id, role: "assistant", time: { created, completed } },
+        parts: [],
+      });
+      const resumeWith = (
+        turnStartMessageIds: ReadonlyArray<string>,
+        messages: Array<MessageEntry>,
+      ) =>
+        Effect.gen(function* () {
+          yield* adapter.stopSession(threadId).pipe(Effect.ignore);
+          runtimeMock.state.messages = messages;
+          runtimeMock.state.forkMessagesBySession.clear();
+          runtimeMock.state.forkCalls.length = 0;
+          yield* adapter.startSession({
+            provider: ProviderDriverKind.make("opencode"),
+            threadId,
+            runtimeMode: "full-access",
+            resumeCursor: { schemaVersion: 1, sessionId: "ses_recorded", turnStartMessageIds },
+          });
+        });
+      const cursor = () =>
+        adapter
+          .listSessions()
+          .pipe(
+            Effect.map(
+              (sessions) => sessions.find((session) => session.threadId === threadId)?.resumeCursor,
+            ),
+          );
+
+      // A steer between tool steps and an automatic-compaction continuation
+      // both look like new prompts in history; the recorded start does not.
+      yield* resumeWith(
+        ["u1"],
+        [
+          user("u1", 0),
+          assistant("a1-step1", 1, 10),
+          user("u1-steer", 11),
+          assistant("a1-step2", 12, 20),
+          user("compact", 21, [{ id: "part-compact", type: "compaction", auto: true }]),
+          assistant("summary", 22, 23),
+          user("continue", 24),
+          assistant("a1-after", 25, 30),
+        ],
+      );
+      yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.deepEqual(
+        runtimeMock.state.forkCalls.map((call) => call.messageID),
+        ["u1"],
+      );
+
+      // A prompt OpenCode never stored holds its slot: rewinding it leaves the
+      // conversation alone, and the next rewind removes the turn before it.
+      yield* resumeWith(["u1", "msg-never-stored"], [user("u1", 0), assistant("a1", 1, 5)]);
+      yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.equal(runtimeMock.state.forkCalls.length, 0);
+      NodeAssert.deepEqual(yield* cursor(), {
+        schemaVersion: 1,
+        sessionId: "ses_recorded",
+        turnStartMessageIds: ["u1"],
+      });
+      yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.deepEqual(
+        runtimeMock.state.forkCalls.map((call) => call.messageID),
+        ["u1"],
+      );
+
+      // Kept starts follow the fork's new message ids.
+      yield* resumeWith(
+        ["u1", "u2"],
+        [user("u1", 0), assistant("a1", 1, 5), user("u2", 10), assistant("a2", 11, 15)],
+      );
+      yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.deepEqual(
+        runtimeMock.state.forkCalls.map((call) => call.messageID),
+        ["u2"],
+      );
+      NodeAssert.deepEqual(yield* cursor(), {
+        schemaVersion: 1,
+        sessionId: "ses_recorded_fork",
+        turnStartMessageIds: ["u1_fork"],
+      });
+
+      // Turns from before the record are inferred only from the history that
+      // precedes it, so recorded slots and steers still count exactly.
+      yield* resumeWith(
+        ["msg-never-stored"],
+        [user("u1", 0), assistant("a1", 1, 5), user("u2", 10), assistant("a2", 11, 15)],
+      );
+      yield* adapter.rollbackThread(threadId, 2);
+      NodeAssert.deepEqual(
+        runtimeMock.state.forkCalls.map((call) => call.messageID),
+        ["u2"],
+      );
+      yield* resumeWith(
+        ["u2"],
+        [
+          user("u1", 0),
+          assistant("a1", 1, 5),
+          user("u2", 10),
+          assistant("a2-step1", 11, 20),
+          user("u2-steer", 21),
+          assistant("a2-step2", 22, 30),
+        ],
+      );
+      yield* adapter.rollbackThread(threadId, 2);
+      NodeAssert.deepEqual(
+        runtimeMock.state.forkCalls.map((call) => call.messageID),
+        ["u1"],
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("carries recorded turn starts into a working-directory fork", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-cwd-recorded");
+      runtimeMock.state.sessionDirectoryById.set("ses_moved", "/some/other/worktree");
+      runtimeMock.state.messages = [
+        { info: { id: "u1", role: "user" }, parts: [] },
+        { info: { id: "a1", role: "assistant" }, parts: [] },
+      ];
+      // The fork copies history in order under new ids.
+      runtimeMock.state.forkMessagesBySession.set("ses_moved_fork", [
+        { info: { id: "u1-copy", role: "user" }, parts: [] },
+        { info: { id: "a1-copy", role: "assistant" }, parts: [] },
+      ]);
+
+      const session = yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: {
+          schemaVersion: 1,
+          sessionId: "ses_moved",
+          turnStartMessageIds: ["u1", "msg-never-stored"],
+        },
+      });
+
+      NodeAssert.deepEqual(session.resumeCursor, {
+        schemaVersion: 1,
+        sessionId: "ses_moved_fork",
+        turnStartMessageIds: ["u1-copy", "msg-never-stored"],
+      });
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("infers T3 turns from OpenCode history when no turn starts are recorded", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-rollback-turn-boundaries");
+      const user = (id: string, created: number, parts: Array<unknown> = []): MessageEntry => ({
+        info: { id, role: "user", time: { created } },
+        parts,
+      });
+      const assistant = (id: string, created: number, completed?: number): MessageEntry => ({
+        info: {
+          id,
+          role: "assistant",
+          time: completed === undefined ? { created } : { created, completed },
+        },
+        parts: [],
+      });
+      const cases: ReadonlyArray<{
+        readonly name: string;
+        readonly messages: Array<MessageEntry>;
+        readonly boundaries: ReadonlyArray<string>;
+      }> = [
+        {
+          // Each tool step is its own assistant message.
+          name: "multi-step turn",
+          messages: [
+            user("u1", 0),
+            assistant("a1", 1, 5),
+            user("u2", 10),
+            assistant("a2-step1", 11, 12),
+            assistant("a2-step2", 12, 15),
+            assistant("a2-step3", 15, 18),
+          ],
+          boundaries: ["u2", "u1"],
+        },
+        {
+          // A prompt sent while a reply is running is a steer in that turn.
+          name: "steer",
+          messages: [
+            user("u1", 0),
+            assistant("a1-step1", 1, 10),
+            user("u1-steer", 5),
+            assistant("a1-step2", 10, 20),
+            user("u2", 30),
+            assistant("a2", 31, 35),
+          ],
+          boundaries: ["u2", "u1"],
+        },
+        {
+          // Stopped before OpenCode wrote any reply.
+          name: "stopped turn without a reply",
+          messages: [user("u1", 0), assistant("a1", 1, 5), user("u2", 10)],
+          boundaries: ["u2", "u1"],
+        },
+        {
+          // Manual compaction: the next prompt is a real turn.
+          name: "manual compaction",
+          messages: [
+            user("u1", 0),
+            assistant("a1", 1, 5),
+            user("compact", 6, [{ id: "part-compact", type: "compaction", auto: false }]),
+            {
+              ...assistant("summary", 7, 8),
+              info: { ...assistant("summary", 7, 8).info, summary: true },
+            },
+            user("u2", 10),
+            assistant("a2", 11, 12),
+          ],
+          boundaries: ["u2", "u1"],
+        },
+        {
+          // Automatic compaction continues the same run with a follow-up prompt.
+          name: "automatic compaction",
+          messages: [
+            user("u1", 0),
+            assistant("a1", 1, 5),
+            user("compact", 6, [{ id: "part-compact", type: "compaction", auto: true }]),
+            {
+              ...assistant("summary", 7, 8),
+              info: { ...assistant("summary", 7, 8).info, summary: true },
+            },
+            user("continue", 9, [
+              { id: "part-continue", type: "text", text: "Continue", synthetic: true },
+            ]),
+            assistant("a1-after", 10, 12),
+            user("u2", 20),
+            assistant("a2", 21, 22),
+          ],
+          boundaries: ["u2", "u1"],
+        },
+        {
+          // OpenCode records the aborted reply's completion after the resend.
+          name: "resend after an aborted reply",
+          messages: [
+            user("u1", 0),
+            {
+              ...assistant("a1", 1, 12),
+              info: { ...assistant("a1", 1, 12).info, error: { name: "MessageAbortedError" } },
+            },
+            user("u2", 10),
+            assistant("a2", 13, 15),
+          ],
+          boundaries: ["u2", "u1"],
+        },
+      ];
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      for (const testCase of cases) {
+        for (const [index, boundary] of testCase.boundaries.entries()) {
+          yield* adapter.stopSession(threadId);
+          yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+          runtimeMock.state.messages = testCase.messages;
+          runtimeMock.state.forkCalls.length = 0;
+          yield* adapter.rollbackThread(threadId, index + 1);
+          NodeAssert.deepEqual(
+            runtimeMock.state.forkCalls.map((call) => call.messageID),
+            [boundary],
+            `${testCase.name}: rewinding ${index + 1} turn(s)`,
+          );
+        }
+      }
+      yield* adapter.stopSession(threadId);
+    }),
+  );
 
   it.effect("forks before the removed user prompt and resumes only retained history", () =>
     Effect.gen(function* () {
