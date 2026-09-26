@@ -61,5 +61,6 @@
   "apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
   "apps/server/src/provider/Layers/OpenCodeSubagentTranscript.test.ts",
   "apps/server/src/provider/subagentTranscriptRpc.test.ts",
-  "apps/web/src/components/AgentTranscriptView.logic.test.ts"
+  "apps/web/src/components/AgentTranscriptView.logic.test.ts",
+  "apps/server/src/provider/Layers/ProviderService.test.ts"
 ]

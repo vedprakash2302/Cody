@@ -74,6 +74,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import type { OpenCodeServerOwner } from "../OpenCodeServerOwner.ts";
 import * as Option from "effect/Option";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
@@ -508,8 +509,63 @@ function takeOpenCodeTurnTokenUsage(
   };
 }
 
+/**
+ * Whether `candidateSessionId` is, or descends from, one of `ancestors`,
+ * following `parentID` through OpenCode. Reads only; callers decide whether
+ * to remember the answer.
+ */
+const openCodeSessionDescendsFrom = Effect.fn("openCodeSessionDescendsFrom")(function* (
+  client: OpencodeClient,
+  candidateSessionId: string,
+  ancestors: ReadonlySet<string>,
+) {
+  const seen = new Set<string>();
+  const getSession = (sessionID: string) =>
+    runOpenCodeSdk("session.get", (signal) => client.session.get({ sessionID }, { signal })).pipe(
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            new OpenCodeRuntimeError({
+              operation: "session.get",
+              detail: "OpenCode session ancestry lookup did not complete within 10 seconds.",
+            }),
+          ),
+      }),
+      Effect.catchIf(
+        (cause) => isOpenCodeNotFound(cause),
+        () => Effect.undefined,
+      ),
+    );
+  let sessionId: string | undefined = candidateSessionId;
+  for (let depth = 0; sessionId !== undefined && depth < 32; depth += 1) {
+    if (ancestors.has(sessionId)) {
+      return true;
+    }
+    if (seen.has(sessionId)) {
+      return false;
+    }
+    seen.add(sessionId);
+    const currentSessionId: string = sessionId;
+    const response = yield* getSession(currentSessionId);
+    if (response === undefined) {
+      return false;
+    }
+    if (!response.data) {
+      return yield* new OpenCodeRuntimeError({
+        operation: "session.get",
+        detail: `OpenCode session.get returned no session payload for '${currentSessionId}'.`,
+      });
+    }
+    sessionId = response.data.parentID;
+  }
+  return false;
+});
+
 export interface OpenCodeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
+  /** The instance's shared local server, used to read stopped threads. */
+  readonly sharedServer?: OpenCodeServerOwner["Service"];
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -1886,62 +1942,20 @@ export function makeOpenCodeAdapter(
       }
     };
 
-    // `record: false` only answers the question. Membership routes the child's
-    // events and marks the running turn, so lookups about past work (reading a
-    // transcript) must leave it to the event path.
     const isRelatedOpenCodeSession = Effect.fn("isRelatedOpenCodeSession")(function* (
       context: OpenCodeSessionContext,
       candidateSessionId: string,
-      options: { readonly record: boolean } = { record: true },
     ) {
       if (context.relatedSessionIds.has(candidateSessionId)) {
         return true;
       }
-
-      const seen = new Set<string>();
-      const getSession = (sessionID: string) =>
-        runOpenCodeSdk("session.get", (signal) =>
-          context.client.session.get({ sessionID }, { signal }),
-        ).pipe(
-          Effect.timeoutOrElse({
-            duration: "10 seconds",
-            orElse: () =>
-              Effect.fail(
-                new OpenCodeRuntimeError({
-                  operation: "session.get",
-                  detail: "OpenCode session ancestry lookup did not complete within 10 seconds.",
-                }),
-              ),
-          }),
-          Effect.catchIf(
-            (cause) => isOpenCodeNotFound(cause),
-            () => Effect.undefined,
-          ),
-        );
-      let sessionId: string | undefined = candidateSessionId;
-      for (let depth = 0; sessionId !== undefined && depth < 32; depth += 1) {
-        if (context.relatedSessionIds.has(sessionId)) {
-          if (options.record) addRelatedOpenCodeSession(context, candidateSessionId);
-          return true;
-        }
-        if (seen.has(sessionId)) {
-          return false;
-        }
-        seen.add(sessionId);
-        const currentSessionId: string = sessionId;
-        const response = yield* getSession(currentSessionId);
-        if (response === undefined) {
-          return false;
-        }
-        if (!response.data) {
-          return yield* new OpenCodeRuntimeError({
-            operation: "session.get",
-            detail: `OpenCode session.get returned no session payload for '${currentSessionId}'.`,
-          });
-        }
-        sessionId = response.data.parentID;
-      }
-      return false;
+      const related = yield* openCodeSessionDescendsFrom(
+        context.client,
+        candidateSessionId,
+        context.relatedSessionIds,
+      );
+      if (related) addRelatedOpenCodeSession(context, candidateSessionId);
+      return related;
     });
 
     const openPermissionRequest = Effect.fn("openPermissionRequest")(function* (
@@ -4259,50 +4273,123 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const readTranscriptWith = Effect.fn("readTranscriptWith")(function* (
+      client: OpencodeClient,
+      rootSessionId: string,
+      knownSessionIds: ReadonlySet<string>,
+      childSessionId: string,
+    ) {
+      const notASubagent = new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "readSubagentTranscript",
+        issue: `Task '${childSessionId}' is not a subagent of this thread.`,
+      });
+      // The task id is a client value: only read sessions below this thread's.
+      if (childSessionId === rootSessionId) {
+        return yield* notASubagent;
+      }
+      const related = yield* openCodeSessionDescendsFrom(
+        client,
+        childSessionId,
+        knownSessionIds,
+      ).pipe(Effect.mapError(toRequestError));
+      if (!related) {
+        return yield* notASubagent;
+      }
+      // One message past the limit tells a cut history from a complete one.
+      const response = yield* runOpenCodeSdk("session.messages", (signal) =>
+        client.session.messages(
+          { sessionID: childSessionId, limit: TRANSCRIPT_MESSAGE_LIMIT + 1 },
+          { signal },
+        ),
+      ).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.catchIf(
+          (cause) => OpenCodeRuntimeError.is(cause) && isOpenCodeNotFound(cause),
+          () =>
+            Effect.fail(
+              new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "readSubagentTranscript",
+                issue: `Subagent session '${childSessionId}' no longer exists.`,
+              }),
+            ),
+        ),
+        Effect.mapError((cause) =>
+          cause._tag === "ProviderAdapterValidationError" ? cause : toTranscriptReadError(cause),
+        ),
+      );
+      return toOpenCodeSubagentTranscript(childSessionId, response.data ?? []);
+    });
+
+    // A stopped thread is read through the instance's shared OpenCode server
+    // (or the configured external one), never by resuming its session.
+    const withReadOnlyClient = <A, E>(
+      directory: string,
+      use: (client: OpencodeClient) => Effect.Effect<A, E>,
+    ) => {
+      const serverUrl = openCodeSettings.serverUrl;
+      const serverPassword = openCodeSettings.serverPassword;
+      const clientFor = (server: { readonly url: string; readonly serverPassword?: string }) =>
+        openCodeRuntime.createOpenCodeSdkClient({
+          baseUrl: server.url,
+          directory,
+          ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
+        });
+      if (serverUrl.trim().length > 0) {
+        return Effect.scoped(
+          openCodeRuntime
+            .connectToOpenCodeServer({
+              binaryPath: openCodeSettings.binaryPath,
+              directory,
+              serverUrl,
+              ...(serverPassword ? { serverPassword } : {}),
+            })
+            .pipe(Effect.flatMap((server) => use(clientFor(server)))),
+        );
+      }
+      const sharedServer = options?.sharedServer;
+      if (sharedServer === undefined) {
+        return Effect.fail(
+          new OpenCodeRuntimeError({
+            operation: "readSubagentTranscript",
+            detail: "No OpenCode server is available to read a stopped thread.",
+          }),
+        );
+      }
+      return sharedServer.withServer((server) => use(clientFor(server)));
+    };
+
     const readSubagentTranscript: NonNullable<OpenCodeAdapterShape["readSubagentTranscript"]> =
       Effect.fn("readSubagentTranscript")(function* (input) {
-        const context = yield* ensureSessionContext(sessions, input.threadId);
-        yield* awaitOpenCodeContextReady(context);
         const childSessionId: string = input.taskId;
-        const notASubagent = new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation: "readSubagentTranscript",
-          issue: `Task '${childSessionId}' is not a subagent of this thread.`,
-        });
-        // The task id is a client value: only read sessions below this thread's.
-        if (childSessionId === context.openCodeSessionId) {
-          return yield* notASubagent;
+        const context = sessions.get(input.threadId);
+        if (context !== undefined && !(yield* Ref.get(context.stopped))) {
+          yield* awaitOpenCodeContextReady(context);
+          return yield* readTranscriptWith(
+            context.client,
+            context.openCodeSessionId,
+            context.relatedSessionIds,
+            childSessionId,
+          );
         }
-        const related = yield* isRelatedOpenCodeSession(context, childSessionId, {
-          record: false,
-        }).pipe(Effect.mapError(toRequestError));
-        if (!related) {
-          return yield* notASubagent;
+        const rootSessionId =
+          input.stoppedSession === undefined
+            ? undefined
+            : parseOpenCodeResume(input.stoppedSession.resumeCursor)?.sessionId;
+        if (input.stoppedSession === undefined || rootSessionId === undefined) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
         }
-        // One message past the limit tells a cut history from a complete one.
-        const response = yield* runOpenCodeSdk("session.messages", (signal) =>
-          context.client.session.messages(
-            { sessionID: childSessionId, limit: TRANSCRIPT_MESSAGE_LIMIT + 1 },
-            { signal },
-          ),
+        return yield* withReadOnlyClient(input.stoppedSession.cwd ?? serverConfig.cwd, (client) =>
+          readTranscriptWith(client, rootSessionId, new Set([rootSessionId]), childSessionId),
         ).pipe(
-          Effect.timeout("10 seconds"),
-          Effect.catchIf(
-            (cause) => OpenCodeRuntimeError.is(cause) && isOpenCodeNotFound(cause),
-            () =>
-              Effect.fail(
-                new ProviderAdapterValidationError({
-                  provider: PROVIDER,
-                  operation: "readSubagentTranscript",
-                  issue: `Subagent session '${childSessionId}' no longer exists.`,
-                }),
-              ),
-          ),
           Effect.mapError((cause) =>
-            cause._tag === "ProviderAdapterValidationError" ? cause : toTranscriptReadError(cause),
+            OpenCodeRuntimeError.is(cause) ? toTranscriptReadError(cause) : cause,
           ),
         );
-        return toOpenCodeSubagentTranscript(childSessionId, response.data ?? []);
       });
 
     const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(

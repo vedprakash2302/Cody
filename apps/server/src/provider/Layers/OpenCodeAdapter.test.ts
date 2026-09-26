@@ -39,6 +39,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
@@ -143,9 +144,13 @@ const runtimeMock = {
     questionListImplementation: null as (() => Promise<Array<QuestionRequest>>) | null,
     sessionUpdateCalls: [] as Array<{ sessionID: string; permission: unknown }>,
     forkCalls: [] as Array<{ sessionID: string; directory?: string; messageID?: string }>,
+    sdkClientDirectories: [] as string[],
+    serverStartError: null as OpenCodeRuntimeError | null,
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.sdkClientDirectories.length = 0;
+    this.state.serverStartError = null;
     this.state.sessionCreateUrls.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.createdSessionIds.length = 0;
@@ -225,6 +230,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   startOpenCodeServerProcess: ({ binaryPath, serverPassword }) =>
     Effect.gen(function* () {
       runtimeMock.state.startCalls.push(binaryPath);
+      if (runtimeMock.state.serverStartError) {
+        return yield* runtimeMock.state.serverStartError;
+      }
       const url = "http://127.0.0.1:4301";
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
@@ -264,8 +272,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       };
     }),
   runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
-  createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
-    ({
+  createOpenCodeSdkClient: ({ baseUrl, serverPassword, directory }) => {
+    runtimeMock.state.sdkClientDirectories.push(directory);
+    return {
       command: {
         list: async () => ({
           data: [{ name: "review", source: "command", hints: ["$ARGUMENTS"] }],
@@ -593,7 +602,8 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           );
         },
       },
-    }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
+    } as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>;
+  },
   loadOpenCodeInventory: () =>
     Effect.fail(
       new OpenCodeRuntimeError({
@@ -634,6 +644,12 @@ const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
+});
+
+/** No external server, so stopped threads are read through the shared one. */
+const openCodeLocalServerTestSettings = Schema.decodeSync(OpenCodeSettings)({
+  binaryPath: "fake-opencode",
+  serverUrl: "",
 });
 
 const OpenCodeAdapterTestLayer = Layer.effect(
@@ -9206,6 +9222,112 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapter turn lifecycle", (it) => {
 
       yield* adapter.stopSession(threadId);
     }),
+  );
+
+  it.effect("reads a stopped thread's subagent without starting its session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-stopped-transcript");
+      runtimeMock.state.sessionParentById.set("ses_old_child", "ses_old_root");
+      // Serve the stored history, not the default finished-reply stub.
+      runtimeMock.state.latestReplyFinished = false;
+      runtimeMock.state.sessionParentById.set("ses_old_grandchild", "ses_old_child");
+      runtimeMock.state.forkMessagesBySession.set("ses_old_grandchild", [
+        {
+          info: { id: "msg-old", role: "assistant" },
+          parts: [{ id: "prt-old", type: "text", text: "Done earlier." }],
+        },
+      ]);
+      const read = adapter.readSubagentTranscript;
+      NodeAssert.ok(read);
+      // A worktree thread: OpenCode must see the directory the session ran in.
+      const stoppedSession = {
+        resumeCursor: { schemaVersion: 1, sessionId: "ses_old_root" },
+        cwd: "/work/project/.worktrees/feature",
+      };
+
+      const transcript = yield* read({
+        threadId,
+        taskId: RuntimeTaskId.make("ses_old_grandchild"),
+        stoppedSession,
+      });
+      NodeAssert.deepEqual(transcript.entries, [
+        { kind: "text", id: "prt-old", text: "Done earlier." },
+      ]);
+      NodeAssert.deepEqual(runtimeMock.state.sdkClientDirectories, [stoppedSession.cwd]);
+      // Nothing about the session changed, and none was started.
+      NodeAssert.equal(runtimeMock.state.sessionCreateInputs.length, 0);
+      NodeAssert.equal(runtimeMock.state.sessionUpdateCalls.length, 0);
+      NodeAssert.equal(runtimeMock.state.forkCalls.length, 0);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+
+      for (const taskId of ["ses_old_root", "ses_elsewhere"]) {
+        const rejected: { readonly _tag: string } = yield* read({
+          threadId,
+          taskId: RuntimeTaskId.make(taskId),
+          stoppedSession,
+        }).pipe(Effect.flip);
+        NodeAssert.equal(rejected._tag, "ProviderAdapterValidationError");
+      }
+      for (const unusable of [undefined, { resumeCursor: { schemaVersion: 99 } }]) {
+        const missing: { readonly _tag: string } = yield* read({
+          threadId,
+          taskId: RuntimeTaskId.make("ses_old_grandchild"),
+          ...(unusable ? { stoppedSession: unusable } : {}),
+        }).pipe(Effect.flip);
+        NodeAssert.equal(missing._tag, "ProviderAdapterSessionNotFoundError");
+      }
+    }),
+  );
+
+  it.effect("reads stopped threads through the shared local server and lets it idle out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sharedServer = yield* OpenCodeServerOwner.make({
+          binaryPath: "fake-opencode",
+          directory: process.cwd(),
+        });
+        const adapter = yield* makeOpenCodeAdapter(openCodeLocalServerTestSettings, {
+          sharedServer,
+        });
+        runtimeMock.state.sessionParentById.set("ses_local_child", "ses_local_root");
+        runtimeMock.state.latestReplyFinished = false;
+        runtimeMock.state.forkMessagesBySession.set("ses_local_child", [
+          {
+            info: { id: "msg-local", role: "assistant" },
+            parts: [{ id: "prt-local", type: "text", text: "Local." }],
+          },
+        ]);
+        const read = adapter.readSubagentTranscript;
+        NodeAssert.ok(read);
+        const input = (taskId: string) => ({
+          threadId: asThreadId("thread-stopped-local"),
+          taskId: RuntimeTaskId.make(taskId),
+          stoppedSession: { resumeCursor: { schemaVersion: 1, sessionId: "ses_local_root" } },
+        });
+
+        const transcript = yield* read(input("ses_local_child"));
+        NodeAssert.deepEqual(transcript.entries, [
+          { kind: "text", id: "prt-local", text: "Local." },
+        ]);
+        // A failed read shares the same server and still returns it.
+        const rejected = yield* read(input("ses_elsewhere")).pipe(Effect.flip);
+        NodeAssert.equal(rejected._tag, "ProviderAdapterValidationError");
+        NodeAssert.deepEqual(runtimeMock.state.startCalls, ["fake-opencode"]);
+        NodeAssert.deepEqual(runtimeMock.state.closeCalls, []);
+
+        yield* advanceTestClock(30_000);
+        NodeAssert.deepEqual(runtimeMock.state.closeCalls, ["http://127.0.0.1:4301"]);
+
+        // The server failing to start is a transient failure, not a missing task.
+        runtimeMock.state.serverStartError = new OpenCodeRuntimeError({
+          operation: "startOpenCodeServerProcess",
+          detail: "spawn failed",
+        });
+        const failed = yield* read(input("ses_local_child")).pipe(Effect.flip);
+        NodeAssert.equal(failed._tag, "ProviderAdapterRequestError");
+      }),
+    ),
   );
 
   it.effect("reading a transcript mid-turn does not mark the turn as using subagents", () =>
