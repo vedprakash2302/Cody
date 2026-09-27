@@ -1,4 +1,5 @@
 import {
+  MessageId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -24,6 +25,8 @@ import {
 } from "../ProjectionThreadPullRequests.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "./ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadProposedPlanRepository } from "../Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionTurnRepositoryLive } from "./ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../Services/ProjectionTurns.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
@@ -31,6 +34,7 @@ const projectionRepositoriesLayer = it.layer(
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadPullRequests.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadProposedPlanRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionTurnRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -690,6 +694,43 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       yield* pullRequests.deleteByThreadId({ threadId: otherThreadId });
       assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId: otherThreadId }), []);
+    }),
+  );
+
+  it.effect("lists pending turn starts across threads but not started turns", () =>
+    Effect.gen(function* () {
+      const turns = yield* ProjectionTurnRepository;
+      const pendingFor = (threadId: ThreadId) => ({
+        threadId,
+        messageId: MessageId.make(`message-${threadId}`),
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        requestedAt: "2026-03-24T00:00:01.000Z",
+      });
+      const waiting = ThreadId.make("thread-pending-waiting");
+      const cleared = ThreadId.make("thread-pending-cleared");
+      const started = ThreadId.make("thread-pending-started");
+      yield* turns.replacePendingTurnStart(pendingFor(waiting));
+      yield* turns.replacePendingTurnStart(pendingFor(cleared));
+      yield* turns.deletePendingTurnStartByThreadId({ threadId: cleared });
+      yield* turns.upsertByTurnId({
+        threadId: started,
+        turnId: TurnId.make("turn-pending-started"),
+        pendingMessageId: MessageId.make(`message-${started}`),
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: "2026-03-24T00:00:01.000Z",
+        startedAt: "2026-03-24T00:00:01.000Z",
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+
+      assert.deepStrictEqual(yield* turns.listPendingTurnStarts(), [pendingFor(waiting)]);
     }),
   );
 });

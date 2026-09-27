@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MessageId,
   type OrchestrationCommand,
   type OrchestrationSessionStatus,
   ProviderDriverKind,
@@ -16,6 +17,10 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationCommandInvariantError } from "./orchestration/Errors.ts";
+import {
+  type ProjectionPendingTurnStart,
+  ProjectionTurnRepository,
+} from "./persistence/Services/ProjectionTurns.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -78,8 +83,14 @@ const queryWithThreads = (threads: ReadonlyArray<ReturnType<typeof makeThread>>)
     getCommandReadModel: () => Effect.succeed({ threads } as never),
   }) as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
 
+const projectionTurnsWith = (pendingTurnStarts: ReadonlyArray<ProjectionPendingTurnStart> = []) =>
+  ({
+    listPendingTurnStarts: () => Effect.succeed(pendingTurnStarts),
+  }) as unknown as ProjectionTurnRepository["Service"];
+
 const runReconciliation = (input: {
   readonly threads: ReadonlyArray<ReturnType<typeof makeThread>>;
+  readonly pendingTurnStarts?: ReadonlyArray<ProjectionPendingTurnStart>;
   readonly continueAfterRestart?: boolean;
   readonly liveThreadIds?: ReadonlyArray<ThreadId>;
   readonly providerService?: ProviderService.ProviderService["Service"];
@@ -91,6 +102,7 @@ const runReconciliation = (input: {
       ProjectionSnapshotQuery.ProjectionSnapshotQuery,
       queryWithThreads(input.threads),
     ),
+    Effect.provideService(ProjectionTurnRepository, projectionTurnsWith(input.pendingTurnStarts)),
     Effect.provideService(
       ProviderService.ProviderService,
       input.providerService ?? makeProviderService(input.liveThreadIds),
@@ -696,6 +708,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
           return { threads: [] } as never;
         }),
     } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]),
+    Effect.provideService(ProjectionTurnRepository, projectionTurnsWith()),
     Effect.provideService(ProviderService.ProviderService, {
       ...makeProviderService(),
       listSessions: () => Effect.die("provider inventory unavailable"),
@@ -989,3 +1002,84 @@ it.effect("settles failed opt-in recovery without retrying the provider turn", (
     });
   }),
 );
+
+it.effect("settles turn starts the previous process never handed to a provider", () => {
+  const pending = (threadId: ThreadId): ProjectionPendingTurnStart => ({
+    threadId,
+    messageId: MessageId.make(`message-${threadId}`),
+    sourceProposedPlanThreadId: null,
+    sourceProposedPlanId: null,
+    requestedAt: updatedAt,
+  });
+  const neverStarted = {
+    ...makeThread("thread-never-started", "ready"),
+    session: null,
+    modelSelection: { instanceId: ProviderInstanceId.make("opencode"), model: "opencode/kimi" },
+    runtimeMode: "approval-required" as const,
+  } as unknown as ReturnType<typeof makeThread>;
+  const idle = makeThread("thread-idle-with-pending", "ready");
+  const orphaned = makeThread("thread-orphaned-with-pending", "starting");
+  const live = makeThread("thread-live-with-pending", "ready");
+  const deleted = makeThread("thread-deleted-with-pending", "ready", null, null, updatedAt);
+  const dispatched: OrchestrationCommand[] = [];
+
+  return runReconciliation({
+    threads: [neverStarted, idle, orphaned, live, deleted],
+    liveThreadIds: [live.id],
+    pendingTurnStarts: [
+      pending(neverStarted.id),
+      pending(idle.id),
+      pending(orphaned.id),
+      pending(live.id),
+      pending(deleted.id),
+      pending(ThreadId.make("thread-missing")),
+    ],
+    directory: {
+      getBinding: () => Effect.succeedNone,
+      upsert: () => Effect.die("unused"),
+      recordImportedTranscript: () => Effect.die("unused"),
+      getProvider: () => Effect.die("unused"),
+      listThreadIds: () => Effect.die("unused"),
+      listBindings: () => Effect.succeed([]),
+    },
+    dispatch: (command) =>
+      Effect.sync(() => {
+        dispatched.push(command);
+        return { sequence: dispatched.length };
+      }),
+  }).pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        const sessions = dispatched.flatMap((command) =>
+          command.type === "thread.session.set" ? [command.session] : [],
+        );
+        assert.deepStrictEqual(
+          sessions.map((session) => [session.threadId, session.status, session.lastError]),
+          [
+            [
+              orphaned.id,
+              "error",
+              "Provider session did not survive a server restart. Send a new message to continue.",
+            ],
+            [
+              neverStarted.id,
+              "error",
+              "The server restarted before this message reached the agent. Send it again to continue.",
+            ],
+            [
+              idle.id,
+              "error",
+              "The server restarted before this message reached the agent. Send it again to continue.",
+            ],
+          ],
+        );
+        assert.deepInclude(sessions[1], {
+          providerName: null,
+          providerInstanceId: ProviderInstanceId.make("opencode"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+        });
+      }),
+    ),
+  );
+});
