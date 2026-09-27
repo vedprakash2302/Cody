@@ -22,6 +22,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -121,6 +122,49 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+
+// Every thread's provider intents share one queue, so a provider call that
+// never returns would stop all threads. These bounds sit well above each
+// provider's own request timeouts; hitting one means the provider is stuck.
+const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(30);
+const PROVIDER_SESSION_START_TIMEOUT = Duration.minutes(2);
+
+// The call runs in a detached fiber. A timeout, or interruption of the caller,
+// interrupts it in the background: an adapter stuck in uninterruptible cleanup
+// must not hold the queue or the caller's own exit.
+const boundProviderCall =
+  (input: {
+    readonly provider: string | null | undefined;
+    readonly method: string;
+    readonly timeout: Duration.Duration;
+    readonly detail: string;
+  }) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const call = yield* Effect.forkDetach(effect);
+        const interruptCall = Effect.forkDetach(Fiber.interrupt(call));
+        return yield* restore(
+          Fiber.join(call).pipe(
+            Effect.timeoutOrElse({
+              duration: input.timeout,
+              orElse: () =>
+                interruptCall.pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderAdapterRequestError({
+                        provider: providerErrorLabel(input.provider ?? undefined),
+                        method: input.method,
+                        detail: input.detail,
+                      }),
+                    ),
+                  ),
+                ),
+            }),
+          ),
+        ).pipe(Effect.onInterrupt(() => interruptCall));
+      }),
+    );
 
 function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -740,7 +784,15 @@ const make = Effect.gen(function* () {
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         })
-        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+        .pipe(
+          boundProviderCall({
+            provider: preferredProvider,
+            method: "session.start",
+            timeout: PROVIDER_SESSION_START_TIMEOUT,
+            detail: "The provider session did not start within 2 minutes.",
+          }),
+          Effect.tap(() => refreshWorkspaceSnapshot),
+        );
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -1571,6 +1623,12 @@ const make = Effect.gen(function* () {
         }
 
         yield* providerService.stopSession({ threadId: event.payload.threadId }).pipe(
+          boundProviderCall({
+            provider: latestSession.providerName,
+            method: "session.stop",
+            timeout: PROVIDER_CONTROL_TIMEOUT,
+            detail: "The provider did not stop the session within 30 seconds.",
+          }),
           Effect.catchCause((stopCause) => {
             if (Cause.hasInterruptsOnly(stopCause)) {
               return Effect.interrupt;
@@ -1621,9 +1679,15 @@ const make = Effect.gen(function* () {
     };
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService
-      .interruptTurn({ threadId: event.payload.threadId })
-      .pipe(Effect.catchCause(recoverInterruptFailure));
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      boundProviderCall({
+        provider: session.providerName,
+        method: "turn.interrupt",
+        timeout: PROVIDER_CONTROL_TIMEOUT,
+        detail: "The provider did not stop the turn within 30 seconds.",
+      }),
+      Effect.catchCause(recoverInterruptFailure),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1653,6 +1717,12 @@ const make = Effect.gen(function* () {
         decision: event.payload.decision,
       })
       .pipe(
+        boundProviderCall({
+          provider: thread.session?.providerName,
+          method: "request.respond",
+          timeout: PROVIDER_CONTROL_TIMEOUT,
+          detail: "The provider did not accept the approval response within 30 seconds.",
+        }),
         Effect.catchCause((cause) =>
           appendProviderFailureActivity({
             threadId: event.payload.threadId,
@@ -1700,6 +1770,12 @@ const make = Effect.gen(function* () {
             : {}),
         })
         .pipe(
+          boundProviderCall({
+            provider: thread.session?.providerName,
+            method: "user-input.respond",
+            timeout: PROVIDER_CONTROL_TIMEOUT,
+            detail: "The provider did not accept the answer within 30 seconds.",
+          }),
           Effect.catchCause((cause) =>
             appendProviderFailureActivity({
               threadId: event.payload.threadId,
@@ -1735,7 +1811,14 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.andThen(
         thread.session && thread.session.status !== "stopped"
-          ? providerService.stopSession({ threadId: thread.id })
+          ? providerService.stopSession({ threadId: thread.id }).pipe(
+              boundProviderCall({
+                provider: thread.session.providerName,
+                method: "session.stop",
+                timeout: PROVIDER_CONTROL_TIMEOUT,
+                detail: "The provider did not stop the session within 30 seconds.",
+              }),
+            )
           : Effect.void,
       ),
       Effect.matchCauseEffect({

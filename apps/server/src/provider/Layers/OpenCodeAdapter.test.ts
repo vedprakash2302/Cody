@@ -861,6 +861,40 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("closes the startup server when startup is interrupted before the session exists", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-startup-request-interrupted");
+      const sessionGetObserved = promiseWithResolvers<void>();
+      let sessionGetAborted = false;
+      runtimeMock.state.sessionGetObserved = () => sessionGetObserved.resolve(undefined);
+      runtimeMock.state.sessionGetImplementation = (_sessionID, signal) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () => {
+            sessionGetAborted = true;
+            resolve();
+          });
+        });
+
+      const startFiber = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: "ses_stalled_resume" },
+        })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => sessionGetObserved.promise);
+      yield* Fiber.interrupt(startFiber);
+      const startExit = yield* Fiber.await(startFiber);
+
+      NodeAssert.equal(Exit.isFailure(startExit) && Cause.hasInterruptsOnly(startExit.cause), true);
+      NodeAssert.deepEqual(runtimeMock.state.closeCalls, ["http://127.0.0.1:9999"]);
+      NodeAssert.equal(sessionGetAborted, true);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+    }),
+  );
+
   it.effect("stops a connecting session and rejects its waiting send", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

@@ -63,5 +63,8 @@
   "apps/server/src/provider/subagentTranscriptRpc.test.ts",
   "apps/web/src/components/AgentTranscriptView.logic.test.ts",
   "apps/server/src/provider/Layers/ProviderService.test.ts",
-  "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts"
+  "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+  "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts",
+  "apps/server/src/serverRuntimeStartup.reconcile.test.ts",
+  "apps/server/src/persistence/Layers/ProjectionRepositories.test.ts"
 ]

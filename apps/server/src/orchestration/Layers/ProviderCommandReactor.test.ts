@@ -27,6 +27,7 @@ import {
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -34,6 +35,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -184,6 +186,8 @@ describe("ProviderCommandReactor", () => {
     readonly compactThreadEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
+    /** Runs the reactor on a TestClock that the test advances with `adjustClock`. */
+    readonly testClock?: boolean;
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
@@ -498,7 +502,9 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
-    runtime = ManagedRuntime.make(layer);
+    runtime = ManagedRuntime.make(
+      input?.testClock ? layer.pipe(Layer.provideMerge(TestClock.layer())) : layer,
+    );
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
@@ -631,6 +637,14 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions,
       stateDir,
       drain,
+      adjustClock: (duration: Duration.Input) => runEffect(TestClock.adjust(duration)),
+      /** Shuts the reactor down early, as afterEach would. */
+      dispose: async () => {
+        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void));
+        scope = null;
+        if (runtime) await runtime.dispose();
+        runtime = null;
+      },
       startReactor,
       runEffect,
       get titleRegenerationCompletionDispatchAttempts() {
@@ -1100,6 +1114,46 @@ describe("ProviderCommandReactor", () => {
       expect(harness.generateThreadTitle).toHaveBeenCalledWith(
         expect.objectContaining({ message: "Use the current message" }),
       );
+    }),
+  );
+
+  effectIt.effect("fails the turn start when a provider session never starts", () =>
+    Effect.gen(function* () {
+      const startRequested = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          testClock: true,
+          startSessionEffect: () =>
+            Deferred.succeed(startRequested, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+      );
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-session-hang"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("message-turn-start-session-hang"),
+          role: "user",
+          text: "Start a session that hangs",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+
+      yield* Deferred.await(startRequested);
+      yield* Effect.promise(() => harness.adjustClock("2 minutes"));
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      expect(thread?.session).toMatchObject({
+        status: "error",
+        lastError: "The provider session did not start within 2 minutes.",
+      });
+      expect(harness.sendTurn).not.toHaveBeenCalled();
     }),
   );
 
@@ -3772,6 +3826,7 @@ describe("ProviderCommandReactor", () => {
             return thread?.session?.status === "stopped";
           }),
         );
+        yield* Effect.promise(() => harness.drain());
 
         const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
           (entry) => entry.id === ThreadId.make("thread-1"),
@@ -3844,6 +3899,71 @@ describe("ProviderCommandReactor", () => {
       expect(
         thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
       ).toMatchObject({ payload: { detail: "provider session disappeared" } });
+    }),
+  );
+
+  effectIt.effect("stops the session when a provider interrupt never returns", () =>
+    Effect.gen(function* () {
+      const releaseInterrupt = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            testClock: true,
+            // Stuck and uninterruptible, like an adapter hung in its own cleanup.
+            interruptTurnEffect: () =>
+              Deferred.succeed(interruptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseInterrupt)),
+                Effect.uninterruptible,
+              ),
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-interrupt-hang"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("cmd-turn-interrupt-hang"),
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+          createdAt: now,
+        });
+
+        yield* Deferred.await(interruptStarted);
+        yield* Effect.promise(() => harness.adjustClock("30 seconds"));
+        // The queue every thread shares is free again.
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        const detail = "The provider did not stop the turn within 30 seconds.";
+        expect(thread?.session).toMatchObject({
+          status: "stopped",
+          activeTurnId: null,
+          lastError: detail,
+        });
+        expect(
+          thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
+        ).toMatchObject({ payload: { detail } });
+        expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+        // Shutdown does not wait for the stuck call either.
+        yield* Effect.promise(() => harness.dispose());
+      }).pipe(Effect.ensuring(Deferred.succeed(releaseInterrupt, undefined)));
     }),
   );
 
