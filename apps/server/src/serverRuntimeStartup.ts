@@ -38,6 +38,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "./persistence/Services/ProjectionTurns.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -343,6 +344,8 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
 
 const ORPHANED_PROVIDER_SESSION_ERROR =
   "Provider session did not survive a server restart. Send a new message to continue.";
+const STRANDED_TURN_START_ERROR =
+  "The server restarted before this message reached the agent. Send it again to continue.";
 const SERVER_UPDATE_CONTINUATION_KEY = "continueAfterServerUpdate";
 const SERVER_UPDATE_CONTINUATION_PROMPT = "Continue where you left off.";
 
@@ -484,6 +487,7 @@ export const reconcileProviderSessions = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
   const providerService = yield* ProviderService.ProviderService;
   const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projectionTurns = yield* ProjectionTurnRepository;
   const settings = yield* ServerSettings.ServerSettingsService;
   const restartSettings = yield* settings.getSettings.pipe(
     Effect.asSome,
@@ -736,6 +740,55 @@ export const reconcileProviderSessions = Effect.gen(function* () {
     }
 
     yield* settleAsError(ORPHANED_PROVIDER_SESSION_ERROR);
+  }
+
+  // The provider command queue lives in memory, so a turn start accepted just
+  // before the exit is never processed. A thread whose session was never set
+  // has no orphaned session above and would otherwise wait with no error.
+  const orphanedThreadIds = new Set(orphanedThreads.map((thread) => thread.id));
+  const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
+  const pendingTurnStarts = yield* projectionTurns.listPendingTurnStarts().pipe(
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      (cause) =>
+        Effect.logWarning("failed to read pending turn starts", { cause }).pipe(Effect.as([])),
+    ),
+  );
+  const strandedThreadIds = new Set(
+    pendingTurnStarts
+      .map((pending) => pending.threadId)
+      .filter((threadId) => !orphanedThreadIds.has(threadId) && !liveThreadIds.has(threadId)),
+  );
+  for (const threadId of strandedThreadIds) {
+    const thread = threadsById.get(threadId);
+    if (thread === undefined || thread.deletedAt !== null) {
+      continue;
+    }
+    yield* Effect.gen(function* () {
+      const reconciledAt = DateTime.formatIso(yield* DateTime.now);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(yield* crypto.randomUUIDv4),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: thread.session?.providerName ?? null,
+          providerInstanceId:
+            thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+          runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+          activeTurnId: null,
+          lastError: STRANDED_TURN_START_ERROR,
+          updatedAt: reconciledAt,
+        },
+        createdAt: reconciledAt,
+      });
+    }).pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) => Effect.logWarning("failed to settle stranded turn start", { threadId, cause }),
+      ),
+    );
   }
 }).pipe(
   Effect.catchCauseIf(
