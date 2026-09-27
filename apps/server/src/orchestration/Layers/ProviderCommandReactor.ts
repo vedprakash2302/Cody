@@ -122,6 +122,34 @@ const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
+// Every thread's provider intents share one queue, so a provider call that
+// never returns would stop all threads. These bounds sit well above each
+// provider's own request timeouts; hitting one means the provider is stuck.
+const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(30);
+const PROVIDER_SESSION_START_TIMEOUT = Duration.minutes(2);
+
+const boundProviderCall =
+  (input: {
+    readonly provider: string | null | undefined;
+    readonly method: string;
+    readonly timeout: Duration.Duration;
+    readonly detail: string;
+  }) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration: input.timeout,
+        orElse: () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: providerErrorLabel(input.provider ?? undefined),
+              method: input.method,
+              detail: input.detail,
+            }),
+          ),
+      }),
+    );
+
 function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : "unknown";
@@ -740,7 +768,15 @@ const make = Effect.gen(function* () {
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         })
-        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+        .pipe(
+          boundProviderCall({
+            provider: preferredProvider,
+            method: "session.start",
+            timeout: PROVIDER_SESSION_START_TIMEOUT,
+            detail: "The provider session did not start within 2 minutes.",
+          }),
+          Effect.tap(() => refreshWorkspaceSnapshot),
+        );
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -1571,6 +1607,12 @@ const make = Effect.gen(function* () {
         }
 
         yield* providerService.stopSession({ threadId: event.payload.threadId }).pipe(
+          boundProviderCall({
+            provider: latestSession.providerName,
+            method: "session.stop",
+            timeout: PROVIDER_CONTROL_TIMEOUT,
+            detail: "The provider did not stop the session within 30 seconds.",
+          }),
           Effect.catchCause((stopCause) => {
             if (Cause.hasInterruptsOnly(stopCause)) {
               return Effect.interrupt;
@@ -1621,9 +1663,15 @@ const make = Effect.gen(function* () {
     };
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService
-      .interruptTurn({ threadId: event.payload.threadId })
-      .pipe(Effect.catchCause(recoverInterruptFailure));
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      boundProviderCall({
+        provider: session.providerName,
+        method: "turn.interrupt",
+        timeout: PROVIDER_CONTROL_TIMEOUT,
+        detail: "The provider did not stop the turn within 30 seconds.",
+      }),
+      Effect.catchCause(recoverInterruptFailure),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1653,6 +1701,12 @@ const make = Effect.gen(function* () {
         decision: event.payload.decision,
       })
       .pipe(
+        boundProviderCall({
+          provider: thread.session?.providerName,
+          method: "request.respond",
+          timeout: PROVIDER_CONTROL_TIMEOUT,
+          detail: "The provider did not accept the approval response within 30 seconds.",
+        }),
         Effect.catchCause((cause) =>
           appendProviderFailureActivity({
             threadId: event.payload.threadId,
@@ -1700,6 +1754,12 @@ const make = Effect.gen(function* () {
             : {}),
         })
         .pipe(
+          boundProviderCall({
+            provider: thread.session?.providerName,
+            method: "user-input.respond",
+            timeout: PROVIDER_CONTROL_TIMEOUT,
+            detail: "The provider did not accept the answer within 30 seconds.",
+          }),
           Effect.catchCause((cause) =>
             appendProviderFailureActivity({
               threadId: event.payload.threadId,
@@ -1735,7 +1795,14 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.andThen(
         thread.session && thread.session.status !== "stopped"
-          ? providerService.stopSession({ threadId: thread.id })
+          ? providerService.stopSession({ threadId: thread.id }).pipe(
+              boundProviderCall({
+                provider: thread.session.providerName,
+                method: "session.stop",
+                timeout: PROVIDER_CONTROL_TIMEOUT,
+                detail: "The provider did not stop the session within 30 seconds.",
+              }),
+            )
           : Effect.void,
       ),
       Effect.matchCauseEffect({
