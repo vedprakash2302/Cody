@@ -3429,21 +3429,18 @@ export function makeOpenCodeAdapter(
                     });
                   });
             }),
-            Effect.onExit((exit) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(promptAdmission.submissionSettled, undefined).pipe(
-                  Effect.ignore,
-                );
-                if (Exit.isFailure(exit)) {
-                  yield* Deferred.succeed(promptAdmission.acceptance, undefined).pipe(
-                    Effect.ignore,
-                  );
-                }
-              }),
-            ),
             Effect.asVoid,
           );
           const promptFiber = yield* promptEffect.pipe(Effect.forkIn(context.sessionScope));
+          // A stop can interrupt the fiber before it runs, which skips any
+          // `onExit` inside it. Fiber observers run for every exit, so stops
+          // and teardown waiting on `submissionSettled` always wake up.
+          promptFiber.addObserver((exit) => {
+            Deferred.doneUnsafe(promptAdmission.submissionSettled, Effect.void);
+            if (Exit.isFailure(exit)) {
+              Deferred.doneUnsafe(promptAdmission.acceptance, Effect.void);
+            }
+          });
           promptAdmission.promptFiber = promptFiber;
           if (nativeCommand) {
             context.commandFibers.add(promptFiber);
