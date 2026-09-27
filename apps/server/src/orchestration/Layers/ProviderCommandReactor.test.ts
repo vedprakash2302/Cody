@@ -3819,6 +3819,7 @@ describe("ProviderCommandReactor", () => {
             return thread?.session?.status === "stopped";
           }),
         );
+        yield* Effect.promise(() => harness.drain());
 
         const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
           (entry) => entry.id === ThreadId.make("thread-1"),
@@ -3897,11 +3898,16 @@ describe("ProviderCommandReactor", () => {
   effectIt.effect("stops the session when a provider interrupt never returns", () =>
     Effect.gen(function* () {
       const interruptStarted = yield* Deferred.make<void>();
+      const releaseInterrupt = yield* Deferred.make<void>();
       const harness = yield* Effect.promise(() =>
         createHarness({
           testClock: true,
+          // Stuck and uninterruptible, like an adapter hung in its own cleanup.
           interruptTurnEffect: () =>
-            Deferred.succeed(interruptStarted, undefined).pipe(Effect.andThen(Effect.never)),
+            Deferred.succeed(interruptStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseInterrupt)),
+              Effect.uninterruptible,
+            ),
         }),
       );
       const now = "2026-01-01T00:00:00.000Z";
@@ -3947,6 +3953,7 @@ describe("ProviderCommandReactor", () => {
         thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
       ).toMatchObject({ payload: { detail } });
       expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+      yield* Deferred.succeed(releaseInterrupt, undefined);
     }),
   );
 

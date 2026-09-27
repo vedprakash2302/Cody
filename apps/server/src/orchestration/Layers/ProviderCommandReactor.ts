@@ -22,6 +22,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -128,6 +129,9 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(30);
 const PROVIDER_SESSION_START_TIMEOUT = Duration.minutes(2);
 
+// The call runs in its own fiber and a timeout interrupts it in the
+// background. Waiting for that interruption could block the queue again when
+// the adapter is stuck in uninterruptible cleanup.
 const boundProviderCall =
   (input: {
     readonly provider: string | null | undefined;
@@ -136,19 +140,26 @@ const boundProviderCall =
     readonly detail: string;
   }) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.timeoutOrElse({
-        duration: input.timeout,
-        orElse: () =>
-          Effect.fail(
-            new ProviderAdapterRequestError({
-              provider: providerErrorLabel(input.provider ?? undefined),
-              method: input.method,
-              detail: input.detail,
-            }),
-          ),
-      }),
-    );
+    Effect.gen(function* () {
+      const call = yield* Effect.forkChild(effect);
+      return yield* Fiber.join(call).pipe(
+        Effect.timeoutOrElse({
+          duration: input.timeout,
+          orElse: () =>
+            Effect.forkDetach(Fiber.interrupt(call)).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: providerErrorLabel(input.provider ?? undefined),
+                    method: input.method,
+                    detail: input.detail,
+                  }),
+                ),
+              ),
+            ),
+        }),
+      );
+    });
 
 function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
