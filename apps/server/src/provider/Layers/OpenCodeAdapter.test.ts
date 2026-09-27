@@ -5908,6 +5908,52 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("completes a stop that lands before the prompt submission starts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-stop-before-prompt-submission-starts");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turnStarted = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.started"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const sendFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "Stop me before the prompt is submitted",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            "opencode/kimi-k3",
+          ),
+        })
+        .pipe(Effect.exit, Effect.forkChild);
+      yield* Fiber.join(turnStarted);
+
+      // The prompt submission is forked but has not run yet, so the stop
+      // interrupts it before it can report that the submission settled.
+      yield* adapter.interruptTurn(threadId);
+      const sendResult = yield* Fiber.join(sendFiber);
+
+      NodeAssert.equal(runtimeMock.state.promptCalls.length, 0);
+      NodeAssert.equal(Exit.isFailure(sendResult), true);
+      if (Exit.isFailure(sendResult)) {
+        NodeAssert.equal(Cause.hasInterruptsOnly(sendResult.cause), true);
+      }
+      const session = (yield* adapter.listSessions()).find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(session?.status, "ready");
+      NodeAssert.equal(session?.activeTurnId, undefined);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("treats MessageAbortedError as the acknowledgment for a pending user stop", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
