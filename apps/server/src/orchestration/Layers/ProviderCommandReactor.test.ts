@@ -638,6 +638,13 @@ describe("ProviderCommandReactor", () => {
       stateDir,
       drain,
       adjustClock: (duration: Duration.Input) => runEffect(TestClock.adjust(duration)),
+      /** Shuts the reactor down early, as afterEach would. */
+      dispose: async () => {
+        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void));
+        scope = null;
+        if (runtime) await runtime.dispose();
+        runtime = null;
+      },
       startReactor,
       runEffect,
       get titleRegenerationCompletionDispatchAttempts() {
@@ -3897,63 +3904,66 @@ describe("ProviderCommandReactor", () => {
 
   effectIt.effect("stops the session when a provider interrupt never returns", () =>
     Effect.gen(function* () {
-      const interruptStarted = yield* Deferred.make<void>();
       const releaseInterrupt = yield* Deferred.make<void>();
-      const harness = yield* Effect.promise(() =>
-        createHarness({
-          testClock: true,
-          // Stuck and uninterruptible, like an adapter hung in its own cleanup.
-          interruptTurnEffect: () =>
-            Deferred.succeed(interruptStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseInterrupt)),
-              Effect.uninterruptible,
-            ),
-        }),
-      );
-      const now = "2026-01-01T00:00:00.000Z";
+      yield* Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            testClock: true,
+            // Stuck and uninterruptible, like an adapter hung in its own cleanup.
+            interruptTurnEffect: () =>
+              Deferred.succeed(interruptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseInterrupt)),
+                Effect.uninterruptible,
+              ),
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
 
-      yield* harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-interrupt-hang"),
-        threadId: ThreadId.make("thread-1"),
-        session: {
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-interrupt-hang"),
           threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-1"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      });
-      yield* harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.make("cmd-turn-interrupt-hang"),
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-        createdAt: now,
-      });
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("cmd-turn-interrupt-hang"),
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+          createdAt: now,
+        });
 
-      yield* Deferred.await(interruptStarted);
-      yield* Effect.promise(() => harness.adjustClock("30 seconds"));
-      // The queue every thread shares is free again.
-      yield* Effect.promise(() => harness.drain());
+        yield* Deferred.await(interruptStarted);
+        yield* Effect.promise(() => harness.adjustClock("30 seconds"));
+        // The queue every thread shares is free again.
+        yield* Effect.promise(() => harness.drain());
 
-      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
-        (entry) => entry.id === ThreadId.make("thread-1"),
-      );
-      const detail = "The provider did not stop the turn within 30 seconds.";
-      expect(thread?.session).toMatchObject({
-        status: "stopped",
-        activeTurnId: null,
-        lastError: detail,
-      });
-      expect(
-        thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
-      ).toMatchObject({ payload: { detail } });
-      expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
-      yield* Deferred.succeed(releaseInterrupt, undefined);
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        const detail = "The provider did not stop the turn within 30 seconds.";
+        expect(thread?.session).toMatchObject({
+          status: "stopped",
+          activeTurnId: null,
+          lastError: detail,
+        });
+        expect(
+          thread?.activities.find((activity) => activity.kind === "provider.turn.interrupt.failed"),
+        ).toMatchObject({ payload: { detail } });
+        expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+        // Shutdown does not wait for the stuck call either.
+        yield* Effect.promise(() => harness.dispose());
+      }).pipe(Effect.ensuring(Deferred.succeed(releaseInterrupt, undefined)));
     }),
   );
 

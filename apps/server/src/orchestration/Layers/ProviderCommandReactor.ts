@@ -129,9 +129,9 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(30);
 const PROVIDER_SESSION_START_TIMEOUT = Duration.minutes(2);
 
-// The call runs in its own fiber and a timeout interrupts it in the
-// background. Waiting for that interruption could block the queue again when
-// the adapter is stuck in uninterruptible cleanup.
+// The call runs in a detached fiber. A timeout, or interruption of the caller,
+// interrupts it in the background: an adapter stuck in uninterruptible cleanup
+// must not hold the queue or the caller's own exit.
 const boundProviderCall =
   (input: {
     readonly provider: string | null | undefined;
@@ -140,26 +140,31 @@ const boundProviderCall =
     readonly detail: string;
   }) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* () {
-      const call = yield* Effect.forkChild(effect);
-      return yield* Fiber.join(call).pipe(
-        Effect.timeoutOrElse({
-          duration: input.timeout,
-          orElse: () =>
-            Effect.forkDetach(Fiber.interrupt(call)).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  new ProviderAdapterRequestError({
-                    provider: providerErrorLabel(input.provider ?? undefined),
-                    method: input.method,
-                    detail: input.detail,
-                  }),
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const call = yield* Effect.forkDetach(effect);
+        const interruptCall = Effect.forkDetach(Fiber.interrupt(call));
+        return yield* restore(
+          Fiber.join(call).pipe(
+            Effect.timeoutOrElse({
+              duration: input.timeout,
+              orElse: () =>
+                interruptCall.pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderAdapterRequestError({
+                        provider: providerErrorLabel(input.provider ?? undefined),
+                        method: input.method,
+                        detail: input.detail,
+                      }),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        }),
-      );
-    });
+            }),
+          ),
+        ).pipe(Effect.onInterrupt(() => interruptCall));
+      }),
+    );
 
 function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();

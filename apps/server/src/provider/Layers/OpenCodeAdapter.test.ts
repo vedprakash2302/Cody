@@ -761,7 +761,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         .pipe(Effect.forkChild);
       yield* Effect.promise(() => sessionGetObserved.promise);
       yield* Fiber.interrupt(startFiber);
+      const startExit = yield* Fiber.await(startFiber);
 
+      NodeAssert.equal(Exit.isFailure(startExit) && Cause.hasInterruptsOnly(startExit.cause), true);
       NodeAssert.deepEqual(runtimeMock.state.closeCalls, ["http://127.0.0.1:9999"]);
       NodeAssert.equal(sessionGetAborted, true);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);

@@ -2844,9 +2844,9 @@ export function makeOpenCodeAdapter(
           deleteContextIfCurrent(existing);
         }
 
-        // Uninterruptible from creating the session scope until the context is
-        // registered, so an interrupted start always closes the scope it made.
-        // Only the startup requests themselves can be interrupted.
+        // Uninterruptible from creating the session scope until the event stream
+        // connects, so an interrupted start always cleans up what it made. Only
+        // the startup requests and the connection wait can be interrupted.
         const registered = yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const sessionScope = yield* Scope.make();
@@ -2996,7 +2996,9 @@ export function makeOpenCodeAdapter(
             );
             if (Exit.isFailure(startedExit)) {
               yield* Scope.close(sessionScope, Exit.void).pipe(Effect.ignore);
-              return yield* toProcessError(input.threadId, Cause.squash(startedExit.cause));
+              return yield* Cause.hasInterruptsOnly(startedExit.cause)
+                ? Effect.interrupt
+                : toProcessError(input.threadId, Cause.squash(startedExit.cause));
             }
             const started = startedExit.value;
 
@@ -3061,6 +3063,31 @@ export function makeOpenCodeAdapter(
               return { started, context, raceWinner };
             }
             sessions.set(input.threadId, context);
+            const connectionExit = yield* Effect.exit(
+              restore(
+                Effect.gen(function* () {
+                  yield* startEventPump(context);
+                  yield* Deferred.await(context.firstConnection).pipe(
+                    Effect.timeout("10 seconds"),
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderAdapterRequestError({
+                          provider: PROVIDER,
+                          method: "event.subscribe",
+                          detail: "OpenCode event stream did not connect within 10 seconds.",
+                          cause,
+                        }),
+                    ),
+                  );
+                }),
+              ),
+            );
+            if (Exit.isFailure(connectionExit)) {
+              yield* closeStartingOpenCodeContext(context, started.created).pipe(
+                Effect.ensuring(Effect.sync(() => deleteContextIfCurrent(context))),
+              );
+              return yield* Effect.failCause(connectionExit.cause);
+            }
             return { started, context, raceWinner: undefined };
           }),
         );
@@ -3068,31 +3095,6 @@ export function makeOpenCodeAdapter(
           return (yield* awaitOpenCodeContextReady(registered.raceWinner)).session;
         }
         const { started, context } = registered;
-        const cleanupStartingContext = closeStartingOpenCodeContext(context, started.created).pipe(
-          Effect.ensuring(Effect.sync(() => deleteContextIfCurrent(context))),
-        );
-        const connectionExit = yield* Effect.gen(function* () {
-          yield* startEventPump(context);
-          yield* Deferred.await(context.firstConnection).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "event.subscribe",
-                  detail: "OpenCode event stream did not connect within 10 seconds.",
-                  cause,
-                }),
-            ),
-          );
-        }).pipe(
-          Effect.onInterrupt(() => cleanupStartingContext),
-          Effect.exit,
-        );
-        if (Exit.isFailure(connectionExit)) {
-          yield* cleanupStartingContext;
-          return yield* Effect.failCause(connectionExit.cause);
-        }
         yield* awaitOpenCodeContextReady(context);
         if (!started.created) {
           yield* schedulePendingRequestRecovery(context);
