@@ -2220,6 +2220,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           `Provider '${routed.adapter.provider}' does not support conversation rewind.`,
         );
       }
+      if (routed.adapter.assertRollbackReady) {
+        yield* routed.adapter.assertRollbackReady(routed.threadId);
+      }
     });
 
   const rollbackConversation: ProviderServiceMethod<"rollbackConversation"> = Effect.fn(

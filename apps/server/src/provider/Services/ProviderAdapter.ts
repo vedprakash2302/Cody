@@ -145,6 +145,12 @@ export interface ProviderAdapterShape<TError> {
   readonly readThread: (threadId: ThreadId) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
+   * Refuse a rewind the provider cannot perform right now, such as while it is
+   * still running. Called before any workspace files are restored.
+   */
+  readonly assertRollbackReady?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
    * Roll back a provider thread by N turns.
    */
   readonly rollbackThread: (

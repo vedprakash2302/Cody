@@ -809,6 +809,18 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // The agent would keep writing the files and history a rewind restores.
+    // Refuse before either changes; clients block this too.
+    if (thread.session?.status === "running" || thread.session?.status === "starting") {
+      yield* appendRevertFailureActivity({
+        threadId: thread.id,
+        turnCount: event.payload.turnCount,
+        detail: "Interrupt the current turn before rewinding.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     const checkpointCwd = yield* resolveCheckpointCwd({
       threadId: event.payload.threadId,
       thread,

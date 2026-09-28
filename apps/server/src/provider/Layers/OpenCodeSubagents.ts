@@ -48,6 +48,12 @@ interface OpenCodeSubagent {
   background: boolean;
   /** `idle`: a background run finished and awaits OpenCode's completion notice. */
   status: "running" | "waiting" | "idle" | "settled";
+  /**
+   * A background run settled by a session error. OpenCode still sends the
+   * launching session a failure notice, which arrives as a new prompt. An
+   * abort cancels the job instead, and cancelled jobs send no notice.
+   */
+  noticePending: boolean;
   readonly stepPartIds: Set<string>;
   readonly toolCallIds: Set<string>;
   readonly textPartIds: Set<string>;
@@ -67,6 +73,20 @@ export interface OpenCodeSubagentTracker {
 
 export function makeOpenCodeSubagentTracker(): OpenCodeSubagentTracker {
   return { agents: new Map(), messageRolesBySession: new Map() };
+}
+
+/**
+ * True while a subagent the thread's session launched may still write to it:
+ * it is running, waiting on a request, or ended in the background with
+ * OpenCode's notice about it not yet delivered. Nested subagents report to the
+ * subagent that launched them, never to the thread's session.
+ */
+export function hasLiveOpenCodeSubagents(tracker: OpenCodeSubagentTracker): boolean {
+  for (const agent of tracker.agents.values()) {
+    if (agent.ownerTaskId !== undefined) continue;
+    if (agent.status !== "settled" || agent.noticePending) return true;
+  }
+  return false;
 }
 
 /** Forgets every subagent, for when the thread moves to a new session. */
@@ -244,6 +264,7 @@ export function observeOpenCodeTaskToolPart(
       spawnTurnId: context.turnId,
       background,
       status: "running",
+      noticePending: false,
       stepPartIds: new Set(),
       toolCallIds: new Set(),
       textPartIds: new Set(),
@@ -383,9 +404,12 @@ export function observeOpenCodeChildEvent(
     case "session.error": {
       if (!agent || agent.status === "settled" || !agent.background) return [];
       const { error } = event.properties;
-      return asRecord(error)?.name === "MessageAbortedError"
-        ? [settle(tracker, agent, "stopped", undefined)]
-        : [settle(tracker, agent, "failed", sessionErrorText(error))];
+      if (asRecord(error)?.name === "MessageAbortedError") {
+        return [settle(tracker, agent, "stopped", undefined)];
+      }
+      const failed = settle(tracker, agent, "failed", sessionErrorText(error));
+      agent.noticePending = true;
+      return [failed];
     }
     case "permission.asked":
     case "question.asked": {
@@ -422,7 +446,9 @@ export function observeOpenCodeTaskNotification(
   const status = block.state === "error" ? "failed" : "completed";
   const agent = tracker.agents.get(block.taskId);
   if (agent) {
-    return agent.status === "settled" ? [] : [settle(tracker, agent, status, block.body)];
+    const settled = agent.status === "settled";
+    agent.noticePending = false;
+    return settled ? [] : [settle(tracker, agent, status, block.body)];
   }
   // Launched before this adapter started (server restart, resume). Its
   // earlier rows are persisted, so a bare completion is enough to settle it.

@@ -3,6 +3,7 @@ import { TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  hasLiveOpenCodeSubagents,
   makeOpenCodeSubagentTracker,
   observeOpenCodeChildEvent,
   observeOpenCodeTaskNotification,
@@ -437,6 +438,67 @@ describe("OpenCode subagent tracking", () => {
       },
     });
     expect(summarize(settled)).toEqual([["task.completed", "stopped"]]);
+  });
+
+  it("counts a background subagent live until OpenCode delivers its notice", () => {
+    const tracker = makeOpenCodeSubagentTracker();
+    const launch = (child: string) =>
+      observeOpenCodeTaskToolPart(
+        tracker,
+        taskPart({ callID: `call_${child}`, childId: child, status: "running", background: true }),
+        { turnId },
+      );
+    const notice = (child: string) =>
+      observeOpenCodeTaskNotification(
+        tracker,
+        `<task id="${child}" state="error">\n<task_error>\nfailed\n</task_error>\n</task>`,
+      );
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(false);
+
+    launch("ses_done");
+    observeOpenCodeChildEvent(tracker, "ses_done", childStatus("ses_done", "idle"));
+    // Finished work still has a notice to deliver to the parent.
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(true);
+    notice("ses_done");
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(false);
+
+    // A session error settles the task before OpenCode's failure notice.
+    launch("ses_failed");
+    observeOpenCodeChildEvent(tracker, "ses_failed", {
+      id: "evt_failed",
+      type: "session.error",
+      properties: { sessionID: "ses_failed", error: { name: "UnknownError", data: {} } },
+    } as unknown as OpenCodeEvent);
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(true);
+    expect(notice("ses_failed")).toEqual([]);
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(false);
+
+    // An abort cancels the job, and OpenCode sends no notice for it.
+    launch("ses_aborted");
+    observeOpenCodeChildEvent(tracker, "ses_aborted", {
+      id: "evt_aborted",
+      type: "session.error",
+      properties: { sessionID: "ses_aborted", error: { name: "MessageAbortedError", data: {} } },
+    } as unknown as OpenCodeEvent);
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(false);
+
+    // A nested run reports to the subagent that launched it, not to the thread.
+    launch("ses_owner");
+    observeOpenCodeChildEvent(
+      tracker,
+      "ses_owner",
+      childPart("ses_owner", {
+        ...taskPart({
+          callID: "call_nested",
+          childId: "ses_nested",
+          status: "running",
+          background: true,
+          sessionID: "ses_owner",
+        }),
+      }),
+    );
+    notice("ses_owner");
+    expect(hasLiveOpenCodeSubagents(tracker)).toBe(false);
   });
 
   it("stops every live subagent, including nested ones", () => {

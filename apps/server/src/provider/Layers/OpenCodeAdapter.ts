@@ -57,6 +57,7 @@ import {
   TRANSCRIPT_MESSAGE_LIMIT,
 } from "./OpenCodeSubagentTranscript.ts";
 import {
+  hasLiveOpenCodeSubagents,
   makeOpenCodeSubagentTracker,
   observeOpenCodeChildEvent,
   observeOpenCodeTaskNotification,
@@ -4591,126 +4592,294 @@ export function makeOpenCodeAdapter(
         );
       });
 
-    const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
-      function* (threadId, numTurns) {
-        const context = yield* ensureSessionContext(sessions, threadId);
-        const session = yield* runOpenCodeSdk("session.get", () =>
-          context.client.session.get({ sessionID: context.openCodeSessionId }),
-        ).pipe(Effect.mapError(toRequestError));
-        const messages = yield* runOpenCodeSdk("session.messages", () =>
-          context.client.session.messages({ sessionID: context.openCodeSessionId }),
-        ).pipe(Effect.mapError(toRequestError));
-        const entries = messages.data ?? [];
-        const revertMessageId = session.data?.revert?.messageID;
-        // T3 counts turns by the prompts that started them. OpenCode writes one
-        // assistant message per step, so its assistant count is not a turn count.
-        const firstRemovedIndex = openCodeRewindBoundary({
-          entries,
-          revertMessageId,
-          numTurns,
-          turnStartMessageIds: context.turnStartMessageIds,
-        });
-        const keptTurnStarts = context.turnStartMessageIds.slice(
-          0,
-          Math.max(0, context.turnStartMessageIds.length - Math.max(0, numTurns)),
+    /**
+     * Who besides a rewind could write to the thread's session. `busy`: OpenCode
+     * is running a prompt in it. `shared`: a subagent is still working or has a
+     * background result to deliver, or OpenCode stored a prompt of its own that
+     * has not started. `exclusive`: nothing else can add to the history.
+     */
+    const openCodeSessionWriters = Effect.fn("openCodeSessionWriters")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      const response = yield* runOpenCodeSdk("session.status", (signal) =>
+        context.client.session.status(undefined, { signal }),
+      );
+      const statuses = Option.getOrUndefined(decodeOpenCodeSessionStatusMap(response.data));
+      const parentStatus = statuses?.[context.openCodeSessionId]?.type;
+      if (parentStatus !== undefined && parentStatus !== "idle") return "busy" as const;
+      if (
+        statuses === undefined ||
+        context.pendingForeignPromptId !== undefined ||
+        hasLiveOpenCodeSubagents(context.subagents)
+      ) {
+        return "shared" as const;
+      }
+      // The tracker only knows subagents this adapter saw start. OpenCode's
+      // status also covers ones launched before a restart.
+      for (const [sessionId, status] of Object.entries(statuses)) {
+        if (status.type === "idle" || sessionId === context.openCodeSessionId) continue;
+        const related = yield* isRelatedOpenCodeSession(context, sessionId).pipe(
+          Effect.orElseSucceed(() => true),
         );
-        if (firstRemovedIndex !== undefined) {
-          const firstRemovedMessage = entries[firstRemovedIndex]!;
-          // Native revert also rewrites workspace files. Fork only the retained
-          // conversation so T3 alone decides whether filesystem changes survive.
-          const fork = yield* runOpenCodeSdk("session.fork", () =>
-            context.client.session.fork({
-              sessionID: context.openCodeSessionId,
-              messageID: firstRemovedMessage.info.id,
-              directory: context.directory,
-            }),
-          ).pipe(Effect.mapError(toRequestError));
-          if (!fork.data) {
-            return yield* toRequestError(
-              new OpenCodeRuntimeError({
-                operation: "session.fork",
-                detail: "OpenCode session.fork returned no session payload.",
-              }),
-            );
-          }
-          const forkedSessionId = fork.data.id;
-          const forkMessages = yield* runOpenCodeSdk("session.messages", () =>
-            context.client.session.messages({ sessionID: forkedSessionId }),
-          ).pipe(Effect.mapError(toRequestError));
-          if (forkMessages.data?.length !== firstRemovedIndex) {
-            return yield* toRequestError(
-              new OpenCodeRuntimeError({
-                operation: "session.fork",
-                detail: "OpenCode did not preserve the requested rewind boundary.",
-              }),
-            );
-          }
-          yield* runOpenCodeSdk("session.update", () =>
-            context.client.session.update({
-              sessionID: forkedSessionId,
-              permission: buildOpenCodePermissionRules(context.session.runtimeMode),
-            }),
-          ).pipe(Effect.mapError(toRequestError));
-          yield* clearPendingOpenCodeRequests(context, { type: "session.fork" });
-          // Subagents still running under the old session would report to a
-          // conversation the thread no longer follows. Stopping the old
-          // session also keeps a late result from waking it unwatched.
-          const orphanedSubagents = stopOpenCodeSubagents(context.subagents);
-          if (orphanedSubagents.length > 0) {
-            yield* abortOpenCodeSessionForTeardown(context);
-            yield* emitSubagentEvents(context, orphanedSubagents);
-          }
-          resetOpenCodeSubagentTracker(context.subagents);
-          context.pendingForeignPromptId = undefined;
-          context.openCodeSessionId = forkedSessionId;
-          context.relatedSessionIds.clear();
-          context.relatedSessionIds.add(forkedSessionId);
-          context.messageRoleById.clear();
-          context.textPartsByMessageId.clear();
-          context.compactionSummaryMessageIds.clear();
-          context.turnTokenUsage = undefined;
-          context.activeTurnId = undefined;
-          context.pendingContextOverflow = undefined;
-          context.interruptedTurnId = undefined;
-          context.reconcileIdleStatus = false;
-          context.awaitingBusyAfterInterruption = false;
-          context.pendingIdleReconciliation = undefined;
-          // Forked messages get new ids in the same order.
-          const forkedIds = forkMessages.data.map((entry) => entry.info.id);
-          context.turnStartMessageIds = keptTurnStarts.map((id) => {
-            const index = entries.findIndex((entry) => entry.info.id === id);
-            return index >= 0 && index < firstRemovedIndex ? (forkedIds[index] ?? id) : id;
-          });
-          context.session = {
-            ...context.session,
-            resumeCursor: openCodeResumeCursor(forkedSessionId, context.turnStartMessageIds),
-            updatedAt: yield* nowIso,
-          };
-          yield* emit({
-            ...(yield* buildEventBase({ threadId })),
-            type: "thread.started",
-            payload: { providerThreadId: forkedSessionId },
-          });
-          return {
-            threadId,
-            turns: forkMessages.data
-              .filter((entry) => entry.info.role === "assistant")
-              .map((entry) => ({
-                id: TurnId.make(entry.info.id),
-                items: [entry.info, ...entry.parts],
-              })),
-          };
-        }
+        if (related) return "shared" as const;
+      }
+      return "exclusive" as const;
+    });
 
-        if (keptTurnStarts.length !== context.turnStartMessageIds.length) {
+    /**
+     * Deletes the rewound messages in place. Newest go first, so a failure part
+     * way leaves a prefix of the conversation and retrying the same rewind
+     * finds the same boundary. Deleting never touches workspace files.
+     */
+    const truncateOpenCodeHistory = Effect.fn("truncateOpenCodeHistory")(function* (
+      context: OpenCodeSessionContext,
+      removed: ReadonlyArray<OpenCodeMessageEntry>,
+    ) {
+      for (let index = removed.length - 1; index >= 0; index -= 1) {
+        const messageId = removed[index]!.info.id;
+        yield* runOpenCodeSdk("session.deleteMessage", (signal) =>
+          context.client.session.deleteMessage(
+            { sessionID: context.openCodeSessionId, messageID: messageId },
+            { signal },
+          ),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: cause.operation,
+                detail: `OpenCode could not finish the rewind: ${cause.detail}. Rewind again once OpenCode is idle.`,
+                cause: cause.cause,
+              }),
+          ),
+        );
+        context.messageRoleById.delete(messageId);
+        context.textPartsByMessageId.delete(messageId);
+        context.compactionSummaryMessageIds.delete(messageId);
+      }
+    });
+
+    // Measured on OpenCode 1.18: a fork copies each kept message and part for
+    // about 3.5 ms apiece, and deleting a message takes about 10 ms. Cutting
+    // hundreds of messages to keep a short history, such as rewinding to the
+    // start of a long thread, is quicker as a fork. Small cuts stay in place.
+    const OPENCODE_DELETE_COST_PER_MESSAGE = 3;
+    const OPENCODE_IN_PLACE_MESSAGE_BUDGET = 100;
+    const forkIsCheaper = (
+      entries: ReadonlyArray<OpenCodeMessageEntry>,
+      firstRemovedIndex: number,
+    ) => {
+      const removed = entries.length - firstRemovedIndex;
+      if (removed <= OPENCODE_IN_PLACE_MESSAGE_BUDGET) return false;
+      let copied = 0;
+      for (const entry of entries.slice(0, firstRemovedIndex)) copied += 1 + entry.parts.length;
+      return copied < removed * OPENCODE_DELETE_COST_PER_MESSAGE;
+    };
+
+    const rewindRefused = (detail: string) =>
+      new ProviderAdapterRequestError({ provider: PROVIDER, method: "session.rewind", detail });
+
+    // A live turn is still writing the history a rewind would cut.
+    const hasLiveOpenCodeTurn = (context: OpenCodeSessionContext) =>
+      context.activeTurnId !== undefined ||
+      context.promptAdmission !== undefined ||
+      context.cancellation !== undefined ||
+      context.compacting;
+
+    /** Why the thread cannot rewind now, if anything blocks it. */
+    const openCodeRewindBlocker = Effect.fn("openCodeRewindBlocker")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      if (hasLiveOpenCodeTurn(context)) return "Interrupt the current turn before rewinding.";
+      const writers = yield* openCodeSessionWriters(context).pipe(Effect.mapError(toRequestError));
+      return writers === "busy"
+        ? "OpenCode is still working in this thread. Wait for it to finish, then rewind."
+        : undefined;
+    });
+
+    // Runs before T3 restores any files, so a refused rewind changes nothing.
+    const assertRollbackReady: OpenCodeAdapterShape["assertRollbackReady"] = Effect.fn(
+      "assertRollbackReady",
+    )(function* (threadId) {
+      const context = sessions.get(threadId);
+      if (!context || (yield* Ref.get(context.stopped))) return;
+      const blocker = yield* openCodeRewindBlocker(context);
+      if (blocker) return yield* rewindRefused(blocker);
+    });
+
+    const rewindOpenCodeThread = Effect.fn("rewindOpenCodeThread")(function* (
+      context: OpenCodeSessionContext,
+      threadId: ThreadId,
+      numTurns: number,
+    ) {
+      if (sessions.get(threadId) !== context || (yield* Ref.get(context.stopped))) {
+        return yield* rewindRefused("The OpenCode session stopped before the rewind finished.");
+      }
+      if (hasLiveOpenCodeTurn(context)) {
+        return yield* rewindRefused("Interrupt the current turn before rewinding.");
+      }
+      const session = yield* runOpenCodeSdk("session.get", () =>
+        context.client.session.get({ sessionID: context.openCodeSessionId }),
+      ).pipe(Effect.mapError(toRequestError));
+      const messages = yield* runOpenCodeSdk("session.messages", () =>
+        context.client.session.messages({ sessionID: context.openCodeSessionId }),
+      ).pipe(Effect.mapError(toRequestError));
+      const entries = messages.data ?? [];
+      const revertMessageId = session.data?.revert?.messageID;
+      // T3 counts turns by the prompts that started them. OpenCode writes one
+      // assistant message per step, so its assistant count is not a turn count.
+      const firstRemovedIndex = openCodeRewindBoundary({
+        entries,
+        revertMessageId,
+        numTurns,
+        turnStartMessageIds: context.turnStartMessageIds,
+      });
+      const keptTurnStarts = context.turnStartMessageIds.slice(
+        0,
+        Math.max(0, context.turnStartMessageIds.length - Math.max(0, numTurns)),
+      );
+      if (firstRemovedIndex !== undefined) {
+        const writers = yield* openCodeSessionWriters(context).pipe(
+          Effect.mapError(toRequestError),
+        );
+        if (writers === "busy") {
+          return yield* rewindRefused(
+            "OpenCode is still working in this thread. Wait for it to finish, then rewind.",
+          );
+        }
+        // A boundary inferred from history moves as messages go, so a retry
+        // after a partial delete would cut retained turns. Recorded starts
+        // stay put; the fork below never changes the old history. A native
+        // revert marker keeps a file snapshot that deleting messages leaves in
+        // place, and OpenCode's unrevert would restore it. A fork has none.
+        if (
+          writers === "exclusive" &&
+          numTurns <= context.turnStartMessageIds.length &&
+          revertMessageId === undefined &&
+          !forkIsCheaper(entries, firstRemovedIndex)
+        ) {
+          // Cost follows the rewound turns, not the length of the history.
+          yield* truncateOpenCodeHistory(context, entries.slice(firstRemovedIndex));
           context.turnStartMessageIds = keptTurnStarts;
           context.session = {
             ...context.session,
             resumeCursor: openCodeResumeCursor(context.openCodeSessionId, keptTurnStarts),
             updatedAt: yield* nowIso,
           };
+          return {
+            threadId,
+            turns: openCodeSnapshotTurns(entries.slice(0, firstRemovedIndex), undefined),
+          };
         }
-        return { threadId, turns: openCodeSnapshotTurns(entries, revertMessageId) };
+        const firstRemovedMessage = entries[firstRemovedIndex]!;
+        // A subagent or OpenCode's own prompt may still write to this
+        // session. Fork the retained conversation instead, so late writes land
+        // in a session the thread no longer follows. Native revert would also
+        // rewrite workspace files, which only T3 decides.
+        const fork = yield* runOpenCodeSdk("session.fork", () =>
+          context.client.session.fork({
+            sessionID: context.openCodeSessionId,
+            messageID: firstRemovedMessage.info.id,
+            directory: context.directory,
+          }),
+        ).pipe(Effect.mapError(toRequestError));
+        if (!fork.data) {
+          return yield* toRequestError(
+            new OpenCodeRuntimeError({
+              operation: "session.fork",
+              detail: "OpenCode session.fork returned no session payload.",
+            }),
+          );
+        }
+        const forkedSessionId = fork.data.id;
+        const forkMessages = yield* runOpenCodeSdk("session.messages", () =>
+          context.client.session.messages({ sessionID: forkedSessionId }),
+        ).pipe(Effect.mapError(toRequestError));
+        if (forkMessages.data?.length !== firstRemovedIndex) {
+          return yield* toRequestError(
+            new OpenCodeRuntimeError({
+              operation: "session.fork",
+              detail: "OpenCode did not preserve the requested rewind boundary.",
+            }),
+          );
+        }
+        yield* runOpenCodeSdk("session.update", () =>
+          context.client.session.update({
+            sessionID: forkedSessionId,
+            permission: buildOpenCodePermissionRules(context.session.runtimeMode),
+          }),
+        ).pipe(Effect.mapError(toRequestError));
+        yield* clearPendingOpenCodeRequests(context, { type: "session.fork" });
+        // Subagents still running under the old session would report to a
+        // conversation the thread no longer follows. Stopping the old
+        // session tree also keeps a late result, or a prompt OpenCode queued
+        // itself, from waking it unwatched. That includes subagents launched
+        // before a restart, which the tracker never saw.
+        const orphanedSubagents = stopOpenCodeSubagents(context.subagents);
+        yield* abortOpenCodeSessionForTeardown(context);
+        if (orphanedSubagents.length > 0) {
+          yield* emitSubagentEvents(context, orphanedSubagents);
+        }
+        resetOpenCodeSubagentTracker(context.subagents);
+        context.pendingForeignPromptId = undefined;
+        context.openCodeSessionId = forkedSessionId;
+        context.relatedSessionIds.clear();
+        context.relatedSessionIds.add(forkedSessionId);
+        context.messageRoleById.clear();
+        context.textPartsByMessageId.clear();
+        context.compactionSummaryMessageIds.clear();
+        context.turnTokenUsage = undefined;
+        context.activeTurnId = undefined;
+        context.pendingContextOverflow = undefined;
+        context.interruptedTurnId = undefined;
+        context.reconcileIdleStatus = false;
+        context.awaitingBusyAfterInterruption = false;
+        context.pendingIdleReconciliation = undefined;
+        // Forked messages get new ids in the same order.
+        const forkedIds = forkMessages.data.map((entry) => entry.info.id);
+        context.turnStartMessageIds = keptTurnStarts.map((id) => {
+          const index = entries.findIndex((entry) => entry.info.id === id);
+          return index >= 0 && index < firstRemovedIndex ? (forkedIds[index] ?? id) : id;
+        });
+        context.session = {
+          ...context.session,
+          resumeCursor: openCodeResumeCursor(forkedSessionId, context.turnStartMessageIds),
+          updatedAt: yield* nowIso,
+        };
+        yield* emit({
+          ...(yield* buildEventBase({ threadId })),
+          type: "thread.started",
+          payload: { providerThreadId: forkedSessionId },
+        });
+        return {
+          threadId,
+          turns: forkMessages.data
+            .filter((entry) => entry.info.role === "assistant")
+            .map((entry) => ({
+              id: TurnId.make(entry.info.id),
+              items: [entry.info, ...entry.parts],
+            })),
+        };
+      }
+
+      if (keptTurnStarts.length !== context.turnStartMessageIds.length) {
+        context.turnStartMessageIds = keptTurnStarts;
+        context.session = {
+          ...context.session,
+          resumeCursor: openCodeResumeCursor(context.openCodeSessionId, keptTurnStarts),
+          updatedAt: yield* nowIso,
+        };
+      }
+      return { threadId, turns: openCodeSnapshotTurns(entries, revertMessageId) };
+    });
+
+    const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
+      function* (threadId, numTurns) {
+        const context = yield* ensureSessionContext(sessions, threadId);
+        // The prompt lock keeps a turn from starting while history is cut.
+        return yield* context.promptSemaphore.withPermit(
+          rewindOpenCodeThread(context, threadId, numTurns),
+        );
       },
     );
 
@@ -4745,6 +4914,7 @@ export function makeOpenCodeAdapter(
       hasSession,
       readThread,
       readSubagentTranscript,
+      assertRollbackReady,
       rollbackThread,
       stopAll,
       get streamEvents() {
