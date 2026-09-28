@@ -66,5 +66,7 @@
   "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
   "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts",
   "apps/server/src/serverRuntimeStartup.reconcile.test.ts",
-  "apps/server/src/persistence/Layers/ProjectionRepositories.test.ts"
+  "apps/server/src/persistence/Layers/ProjectionRepositories.test.ts",
+  "apps/desktop/src/preview/Manager.test.ts",
+  "apps/web/src/browser/HostedBrowserWebview.test.tsx"
 ]
