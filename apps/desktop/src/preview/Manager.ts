@@ -1961,6 +1961,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const humanInput = (_event: unknown, rawSignal?: unknown): void => {
       runFork(handleHumanInput(rawSignal));
     };
+    // Nothing else tells the tab its guest is gone, so without this it keeps
+    // the dead id and refresh fails until something navigates.
+    const guestDestroyed = (): void => {
+      runFork(forgetDestroyedGuest(tabId, wc.id, attachmentId, "destroyed-event"));
+    };
     const mouseNavigate = (_event: unknown, payload?: unknown): void => {
       const direction =
         typeof payload === "object" && payload !== null && "direction" in payload
@@ -2024,6 +2029,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("audio-state-changed", audioStateChanged);
         wc.off("did-create-window", windowCreated);
         wc.off("before-input-event", beforeInput);
+        wc.off("destroyed", guestDestroyed);
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
         wc.ipc.off(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.off(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
@@ -2060,6 +2066,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         });
         wc.on("did-create-window", windowCreated);
         wc.on("before-input-event", beforeInput);
+        wc.on("destroyed", guestDestroyed);
       });
       yield* Ref.update(attachedRef, (attached) =>
         replaceMap(attached, (copy) => {
@@ -2390,6 +2397,67 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  /**
+   * Drops an open tab's reference to a guest that no longer exists, so
+   * operations fail as not-initialized instead of naming a dead WebContents
+   * until the renderer registers a replacement. Replacing the guest is the
+   * renderer's job: HostedBrowserWebview remounts on its own `destroyed`
+   * event. A guest already replaced by a newer registration is left alone.
+   */
+  const forgetDestroyedGuest = Effect.fn("PreviewManager.forgetDestroyedGuest")(function* (
+    tabId: string,
+    webContentsId: number,
+    expectedAttachmentId: symbol | undefined,
+    detectedBy: "destroyed-event" | "navigate",
+  ) {
+    yield* withTabLifecycleLock(
+      tabId,
+      Effect.gen(function* () {
+        const currentTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+        const currentAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
+        const currentWebContents = webContents.fromId(webContentsId);
+        if (
+          currentTab?.webContentsId !== webContentsId ||
+          currentAttachment?.attachmentId !== expectedAttachmentId ||
+          (currentWebContents && !currentWebContents.isDestroyed())
+        ) {
+          return;
+        }
+        // Pairs with the renderer's `web.preview.*` spans to tell whether the
+        // app removed the webview or the guest died underneath it.
+        yield* Effect.logInfo("Preview tab lost its guest.", {
+          tabId,
+          webContentsId,
+          detectedBy,
+          navStatus: currentTab.navStatus.kind,
+        });
+        yield* Effect.all(
+          [
+            detachControlSession(webContentsId),
+            detachListeners(webContentsId),
+            cancelPickElement(tabId),
+          ],
+          { concurrency: 3, discard: true },
+        );
+        const detached = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
+          const current = tabs.get(tabId);
+          if (current?.webContentsId !== webContentsId) {
+            return [Option.none<PreviewTabState>(), tabs] as const;
+          }
+          const { favicon: _favicon, ...currentWithoutFavicon } = current;
+          const next: PreviewTabState = { ...currentWithoutFavicon, webContentsId: null };
+          return [
+            Option.some(next),
+            replaceMap(tabs, (copy) => {
+              copy.set(tabId, next);
+            }),
+          ] as const;
+        });
+        if (Option.isSome(detached)) yield* emitIfCurrent(tabId, detached.value);
+      }),
+    );
+  });
+
   const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
     const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
       normalizePreviewUrl(rawUrl),
@@ -2436,43 +2504,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
       const expectedAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
-      yield* withTabLifecycleLock(
+      yield* forgetDestroyedGuest(
         tabId,
-        Effect.gen(function* () {
-          const currentTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
-          const currentAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
-          const currentWebContents = webContents.fromId(webContentsId);
-          if (
-            currentTab?.webContentsId !== webContentsId ||
-            currentAttachment !== expectedAttachment ||
-            (currentWebContents && !currentWebContents.isDestroyed())
-          ) {
-            return;
-          }
-          yield* Effect.all(
-            [
-              detachControlSession(webContentsId),
-              detachListeners(webContentsId),
-              cancelPickElement(tabId),
-            ],
-            { concurrency: 3, discard: true },
-          );
-          const detached = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
-            const current = tabs.get(tabId);
-            if (current?.webContentsId !== webContentsId) {
-              return [Option.none<PreviewTabState>(), tabs] as const;
-            }
-            const { favicon: _favicon, ...currentWithoutFavicon } = current;
-            const next: PreviewTabState = { ...currentWithoutFavicon, webContentsId: null };
-            return [
-              Option.some(next),
-              replaceMap(tabs, (copy) => {
-                copy.set(tabId, next);
-              }),
-            ] as const;
-          });
-          if (Option.isSome(detached)) yield* emitIfCurrent(tabId, detached.value);
-        }),
+        webContentsId,
+        expectedAttachment?.attachmentId,
+        "navigate",
       );
       return;
     }

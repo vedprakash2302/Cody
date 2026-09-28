@@ -867,6 +867,106 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("releases a guest destroyed while its tab stays open", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const previous = makeFaviconWebContents();
+        const replacement = makeFaviconWebContents({ id: 43 });
+        fromId.mockImplementation((id) =>
+          id === 42 ? previous.webContents : id === 43 ? replacement.webContents : null,
+        );
+        const states: PreviewManager.PreviewTabState[] = [];
+        const released = yield* Deferred.make<void>();
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.gen(function* () {
+            states.push(state);
+            if (state.webContentsId === null && states.length > 1) {
+              yield* Deferred.succeed(released, undefined);
+            }
+          }),
+        );
+        yield* manager.createTab("tab_guest_destroyed");
+        yield* manager.registerWebview("tab_guest_destroyed", 42);
+
+        previous.setDestroyed(true);
+        previous.listeners.get("destroyed")!();
+        yield* Deferred.await(released);
+
+        expect(states.at(-1)).toMatchObject({
+          webContentsId: null,
+          navStatus: { kind: "Success", url: "http://localhost:3200/" },
+        });
+        expect(previous.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
+
+        yield* manager.registerWebview("tab_guest_destroyed", 43);
+        expect(states.at(-1)).toMatchObject({ webContentsId: 43 });
+      }),
+    ),
+  );
+
+  // A destroyed event can already be queued when the guest is replaced or its
+  // tab closes. Each follow-up call below takes the tab's lifecycle lock, so it
+  // runs after the stale cleanup has either finished or declined.
+  effectIt.effect("ignores a destroyed event from a guest that was already replaced", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const previous = makeFaviconWebContents();
+        const replacement = makeFaviconWebContents({ id: 43 });
+        fromId.mockImplementation((id) =>
+          id === 42 ? previous.webContents : id === 43 ? replacement.webContents : null,
+        );
+        yield* manager.createTab("tab_stale_destroyed");
+        yield* manager.registerWebview("tab_stale_destroyed", 42);
+        const staleDestroyed = previous.listeners.get("destroyed")!;
+        yield* manager.registerWebview("tab_stale_destroyed", 43);
+        const states: PreviewManager.PreviewTabState[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => {
+            states.push(state);
+          }),
+        );
+
+        previous.setDestroyed(true);
+        staleDestroyed();
+        yield* manager.registerWebview("tab_stale_destroyed", 43);
+
+        expect(states.filter((state) => state.webContentsId === null)).toEqual([]);
+        expect(yield* manager.automationStatus("tab_stale_destroyed")).toMatchObject({
+          available: true,
+        });
+      }),
+    ),
+  );
+
+  effectIt.effect("ignores a destroyed event that lands after its tab closed", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        fromId.mockImplementation((id) => (id === 42 ? preview.webContents : null));
+        yield* manager.createTab("tab_closed_destroyed");
+        yield* manager.registerWebview("tab_closed_destroyed", 42);
+        const staleDestroyed = preview.listeners.get("destroyed")!;
+        yield* manager.closeTab("tab_closed_destroyed");
+        const states: PreviewManager.PreviewTabState[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => {
+            states.push(state);
+          }),
+        );
+
+        preview.setDestroyed(true);
+        staleDestroyed();
+        yield* manager.closeTab("tab_closed_destroyed");
+
+        expect(states).toEqual([]);
+        expect(yield* manager.automationStatus("tab_closed_destroyed")).toMatchObject({
+          available: false,
+          url: null,
+        });
+      }),
+    ),
+  );
+
   effectIt.effect("detaches through the pinned debugger after the webview is destroyed", () =>
     withManager((manager) =>
       Effect.gen(function* () {
