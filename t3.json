@@ -1,6 +1,6 @@
 {
   "$schema": "https://t3.codes/schema/t3.json",
-  "iconPath": "assets/cody/icon-180.png",
+  "iconPath": "assets/cody/project-icon.svg",
   "scripts": [
     {
       "name": "Preview This Checkout",
