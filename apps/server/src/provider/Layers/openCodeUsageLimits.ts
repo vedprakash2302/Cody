@@ -1,4 +1,5 @@
 import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
 
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -157,6 +158,29 @@ const readCopilotWindows = Effect.fn("readCopilotWindows")(function* (
   return windows.length > 0 ? windows : ("unsupported" as const);
 });
 
+/**
+ * Identifies the credentials behind the reported windows. Neither usage
+ * response has an account ID. An unkeyed hash matches across environments
+ * without a shared secret. It permits offline guesses, but Go keys and GitHub
+ * OAuth tokens are randomly generated. Go-only limits hash exactly as upstream
+ * does, so they still pool with environments running upstream T3 Code.
+ */
+function credentialFingerprint(input: {
+  readonly goKey: string | undefined;
+  readonly copilot: typeof CopilotAuth.Type | undefined;
+}) {
+  const hash = NodeCrypto.createHash("sha256");
+  if (input.goKey) hash.update("opencode-go\0").update(input.goKey);
+  if (input.copilot) {
+    hash
+      .update("\0github-copilot\0")
+      .update(input.copilot.enterpriseUrl ?? "")
+      .update("\0")
+      .update(input.copilot.refresh);
+  }
+  return hash.digest("hex");
+}
+
 const guardProbe = <E, R>(probe: Effect.Effect<ProbeResult, E, R>) =>
   probe.pipe(
     Effect.timeout("5 seconds"),
@@ -212,7 +236,18 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
     );
     const results: ReadonlyArray<readonly [string, ProbeResult]> = Object.entries(probes);
     const windows = results.flatMap(([, result]) => (typeof result === "string" ? [] : result));
-    if (windows.length > 0) return makeUsageLimits({ checkedAt, windows });
+    if (windows.length > 0) {
+      return {
+        ...makeUsageLimits({ checkedAt, windows }),
+        credentialFingerprint: credentialFingerprint({
+          goKey: typeof probes["OpenCode Go"] === "string" ? undefined : goKey,
+          copilot:
+            typeof probes["GitHub Copilot"] === "string"
+              ? undefined
+              : Option.getOrUndefined(copilotAuth),
+        }),
+      };
+    }
     const failed = results.filter(([, result]) => result === "probeFailed").map(([name]) => name);
     return failed.length > 0
       ? makeUnavailableUsageLimits({

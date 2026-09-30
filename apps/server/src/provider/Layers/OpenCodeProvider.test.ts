@@ -1,4 +1,5 @@
 import * as NodeAssert from "node:assert/strict";
+import * as NodeCrypto from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -71,6 +72,10 @@ it.effect("reads Go limits with the instance's XDG credentials and preserves res
       Effect.provide(NodeServices.layer),
     );
     NodeAssert.equal(limits.unavailable, undefined);
+    NodeAssert.equal(
+      limits.credentialFingerprint,
+      NodeCrypto.createHash("sha256").update("opencode-go\0instance-key").digest("hex"),
+    );
     NodeAssert.deepEqual(
       limits.windows.map(({ kind, usedPercent, resetsAt: reset }) => ({
         kind,
@@ -139,6 +144,7 @@ it.effect("keeps Go entitlement absence distinct from failed or malformed usage 
         Effect.provide(NodeServices.layer),
       );
       NodeAssert.equal(limits.unavailable?.reason, reason);
+      NodeAssert.equal(limits.credentialFingerprint, undefined);
       NodeAssert.deepEqual(limits.windows, []);
     }
   }),
@@ -255,7 +261,7 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
   Effect.gen(function* () {
     const auth =
       '{"opencode-go":{"type":"api","key":"go-key"},"github-copilot":{"type":"oauth","refresh":"gho_token"}}';
-    const probe = (failing: "go" | "copilot" | "both" | "copilotUnlimited") =>
+    const probe = (failing: "none" | "go" | "copilot" | "both" | "copilotUnlimited") =>
       readOpenCodeUsageLimits({
         enabled: true,
         serverUrl: "",
@@ -315,6 +321,24 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
     });
     const copilotUnlimited = yield* probe("copilotUnlimited");
     NodeAssert.equal(copilotUnlimited.windows.length, 3);
+
+    // Pooled views match accounts by the credentials behind the shown windows.
+    // Go alone must hash as upstream does so it pools with upstream environments.
+    const goOnlyFingerprint = NodeCrypto.createHash("sha256")
+      .update("opencode-go\0go-key")
+      .digest("hex");
+    NodeAssert.equal(copilotFailed.credentialFingerprint, goOnlyFingerprint);
+    NodeAssert.equal(copilotUnlimited.credentialFingerprint, goOnlyFingerprint);
+    const bothAnswered = yield* probe("none");
+    NodeAssert.ok(goFailed.credentialFingerprint);
+    NodeAssert.ok(bothAnswered.credentialFingerprint);
+    const fingerprints = new Set([
+      goOnlyFingerprint,
+      goFailed.credentialFingerprint,
+      bothAnswered.credentialFingerprint,
+    ]);
+    NodeAssert.equal(fingerprints.size, 3);
+    NodeAssert.equal(bothFailed.credentialFingerprint, undefined);
   }),
 );
 
