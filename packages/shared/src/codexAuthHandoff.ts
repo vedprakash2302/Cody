@@ -84,8 +84,11 @@ export function codexCallbackUrl(value: string, redirectUri: string, state: stri
   return callback;
 }
 
+// Cody registers its own URL scheme, so Cody's web client hands off to Cody desktop.
+const handoffScheme = (development: boolean) => (development ? "cody-dev" : "cody");
+
 export function codexAuthHandoffUrl(input: CodexAuthHandoff, development = false) {
-  const url = new URL(`${development ? "t3code-dev" : "t3code"}://auth/codex`);
+  const url = new URL(`${handoffScheme(development)}://auth/codex`);
   url.searchParams.set("request", encodeHandoff(input));
   return url.toString();
 }
@@ -95,7 +98,7 @@ export function readCodexAuthHandoff(value: string, development: boolean) {
     const url = new URL(value);
     if (
       value.length > 32_768 ||
-      url.protocol !== (development ? "t3code-dev:" : "t3code:") ||
+      url.protocol !== `${handoffScheme(development)}:` ||
       url.host !== "auth" ||
       url.pathname !== "/codex" ||
       url.username ||
