@@ -1,6 +1,6 @@
 # Cody icons
 
-`icon.svg` is the app icon source: the terminal pup, a black prompt window with pointed spitz ears showing `>_`, on a white background. Its mark has the same straight-line geometry as the header SVG, with padding for app-icon sizes. `source.png` preserves an earlier concept and is not used by the app. Regenerate the desktop and web sizes with:
+`icon.svg` is the app icon source: the terminal pup, a black prompt window with pointed spitz ears showing `>_`, on a white background. Its full-size mark has the same straight-line geometry as the header and project icons. `source.png` preserves an earlier concept and is not used by the app. Regenerate the desktop and web sizes with:
 
 ```sh
 node scripts/export-cody-icons.mjs
