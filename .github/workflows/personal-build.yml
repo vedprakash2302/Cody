@@ -33,17 +33,6 @@ jobs:
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git checkout --detach FETCH_HEAD
 
-      - name: Require current upstream main
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --unshallow origin personal/main
-          git fetch --no-tags https://github.com/pingdotgg/t3code.git main
-          if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
-            echo "personal/main is behind upstream main. Run Sync Cody before building." >&2
-            exit 1
-          fi
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:

@@ -174,7 +174,7 @@ export function main(action, cwd = process.cwd()) {
   }
   const remotes = resolveRemotes(root);
   assertClean(root);
-  if (action === "sync" || action === "release") assertDevStopped(root);
+  if (action === "sync") assertDevStopped(root);
   const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const lock = NodePath.join(commonDir, "cody-maintenance.lock");
   try {
@@ -187,8 +187,8 @@ export function main(action, cwd = process.cwd()) {
     );
   }
   try {
-    if (action === "release") run("gh", ["auth", "status"], root);
-    if (action === "sync" || action === "release") syncCheckout(root, remotes);
+    if (action === "sync") syncCheckout(root, remotes);
+    else run("gh", ["auth", "status"], root);
     run("vp", ["install", "--frozen-lockfile"], root);
     check(root);
     assertClean(root);
