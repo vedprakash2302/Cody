@@ -54,7 +54,7 @@ gh pr create --repo pingdotgg/t3code --base main --head vedprakash2302:feat/my-f
 
 Do not merge `personal/main` into a contribution branch. Update that branch from upstream instead. Prefer a merge for a published branch unless the user explicitly requests a history rewrite.
 
-Fork-only work such as Cody branding and personal automation starts from `personal/main` on a separate `personal/` branch. Keep it out of upstream PRs. Cody uses its own application ID, `cody://` URL scheme, Electron profile, and `~/.cody` desktop data directory so it can run alongside official T3. Its WSL backend also uses `~/.cody`. Preserve each app's existing data and credentials during updates. T3 Connect and the official App Store app keep their upstream names.
+Fork-only work such as Cody branding and personal automation starts from a current, upstream-synced `personal/main` on a separate `personal/` branch. Ved wants every Cody change to take the available upstream changes too, not leave them for a later release. Keep fork-only work out of upstream PRs. Cody uses its own application ID, `cody://` URL scheme, Electron profile, and `~/.cody` desktop data directory so it can run alongside official T3. Its WSL backend also uses `~/.cody`. Preserve each app's existing data and credentials during updates. T3 Connect and the official App Store app keep their upstream names.
 
 Cody branding is monochrome: the app icon is the black terminal pup, a prompt window with pointed spitz ears showing `>_`, on white. The mark uses straight lines only, no curves. The header uses the same SVG geometry, black in light mode and white in dark mode. Do not introduce teal or other accent colors into the logo.
 
@@ -115,7 +115,9 @@ If resolving the merge would require uncertain product decisions, leave the remo
 
 ## Build and install separately
 
-When the user requests a candidate release:
+When the user requests a candidate release, first fetch and merge current upstream `main`, reconcile overlaps, and run the personal regression checks. Ved expects every Cody change and release to include upstream changes available at that time. `node scripts/cody.mjs release` enforces this for the project action, and the build workflow rejects stale candidates.
+
+After pushing the checked combined branch:
 
 ```sh
 gh workflow run personal-build.yml --repo vedprakash2302/Cody --ref personal/main
