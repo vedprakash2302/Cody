@@ -54,7 +54,7 @@ gh pr create --repo pingdotgg/t3code --base main --head vedprakash2302:feat/my-f
 
 Do not merge `personal/main` into a contribution branch. Update that branch from upstream instead. Prefer a merge for a published branch unless the user explicitly requests a history rewrite.
 
-Fork-only work such as Cody branding and personal automation starts from a current, upstream-synced `personal/main` on a separate `personal/` branch. Ved wants every Cody change to take the available upstream changes too, not leave them for a later release. An agent must perform and review that sync; do not add an unattended merge to Cody scripts or GitHub workflows. Keep fork-only work out of upstream PRs. Cody uses its own application ID, `cody://` URL scheme, Electron profile, and `~/.cody` desktop data directory so it can run alongside official T3. Its WSL backend also uses `~/.cody`. Preserve each app's existing data and credentials during updates. T3 Connect and the official App Store app keep their upstream names.
+Fork-only work such as Cody branding and personal automation starts from a current, upstream-synced `personal/main` on a separate `personal/` branch. Ved wants every Cody change to take the available upstream changes too, not leave them for a later release. An agent must perform and review that sync before building. Do not add an unattended merge to the release command or build workflow. The existing daily sync workflow stays. Keep fork-only work out of upstream PRs. Cody uses its own application ID, `cody://` URL scheme, Electron profile, and `~/.cody` desktop data directory so it can run alongside official T3. Its WSL backend also uses `~/.cody`. Preserve each app's existing data and credentials during updates. T3 Connect and the official App Store app keep their upstream names.
 
 Cody branding is monochrome: the app icon is the black terminal pup, a prompt window with pointed spitz ears showing `>_`, on white. The mark uses straight lines only, no curves. The header uses the same SVG geometry, black in light mode and white in dark mode. Do not introduce teal or other accent colors into the logo.
 
@@ -115,7 +115,7 @@ If resolving the merge would require uncertain product decisions, leave the remo
 
 ## Build and install separately
 
-When the user requests a candidate release, the agent must first fetch current upstream `main`, merge it into `personal/main`, reconcile conflicts and clean semantic overlaps, and run the personal regression checks. Ved expects every Cody change and release to include upstream changes available at that time. Do not delegate this merge to `node scripts/cody.mjs release`, GitHub Actions, or another unattended command: the agent must apply the rules in [Sync upstream and retire superseded code](#sync-upstream-and-retire-superseded-code) before building.
+When the user requests a candidate release, the agent must first fetch current upstream `main`, merge it into `personal/main`, reconcile conflicts and clean semantic overlaps, and run the personal regression checks. Ved expects every Cody change and release to include upstream changes available at that time. Do not delegate this pre-build merge to `node scripts/cody.mjs release` or the build workflow. The daily **Personal upstream sync** may have already merged clean changes, but the agent still fetches and reconciles any newer upstream commits before building, applying the rules in [Sync upstream and retire superseded code](#sync-upstream-and-retire-superseded-code).
 
 After pushing the checked combined branch:
 

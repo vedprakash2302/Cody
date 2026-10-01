@@ -4,7 +4,7 @@
 
 For feature branches, publishing contributions, integrating personal fixes, syncing upstream, or building releases in `vedprakash2302/Cody`, read `.agents/skills/personal-fork/SKILL.md`. Upstream is `pingdotgg/t3code`; the personal integration branch is `personal/main`. Prefer upstream's implementation when it fully covers a personal fix, after comparing behavior and regression tests. Keep contribution branches based on upstream `main`.
 
-Before every Cody build or release, an agent must fetch current upstream `main` and reconcile it into `personal/main` by following the personal-fork skill. Do not automate this merge in a script or GitHub workflow: conflicts and clean semantic overlaps need an agent to compare behavior, prefer upstream where it supersedes a personal fix, and run the personal regression checks before pushing and building.
+Before every Cody build or release, an agent must fetch current upstream `main` and reconcile it into `personal/main` by following the personal-fork skill. Do not move this pre-build merge into a release script or the build workflow, because conflicts and clean semantic overlaps need an agent to compare behavior, prefer upstream where it supersedes a personal fix, and run the personal regression checks before pushing and building. Keep the daily **Personal upstream sync** workflow. It pushes only clean, checked merges and fails without changing `personal/main` on conflicts, so it does not replace the agent's sync before a build.
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
