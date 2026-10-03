@@ -17,7 +17,6 @@ import * as NodeOS from "node:os";
 import {
   ClaudeSettings,
   CodexSettings,
-  OpenCodeSettings,
   type ProviderInstanceConfig,
   ProviderInstanceId,
   USAGE_CONTRACT_VERSION,
@@ -45,16 +44,16 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
 import { readAntigravityUsage } from "./antigravityUsageReader.ts";
 import { readCursorAccountUsage } from "./cursorUsageReader.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { listOpenCodeDatabases, readOpenCodeUsageRecords } from "./openCodeUsage.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -91,7 +90,6 @@ const CACHE_RETENTION_DAYS = 90;
 
 const decodeCodexSettings = Schema.decodeOption(CodexSettings);
 const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
-const decodeOpenCodeSettings = Schema.decodeOption(OpenCodeSettings);
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
@@ -132,7 +130,7 @@ const EMPTY_PRICING: UsagePricing = {
 };
 
 /** Empty summary, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
+const layerTest = Layer.succeed(
   UsageService,
   UsageService.of({
     readSummary: (input) =>
@@ -155,7 +153,7 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const config = yield* ServerConfig;
+  const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcessEnvironment;
@@ -520,9 +518,23 @@ export const make = Effect.gen(function* () {
       }
       return [...canonical];
     });
-    // Cody reads OpenCode in collectOpenCodeSources instead of upstream's
-    // readOpenCodeUsage. That reader counts messages a forked session copies
-    // under new ids once, and follows each instance's data dir and OPENCODE_DB.
+    const dataHome = hostEnvironment["XDG_DATA_HOME"]?.trim();
+    for (const dir of yield* envRoots("OPENCODE_DATA_DIR", [
+      path.join(
+        dataHome && path.isAbsolute(dataHome) ? dataHome : path.join(home, ".local", "share"),
+        "opencode",
+      ),
+    ])) {
+      const result = yield* Effect.promise(() => readOpenCodeUsage(dir, windowStartMs));
+      scanned.push({
+        provider: "opencode",
+        dir,
+        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
+        files: result.missing && !result.error ? null : result.files,
+        status: result.error ? "partial" : "ok",
+        ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
+      });
+    }
     const antigravityRoots = yield* envRoots("ANTIGRAVITY_DATA_DIR", [
       ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) =>
         path.join(home, ".gemini", name),
@@ -660,55 +672,6 @@ export const make = Effect.gen(function* () {
     return scanned;
   });
 
-  /**
-   * OpenCode databases for every local OpenCode instance. Instances pointed at
-   * an external server keep their history on that server.
-   */
-  const collectOpenCodeSources = Effect.fn("UsageService.collectOpenCodeSources")(function* (
-    windowStartMs: number,
-    settings: ServerSettingsValue,
-  ) {
-    const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> = Object.values(
-      settings.providerInstances,
-    ).filter((instance) => instance.driver === "opencode");
-    if (!Object.hasOwn(settings.providerInstances, "opencode")) {
-      instances.push({ config: settings.providers.opencode });
-    }
-    const seen = new Set<string>();
-    const sources: Array<{
-      readonly databasePath: string;
-      readonly volumeId: string;
-      readonly records: readonly UsageRecord[] | null;
-    }> = [];
-    for (const instance of instances) {
-      const decoded = decodeOpenCodeSettings(instance.config ?? {});
-      if (Option.isNone(decoded) || decoded.value.serverUrl.trim()) continue;
-      const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
-      const dataDir = path.join(
-        expandHomePath(
-          environment.XDG_DATA_HOME?.trim() || path.join(NodeOS.homedir(), ".local", "share"),
-        ),
-        "opencode",
-      );
-      const databases = yield* Effect.promise(() =>
-        listOpenCodeDatabases(dataDir, environment.OPENCODE_DB),
-      );
-      for (const database of databases) {
-        const databasePath = yield* fileSystem
-          .realPath(database)
-          .pipe(Effect.orElseSucceed(() => database));
-        if (seen.has(databasePath)) continue;
-        seen.add(databasePath);
-        const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(databasePath));
-        const records = yield* Effect.sync(() =>
-          readOpenCodeUsageRecords(databasePath, windowStartMs),
-        );
-        sources.push({ databasePath, volumeId, records });
-      }
-    }
-    return sources;
-  });
-
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
     input: UsageSummaryInput,
     settings: ServerSettingsValue,
@@ -763,13 +726,9 @@ export const make = Effect.gen(function* () {
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
-    const [, scannedDirs, openCodeSources] = yield* Effect.all(
-      [
-        ensureRates(false),
-        collectDirs(windowStartMs, settings, retentionCutoffMs),
-        collectOpenCodeSources(windowStartMs, settings),
-      ],
-      { concurrency: 3 },
+    const [, scannedDirs] = yield* Effect.all(
+      [ensureRates(false), collectDirs(windowStartMs, settings, retentionCutoffMs)],
+      { concurrency: 2 },
     );
 
     const aggregator = new UsageAggregator({
@@ -856,24 +815,6 @@ export const make = Effect.gen(function* () {
         message:
           message ?? (files === null ? "No transcript directory on this environment." : null),
         ...(action ? { action } : {}),
-      });
-    }
-
-    for (const { databasePath, volumeId, records } of openCodeSources) {
-      const sessionIds = new Set<string>();
-      for (const record of records ?? []) {
-        if (aggregator.add(record, databasePath) && record.sessionId.length > 0) {
-          sessionIds.add(record.sessionId);
-        }
-      }
-      sources.push({
-        fingerprint: { hostId, provider: "opencode", resolvedHomePath: databasePath, volumeId },
-        status: records === null ? "failed" : "ok",
-        scannedFiles: records === null ? 0 : 1,
-        skippedFiles: 0,
-        malformedRecords: 0,
-        distinctSessions: sessionIds.size,
-        message: records === null ? "The OpenCode database could not be read." : null,
       });
     }
 

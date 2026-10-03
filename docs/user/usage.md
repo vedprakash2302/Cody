@@ -11,14 +11,11 @@ environments. It shows token use, cache savings, model breakdowns, and estimated
 cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals. OpenCode shows the cost OpenCode recorded for each message,
-which for GitHub Copilot is Copilot's own credit charge rather than your bill. OpenCode instances
-connected to an external server are not included, and deleting an OpenCode session removes its
-usage.
+record are missing from the totals.
 
-Antigravity reads local conversation databases, including T3-managed profiles. Set
-`ANTIGRAVITY_DATA_DIR` on the server to read a different data directory; comma-separated paths
-read multiple directories.
+OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
+databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
+server to read a different data directory; comma-separated paths read multiple directories.
 
 Cursor reads account usage from Cursor's dashboard API using the CLI login saved on the server.
 This includes headless T3 sessions and desktop usage across machines; the same account counts
@@ -29,10 +26,8 @@ from Keychain. You can turn it off in **Settings → Providers → Usage provide
 you to allow access on the server Mac.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
-the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, or, for
-OpenCode, `XDG_DATA_HOME` or `OPENCODE_DB` environment variable. Use absolute paths or `~/` paths
-in the account's environment settings; OpenCode does not expand `~/`, so use absolute paths for
-its variables. Relative
+the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
+variable. Use absolute paths or `~/` paths in the account's environment settings; relative
 environment paths depend on each project's working directory and cannot be reliably discovered
 by Usage. Accounts sharing a history directory count once.
 
@@ -127,9 +122,9 @@ settings section when you no longer need it.
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and
-Claude quotas. Tap it to open **Usage → Limits**. On iOS, use **Edit Widget** to choose Session,
-Weekly, or both for each provider. Reopen T3 to refresh expired readings. The Android widget
-requires Android 12L or later.
+Claude quotas. Tap it to open **Usage → Limits**; on Android this works while T3 is running in
+the background, otherwise open the app from the launcher. On iOS, use **Edit Widget** to choose
+Session, Weekly, or both for each provider. Reopen T3 to refresh expired readings.
 
 ## Keyboard shortcuts
 

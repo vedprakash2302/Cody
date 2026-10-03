@@ -62,7 +62,7 @@ export function resolveNewTaskLocalWorkspaceSelection(input: {
 export function resolveNewTaskBranchLabel(input: {
   readonly branchName: string | null;
   readonly ambiguousName?: boolean;
-  readonly branchIsRemote: boolean | null;
+  readonly branchIsRemote?: boolean | null;
   readonly startFromOrigin: boolean;
   readonly workspaceMode: WorkspaceMode;
 }): string {

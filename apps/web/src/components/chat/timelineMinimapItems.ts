@@ -49,9 +49,9 @@ function resolveFinalAssistantTextForTurn(
     }
     if (row.message.role === "assistant") {
       finalAssistantText = row.message.text ?? null;
-      if (row.showAssistantMeta && (answerText === null || row.message.turnId !== answerTurnId)) {
+      if (row.showAssistantMeta && (answerText === null || row.message.runId !== answerTurnId)) {
         answerText = row.message.text ?? null;
-        answerTurnId = row.message.turnId ?? null;
+        answerTurnId = row.message.runId ?? null;
       }
     }
   }

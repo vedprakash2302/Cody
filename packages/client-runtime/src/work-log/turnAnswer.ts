@@ -36,11 +36,21 @@ export function classifyWorkEntry(entry: WorkEntryShape): TurnSequenceItem | nul
   if (
     entry.agentSpawn !== undefined ||
     entry.itemType === "collab_agent_tool_call" ||
+    entry.itemType === "subagent" ||
     entry.sourceActivityKind?.startsWith("task.") === true
   ) {
     return { kind: "boundary" };
   }
-  return entry.sourceActivityKind?.startsWith("tool.") === true
+  if (entry.itemType === "reasoning") return { kind: "reasoning" };
+  return entry.sourceActivityKind?.startsWith("tool.") === true ||
+    [
+      "command_execution",
+      "file_change",
+      "dynamic_tool",
+      "file_read",
+      "file_search",
+      "web_search",
+    ].includes(entry.itemType ?? "")
     ? { kind: "work", toolCalls: 1 }
     : null;
 }

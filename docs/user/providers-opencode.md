@@ -5,6 +5,23 @@ enable it in **Settings > Providers**. See [provider setup](./install.md#provide
 T3 Code requires OpenCode 1.14.19 or newer, including when you connect an existing
 OpenCode server.
 
+## OpenCode 2
+
+T3 Code supports OpenCode 2.0.18 and newer. It detects the version on its own, so
+the same provider settings work for OpenCode 1.x and 2.x. OpenCode 1.x shows
+**Limited support** in its provider settings.
+
+OpenCode 2 is a separate package, `@opencode/cli`. To move from 1.x, install it
+yourself, for example `npm install -g @opencode/cli`. Then refresh provider status.
+T3 Code's update button updates whichever package you have installed. It never
+switches a 1.x install to 2.x.
+
+OpenCode 2 converts the shared OpenCode database to its own format the first time it
+runs. Don't run OpenCode 1.x and 2.x side by side on the same machine. Threads you
+started on 1.x continue on 2.x.
+
+Plan mode uses OpenCode's `plan` agent.
+
 ## Local or external server
 
 Leave **Server URL** empty to let T3 Code start OpenCode locally. A password in
@@ -34,17 +51,9 @@ does not stop the whole turn.
 
 ## Subagents
 
-When OpenCode delegates work to a subagent, **Agents** shows each subagent's
-status, latest step, tokens, and result. By default the agent waits for a
-subagent to finish before it continues.
-
-To let the agent keep working while subagents run, turn on **Background
-subagents** in the OpenCode provider settings. This uses OpenCode's experimental
-background mode. Changing the setting stops running OpenCode sessions, including
-their turns and subagents, and applies from the next message. When a background
-subagent finishes, the agent picks up its result. The result joins the current
-turn if one is running, and starts a new turn otherwise. For an external server,
-start it with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` instead.
+OpenCode 2 manages foreground and background subagents. Open a subagent's child
+thread to read its conversation. Background subagents can continue after the
+parent finishes its reply.
 
 **Stop** ends the turn and every running subagent, background ones included,
 because OpenCode stops a session's subagents with it. To keep background

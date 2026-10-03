@@ -165,7 +165,6 @@ describe("DesktopEnvironment", () => {
 
       assert.equal(development.stateDir, "/Users/alice/.cody/dev");
       assert.equal(production.stateDir, "/Users/alice/.cody/userdata");
-      assert.equal(production.userDataDirName, "cody");
       assert.equal(production.appUserModelId, "com.vedpandey.cody");
       assert.equal(production.displayName, "Cody");
     }),

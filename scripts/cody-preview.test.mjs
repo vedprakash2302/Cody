@@ -47,6 +47,17 @@ NodeTest.test(
       "stopped",
     );
     copied.close();
+    const v2Target = NodePath.join(preview, "userdata/statev2.sqlite");
+    NodeFS.writeFileSync(v2Target, "previous v2 preview");
+    copyThreads(source, preview);
+    NodeAssert.equal(NodeFS.existsSync(v2Target), false);
+    const backup = NodeFS.readdirSync(preview).find((name) =>
+      name.startsWith("v2-snapshot-backup-"),
+    );
+    NodeAssert.equal(
+      NodeFS.readFileSync(NodePath.join(preview, backup, "statev2.sqlite"), "utf8"),
+      "previous v2 preview",
+    );
     NodeAssert.equal(db.prepare("SELECT token FROM auth_sessions").get().token, "production");
     NodeAssert.equal(
       db.prepare("SELECT status FROM projection_thread_sessions").get().status,

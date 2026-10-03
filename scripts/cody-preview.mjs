@@ -38,6 +38,23 @@ function assertStopped(home) {
 
 /** Snapshot a live source read-only, then remove credentials and resumable sessions from the copy. */
 export function copyThreads(sourceHome, previewHome) {
+  if (NodePath.resolve(sourceHome) === NodePath.resolve(previewHome))
+    throw new Error("Source and preview homes must differ.");
+  assertStopped(previewHome);
+  const v2Source = NodePath.join(sourceHome, "userdata/statev2.sqlite");
+  if (NodeFS.existsSync(v2Source)) {
+    return execute(process.execPath, [
+      "apps/server/scripts/migrate-dev-db.ts",
+      "--source",
+      v2Source,
+      "--base-dir",
+      previewHome,
+      "--projects",
+      "20",
+      "--threads-per-project",
+      "20",
+    ]);
+  }
   const source = NodePath.join(sourceHome, "userdata/state.sqlite");
   const targetDir = NodePath.join(previewHome, "userdata");
   const target = NodePath.join(targetDir, "state.sqlite");
@@ -69,6 +86,9 @@ export function copyThreads(sourceHome, previewHome) {
       "auth_sessions",
       "provider_session_runtime",
       "projection_pending_approvals",
+      "scheduled_tasks",
+      "orchestration_v2_effect_outbox",
+      "orchestration_v2_thread_launch_workflows",
     ]) {
       if (tables.has(table)) snapshot.exec(`DELETE FROM ${table}`);
     }
@@ -92,6 +112,17 @@ export function copyThreads(sourceHome, previewHome) {
     console.log(`Previous preview database backed up at ${backup}`);
   }
   NodeFS.renameSync(temporary, target);
+  // A v1 source is imported on the next startup only when no v2 destination exists.
+  const v2Target = NodePath.join(targetDir, "statev2.sqlite");
+  if (NodeFS.existsSync(v2Target)) {
+    assertStopped(previewHome);
+    const backup = NodePath.join(previewHome, `v2-snapshot-backup-${Date.now()}`);
+    NodeFS.mkdirSync(backup);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      if (NodeFS.existsSync(v2Target + suffix))
+        NodeFS.renameSync(v2Target + suffix, NodePath.join(backup, `statev2.sqlite${suffix}`));
+    }
+  }
   console.log(
     `Copied thread history and PR links into ${previewHome}. Preview authentication must be paired again. Production credentials and agent sessions were not copied.`,
   );
@@ -177,17 +208,23 @@ async function nativeWindows() {
   }
 }
 
+function hasPreviewDatabase(home) {
+  return ["statev2.sqlite", "state.sqlite"].some((name) =>
+    NodeFS.existsSync(NodePath.join(home, "userdata", name)),
+  );
+}
+
 export async function main(action) {
   const home = NodePath.join(root, ".t3");
   if (action === "snapshot")
     return copyThreads(
-      process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".t3"),
+      process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".cody"),
       home,
     );
   if (action === "dev") {
     assertStopped(home);
-    if (!NodeFS.existsSync(NodePath.join(home, "userdata/state.sqlite")))
-      copyThreads(process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".t3"), home);
+    if (!hasPreviewDatabase(home))
+      copyThreads(process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".cody"), home);
     execute("vp", ["run", "dev", "--home-dir", home], {
       // eslint-disable-next-line t3code/no-global-process-runtime -- Standalone launcher runs before dependencies are installed.
       shell: process.platform === "win32",
@@ -197,8 +234,8 @@ export async function main(action) {
   if (action !== "native")
     throw new Error("Usage: node scripts/cody-preview.mjs <snapshot|dev|native>");
   if (process.env.WSL_DISTRO_NAME) return nativeWindows();
-  if (!NodeFS.existsSync(NodePath.join(home, "userdata/state.sqlite")))
-    copyThreads(process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".t3"), home);
+  if (!hasPreviewDatabase(home))
+    copyThreads(process.env.CODY_SOURCE_HOME || NodePath.join(NodeOS.homedir(), ".cody"), home);
   assertStopped(home);
   execute("vp", ["run", "dev:desktop", "--home-dir", home], {
     // eslint-disable-next-line t3code/no-global-process-runtime -- Standalone preview launcher runs before dependencies are installed.
