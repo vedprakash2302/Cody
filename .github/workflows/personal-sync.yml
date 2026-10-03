@@ -58,7 +58,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.merge.outputs.changed == 'true'
-        run: vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+        run: vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/mobile... --filter=@t3tools/scripts...
 
       - name: Check integrated fixes
         if: steps.merge.outputs.changed == 'true'
