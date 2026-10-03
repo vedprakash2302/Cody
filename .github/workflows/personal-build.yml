@@ -51,8 +51,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base_version="$(node -p "require('./apps/desktop/package.json').version.split('-')[0]")"
-          version="${base_version}-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          release_metadata="$(node scripts/resolve-nightly-release.ts \
+            --date "$(date -u +%Y%m%d)" \
+            --run-number "$GITHUB_RUN_NUMBER" \
+            --sha "$GITHUB_SHA")"
+          version="$(printf '%s\n' "$release_metadata" | sed -n 's/^version=//p')"
           node scripts/update-release-package-versions.ts "$version"
           cp .env.example .env
           set -a
