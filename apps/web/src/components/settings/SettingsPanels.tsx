@@ -135,6 +135,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { AutoInstallUpdatesRow } from "./AutoInstallUpdatesRow";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -506,6 +507,7 @@ function AboutVersionSection() {
           }
         />
       ) : null}
+      {hasDesktopBridge ? <AutoInstallUpdatesRow /> : null}
       {showNightlyMobileBeta ? <NightlyMobileBetaRow /> : null}
     </>
   );

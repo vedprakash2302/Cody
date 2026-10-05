@@ -132,6 +132,7 @@ describe("DesktopSettings", () => {
         tailscaleServePort: 443,
         updateChannel: "nightly",
         updateChannelConfiguredByUser: false,
+        autoInstallUpdates: true,
         wslBackendEnabled: false,
         wslOnly: false,
         wslDistro: null,
@@ -162,6 +163,7 @@ describe("DesktopSettings", () => {
           tailscaleServePort: 8443,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          autoInstallUpdates: true,
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
@@ -270,6 +272,7 @@ describe("DesktopSettings", () => {
           tailscaleServePort: 8443,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
+          autoInstallUpdates: true,
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
@@ -327,6 +330,7 @@ describe("DesktopSettings", () => {
             tailscaleServePort: 8443,
             updateChannel: "nightly",
             updateChannelConfiguredByUser: true,
+            autoInstallUpdates: true,
             wslBackendEnabled: false,
             wslOnly: false,
             wslDistro: null,
@@ -404,6 +408,7 @@ describe("DesktopSettings", () => {
           tailscaleServePort: 443,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
+          autoInstallUpdates: true,
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
@@ -433,6 +438,7 @@ describe("DesktopSettings", () => {
           tailscaleServePort: 443,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          autoInstallUpdates: true,
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
@@ -461,10 +467,27 @@ describe("DesktopSettings", () => {
           tailscaleServePort: 443,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
+          autoInstallUpdates: true,
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
+      }),
+    ),
+  );
+
+  it.effect("keeps automatic updates on by default and remembers turning them off", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        assert.isTrue((yield* settings.load).autoInstallUpdates);
+
+        const off = yield* settings.setAutoInstallUpdates(false);
+        assert.isTrue(off.changed);
+        assert.isFalse((yield* settings.load).autoInstallUpdates);
+
+        yield* settings.setAutoInstallUpdates(true);
+        assert.isTrue((yield* settings.load).autoInstallUpdates);
       }),
     ),
   );

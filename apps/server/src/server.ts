@@ -141,6 +141,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
+import { desktopAgentActivityRouteLayer } from "./desktopUpdate/DesktopAgentActivity.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -651,6 +652,7 @@ const makeRoutesLayer = Layer.mergeAll(
     attachmentUploadRouteLayer,
     deviceHubProxyRouteLayer,
     previewTunnelRouteLayer,
+    desktopAgentActivityRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

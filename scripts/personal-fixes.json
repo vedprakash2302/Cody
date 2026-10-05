@@ -73,5 +73,7 @@
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts",
   "apps/server/src/orchestration-v2/EffectWorker.test.ts",
   "apps/desktop/src/preview/Manager.test.ts",
-  "apps/web/src/browser/HostedBrowserWebview.test.tsx"
+  "apps/web/src/browser/HostedBrowserWebview.test.tsx",
+  "apps/server/src/desktopUpdate/DesktopAgentActivity.test.ts",
+  "apps/desktop/src/updates/DesktopAutoUpdate.test.ts"
 ]
