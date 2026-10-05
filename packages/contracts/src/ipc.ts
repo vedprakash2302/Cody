@@ -1259,6 +1259,9 @@ export interface DesktopBridge {
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
+  /** Cody: whether this machine installs updates by itself once agents are idle. */
+  getAutoInstallUpdates?: () => Promise<boolean>;
+  setAutoInstallUpdates?: (enabled: boolean) => Promise<boolean>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
