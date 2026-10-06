@@ -11,7 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { describe, expect } from "vite-plus/test";
 
 import * as RemoteOpenTargets from "./RemoteOpenTargets.ts";
@@ -36,7 +36,7 @@ const TAILSCALE_GET_UNSUPPORTED: CommandResult = { exitCode: 1, stdout: "" };
  * starts in `spawned`. With `stall`, the first command never exits and
  * completes `stall` once it has started.
  */
-const spawnerLayer = (input: {
+const layerSpawner = (input: {
   readonly status: CommandResult;
   readonly get: CommandResult;
   readonly spawned: Array<string>;
@@ -73,7 +73,7 @@ const spawnerLayer = (input: {
     ),
   );
 
-const netLayer = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
+const layerNet = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
   Layer.succeed(NetService.NetService, {
     canListenOnHost: () => Effect.succeed(true),
     isPortAvailableOnLoopback: () => Effect.succeed(true),
@@ -109,8 +109,8 @@ const onMachine = <A, E>(
       RemoteOpenTargets.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            netLayer(input.sshd),
-            spawnerLayer({
+            layerNet(input.sshd),
+            layerSpawner({
               status: input.tailscale,
               get:
                 input.tailscaleSsh === undefined

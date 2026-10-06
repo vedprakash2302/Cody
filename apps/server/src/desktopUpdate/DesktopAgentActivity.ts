@@ -2,7 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import type { OrchestrationV2ThreadShellSnapshot } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -40,7 +40,7 @@ function bearerMatches(header: string | undefined, token: string): boolean {
  * Authenticated with the launch's bootstrap token. A failed read answers 503,
  * which the desktop treats as busy.
  */
-export const desktopAgentActivityRouteLayer = HttpRouter.add(
+export const layer = HttpRouter.add(
   "GET",
   DESKTOP_AGENT_ACTIVITY_PATH,
   Effect.gen(function* () {

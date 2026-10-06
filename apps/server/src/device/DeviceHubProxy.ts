@@ -20,8 +20,8 @@ import {
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
-import * as Socket from "effect/unstable/socket/Socket";
+} from "effect/http";
+import * as Socket from "effect/socket/Socket";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 
 import { requireUpgradeScope } from "../auth/http.ts";
@@ -194,8 +194,4 @@ const handler = Effect.gen(function* () {
   return yield* proxyHttp(request, `${ready.hub.origin}${upstreamPath}`, ready.hub.origin);
 });
 
-export const deviceHubProxyRouteLayer = HttpRouter.add(
-  "*",
-  `${DeviceService.DEVICE_HUB_ROUTE_PREFIX}/*`,
-  handler,
-);
+export const layer = HttpRouter.add("*", `${DeviceService.DEVICE_HUB_ROUTE_PREFIX}/*`, handler);

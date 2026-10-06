@@ -201,7 +201,7 @@ describe("BrowserSession", () => {
       method: "digest",
       cause: nativeCause,
     });
-    const failingCryptoLayer = Layer.succeed(
+    const layerFailingCrypto = Layer.succeed(
       Crypto.Crypto,
       Crypto.make({
         randomBytes: (size) => new Uint8Array(size),
@@ -225,7 +225,7 @@ describe("BrowserSession", () => {
     }).pipe(
       Effect.provide(
         BrowserSession.layer.pipe(
-          Layer.provide(failingCryptoLayer),
+          Layer.provide(layerFailingCrypto),
           Layer.provide(DesktopClientSettings.layerTest()),
         ),
       ),

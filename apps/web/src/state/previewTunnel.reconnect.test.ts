@@ -1,6 +1,6 @@
 import { BearerConnectionTarget } from "@t3tools/client-runtime/connection";
 import { EnvironmentId } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const environmentId = EnvironmentId.make("environment-remote");

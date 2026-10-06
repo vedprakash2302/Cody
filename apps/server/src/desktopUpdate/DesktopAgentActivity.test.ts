@@ -3,7 +3,7 @@ import { type OrchestrationV2ThreadShellSnapshot, ThreadId } from "@t3tools/cont
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpRouter from "effect/http/HttpRouter";
 
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -52,7 +52,7 @@ const request = (
     );
     return yield* Effect.acquireUseRelease(
       Effect.sync(() =>
-        HttpRouter.toWebHandler(DesktopAgentActivity.desktopAgentActivityRouteLayer, {
+        HttpRouter.toWebHandler(DesktopAgentActivity.layer, {
           disableLogger: true,
         }),
       ),
@@ -92,7 +92,7 @@ describe("hasActiveAgentWork", () => {
   });
 });
 
-describe("desktopAgentActivityRouteLayer", () => {
+describe("DesktopAgentActivity.layer", () => {
   it.effect("answers the launching desktop with the backend's agent activity", () =>
     Effect.gen(function* () {
       const busy = yield* request(Effect.succeed(snapshotOf([{ activeRunId: "run-1" }])));

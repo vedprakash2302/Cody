@@ -8,7 +8,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";

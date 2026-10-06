@@ -12,15 +12,15 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
-import type * as NetAddress from "effect/unstable/net/NetAddress";
+import { HttpRouter, HttpServer } from "effect/http";
+import type * as NetAddress from "effect/net/NetAddress";
 
 import { EnvironmentAuth } from "../auth/EnvironmentAuth.ts";
-import { previewTunnelRouteLayer } from "./PreviewTunnel.ts";
+import * as PreviewTunnel from "./PreviewTunnel.ts";
 
 const serveTunnel = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
   Effect.gen(function* () {
-    yield* HttpRouter.serve(previewTunnelRouteLayer, {
+    yield* HttpRouter.serve(PreviewTunnel.layer, {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
