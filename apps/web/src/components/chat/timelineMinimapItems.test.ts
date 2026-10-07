@@ -89,7 +89,7 @@ describe("timeline minimap previews", () => {
       row.kind === "message" && index > 0
         ? {
             ...row,
-            message: { ...row.message, turnId: (index === 1 ? "turn-1" : "turn-2") as never },
+            message: { ...row.message, runId: (index === 1 ? "turn-1" : "turn-2") as never },
             showAssistantMeta: true,
           }
         : row,
