@@ -46,7 +46,6 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import { PREVIEW_TUNNEL_ROUTE } from "./preview/PreviewTunnel.ts";
 import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
@@ -380,12 +379,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-// Preview tunnel requests carry a reusable session ticket in their query
-// string, and a page load opens dozens of them.
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([
-  OTLP_TRACES_PROXY_PATH,
-  PREVIEW_TUNNEL_ROUTE,
-]);
+const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
 
 // Skips the HTTP server span for UNTRACED_REQUEST_PATHS. That span starts
 // before routing, so a route handler cannot skip it. TracerDisabledWhen is one

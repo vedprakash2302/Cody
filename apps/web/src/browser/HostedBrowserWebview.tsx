@@ -1,14 +1,17 @@
 "use client";
 
-import type { PreviewViewportSetting, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  DesktopPreviewColorScheme,
+  PreviewViewportSetting,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import { useShallow } from "zustand/react/shallow";
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
-import { usePreviewTunnel } from "~/state/previewTunnel";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { useActiveBrowserRecordingTabIds } from "./browserRecording";
@@ -19,9 +22,8 @@ import {
 } from "./browserViewportLayout";
 import { BrowserDeviceToolbar } from "./BrowserDeviceToolbar";
 import { BrowserViewportResizeHandles } from "./BrowserViewportResizeHandles";
-import { acquireDesktopTab, type AcquiredDesktopTab } from "./desktopTabLifetime";
+import { acquireDesktopTab, type AcquiredDesktopTab, withDesktopTab } from "./desktopTabLifetime";
 import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewStyle";
-import { reportPreviewWebviewEvent } from "./previewDiagnostics";
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
 import {
@@ -58,6 +60,16 @@ export function HostedBrowserWebview(props: {
    */
   readonly profileId: string | undefined;
   readonly zoomFactor: number;
+  /** A tab of the desktop's own server; the server drives this webview's page. */
+  readonly serverDriven?: boolean;
+  /**
+   * For a server-driven tab, the appearance and zoom its environment published,
+   * which this webview follows so every client and agent sees one state.
+   */
+  readonly serverRendering?: {
+    readonly colorScheme: DesktopPreviewColorScheme;
+    readonly zoomFactor: number;
+  };
 }) {
   const {
     threadRef,
@@ -68,10 +80,11 @@ export function HostedBrowserWebview(props: {
     pictureInPicture,
     zoomFactor,
     profileId,
+    serverDriven = false,
+    serverRendering,
   } = props;
   const clientSettingsHydrated = useClientSettingsHydrated();
   const config = usePreviewWebviewConfig(threadRef.environmentId, profileId);
-  const tunnel = usePreviewTunnel(threadRef.environmentId);
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -96,18 +109,36 @@ export function HostedBrowserWebview(props: {
     (state) => (state.activityByTabId[runtimeTabId] ?? 0) > 0,
   );
   const recordingActive = useActiveBrowserRecordingTabIds().has(runtimeTabId);
-  usePreviewBridge({ threadRef, tabId, runtimeTabId });
+  usePreviewBridge({ threadRef, tabId, runtimeTabId, serverDriven });
+
+  const serverColorScheme = serverRendering?.colorScheme;
+  const serverZoomFactor = serverRendering?.zoomFactor;
 
   useEffect(() => {
     if (!clientSettingsHydrated) return;
     crashRecoveryRef.current = INITIAL_WEBVIEW_CRASH_RECOVERY_STATE;
-    const lease = acquireDesktopTab(runtimeTabId);
+    const lease = acquireDesktopTab(
+      runtimeTabId,
+      serverDriven ? { threadId: threadRef.threadId, tabId } : undefined,
+    );
     tabLeaseRef.current = lease;
     return () => {
       if (tabLeaseRef.current === lease) tabLeaseRef.current = null;
       lease.release();
     };
-  }, [clientSettingsHydrated, runtimeTabId]);
+  }, [clientSettingsHydrated, runtimeTabId, serverDriven, tabId, threadRef.threadId]);
+
+  // A server tab looks the way its environment published, once the desktop tab exists.
+  useEffect(() => {
+    const bridge = window.desktopBridge?.preview;
+    if (!bridge || serverColorScheme === undefined) return;
+    withDesktopTab(runtimeTabId, () => bridge.setColorScheme(runtimeTabId, serverColorScheme));
+  }, [runtimeTabId, serverColorScheme]);
+  useEffect(() => {
+    const bridge = window.desktopBridge?.preview;
+    if (!bridge || serverZoomFactor === undefined) return;
+    withDesktopTab(runtimeTabId, () => bridge.setZoomFactor(runtimeTabId, serverZoomFactor));
+  }, [runtimeTabId, serverZoomFactor]);
 
   const [webviewGeneration, setWebviewGeneration] = useState(0);
   const [recoverySrc, setRecoverySrc] = useState(initialSrc);
@@ -147,9 +178,9 @@ export function HostedBrowserWebview(props: {
       })();
     };
     const recoverGuest = () => {
-      if (disposed || recoveryTimeout !== null) return true;
+      if (disposed || recoveryTimeout !== null) return;
       const recovery = planWebviewCrashRecovery(crashRecoveryRef.current, Date.now());
-      if (!recovery) return false;
+      if (!recovery) return;
       crashRecoveryRef.current = recovery.state;
       recoveryTimeout = setTimeout(() => {
         recoveryTimeout = null;
@@ -158,20 +189,6 @@ export function HostedBrowserWebview(props: {
           setWebviewGeneration((generation) => generation + 1);
         }
       }, recovery.delayMs);
-      return true;
-    };
-    // A guest can be destroyed while this element stays mounted, which leaves
-    // a webview that never paints again. Unmounting or replacing the element
-    // destroys its guest too, but by then the element has left the document.
-    const guestDestroyed = () => {
-      if (disposed || !webview.isConnected) return;
-      const recovering = recoverGuest();
-      reportPreviewWebviewEvent("guestDestroyed", {
-        environmentId: threadRef.environmentId,
-        tabId,
-        webviewGeneration,
-        recovering,
-      });
     };
     // A click inside the guest only reaches this document as a webview focus
     // event, so open menus and popovers never see the outside press that
@@ -184,7 +201,6 @@ export function HostedBrowserWebview(props: {
     webview.addEventListener("did-attach", register);
     webview.addEventListener("dom-ready", register);
     webview.addEventListener("render-process-gone", recoverGuest);
-    webview.addEventListener("destroyed", guestDestroyed);
     webview.addEventListener("focus", dismissHostPopups);
     register();
     return () => {
@@ -193,42 +209,9 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("did-attach", register);
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
-      webview.removeEventListener("destroyed", guestDestroyed);
       webview.removeEventListener("focus", dismissHostPopups);
     };
-  }, [
-    clientSettingsHydrated,
-    config,
-    initialSrc,
-    runtimeTabId,
-    tabId,
-    threadRef.environmentId,
-    webviewGeneration,
-  ]);
-
-  // The webview renders only while settings and config are available, and
-  // removing it destroys the page. Record which input went missing so a tab
-  // stuck on "Reconnecting preview" can be traced to its cause.
-  const webviewAvailable = clientSettingsHydrated && config !== null;
-  const webviewWasAvailableRef = useRef(false);
-  const reportWebviewWithdrawn = useEffectEvent(() => {
-    reportPreviewWebviewEvent("webviewWithdrawn", {
-      environmentId: threadRef.environmentId,
-      tabId,
-      clientSettingsHydrated,
-      hasConfig: config !== null,
-      tunnel: tunnel === undefined ? "unknown" : String(tunnel),
-    });
-  });
-  useEffect(() => {
-    if (webviewAvailable) {
-      webviewWasAvailableRef.current = true;
-      return;
-    }
-    if (!webviewWasAvailableRef.current) return;
-    webviewWasAvailableRef.current = false;
-    reportWebviewWithdrawn();
-  }, [webviewAvailable]);
+  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;

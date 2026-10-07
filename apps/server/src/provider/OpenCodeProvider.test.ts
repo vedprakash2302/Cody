@@ -1,5 +1,4 @@
 import * as NodeAssert from "node:assert/strict";
-import * as NodeCrypto from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -81,7 +80,8 @@ it.effect("reads Go limits with the instance's XDG credentials and preserves res
     NodeAssert.equal(limits.unavailable, undefined);
     NodeAssert.equal(
       limits.credentialFingerprint,
-      NodeCrypto.createHash("sha256").update("opencode-go\0instance-key").digest("hex"),
+      // SHA-256 of "opencode-go\0instance-key".
+      "aba48e85c981a8edc1c9fb4575121accc7235fa55d0f8689f66f153de5566a37",
     );
     NodeAssert.deepEqual(
       limits.windows.map(({ kind, usedPercent, resetsAt: reset }) => ({
@@ -331,9 +331,8 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
 
     // Pooled views match accounts by the credentials behind the shown windows.
     // Go alone must hash as upstream does so it pools with upstream environments.
-    const goOnlyFingerprint = NodeCrypto.createHash("sha256")
-      .update("opencode-go\0go-key")
-      .digest("hex");
+    // SHA-256 of "opencode-go\0go-key".
+    const goOnlyFingerprint = "d0e590e93fc9bd9353f2b993c0c287391cae505da2a78cb698b75418d2f5367e";
     NodeAssert.equal(copilotFailed.credentialFingerprint, goOnlyFingerprint);
     NodeAssert.equal(copilotUnlimited.credentialFingerprint, goOnlyFingerprint);
     const bothAnswered = yield* probe("none");

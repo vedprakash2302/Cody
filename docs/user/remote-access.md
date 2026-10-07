@@ -189,18 +189,81 @@ terminal as that same account, for example
 `ssh <account>@<machine>.<tailnet>.ts.net`, approve the check, then choose
 **Open** again.
 
-## Preview a remote environment's dev servers
+## Browser on a remote environment
 
-In the desktop app, a Browser tab belongs to its thread's environment, so
-`localhost` means that environment's machine. When the environment runs
-somewhere else, the desktop carries the tab's `localhost` traffic over the
-existing connection to that server, whether it is LAN, Tailscale, SSH, or
-T3 Connect. Dev servers can stay bound to `localhost`, and the page keeps its
-`localhost` address, so logins, cookies, and hot reload work as they do
-locally. Nothing else needs to be forwarded or exposed.
+Browser tabs belong to the environment, so you and your agents see the same
+tabs from any device. The desktop app shows its own environment's tabs
+directly. Every other device, and the desktop app for other environments,
+streams them from the host. Agents keep using them while no device is
+connected, and `localhost` addresses reach servers on the host.
 
-This needs a server that supports it; older servers open `localhost` on your
-own machine instead. The web and mobile apps do not tunnel preview traffic.
+The first tab downloads a headless Chrome, about 120 MB, into the T3 home. It
+is the same browser [HTML renders](html-renders.md) use, so a host downloads it
+only once. Some Linux hosts need [setup](#browser-host-setup) before it can
+start.
+
+Agent tabs have separate storage and share a Chromium process. Take control before
+typing into an agent's tab, then release control when you want the agent to
+continue. Read-only connections can watch without changing the page.
+
+While you have control, the tab works with your device: text the page copies or
+cuts goes to your clipboard, a file picker on the page opens your device's
+picker, and a finished download is offered for you to save. Popups such as
+sign-in windows open as their own tabs. Downloads stay on the host until the
+tab closes. Audio does not play on your device.
+
+On a phone, tap the floating preview's corner dot to show its controls, then
+**Pop into separate window** to keep watching in picture-in-picture over other
+apps.
+
+### Browser host setup
+
+macOS, Windows, and Linux desktops run the browser as is. Some Linux hosts need
+one-time setup: Ubuntu 23.10 and later block the sandbox the browser runs in,
+and minimal images and containers lack libraries it loads. When that happens,
+the server says so at startup, and browser tabs and HTML previews show the
+command to run on the host:
+
+```sh
+sudo t3 browser setup
+```
+
+The server shows the exact line for how you started it, such as
+`sudo npx t3 browser setup`, and keeps your `PATH` when Node is installed only
+for your user. It allows Chrome's sandbox with an AppArmor profile and installs
+any missing libraries with apt. It is safe to run again. Without `sudo`, it
+only reports what it would change.
+
+The browser always runs in Chrome's sandbox. Where you cannot change the host,
+set `T3CODE_SERVER_BROWSER_SANDBOX=0` for the environment to run without it.
+
+## Connect an outside agent
+
+An agent T3 Code did not start, such as Claude Code in your own terminal, can
+drive threads on an environment through its MCP server. In **Settings →
+Connections**, open a saved environment's menu and choose **Copy MCP URL**, then
+add it to the agent. For example:
+
+```sh
+claude mcp add --transport http t3 https://<environment-address>/mcp
+```
+
+The first time the agent connects, it opens a sign-in page on the environment.
+Enter a pairing code from **Settings → Connections** on a device that can manage
+access, or from `t3 auth pairing create` on the host, and choose what the agent
+may do. A browser already signed in to that environment as an administrator can
+approve without a code.
+
+- **Read only** lets the agent read projects and threads in every project, and
+  see which providers and models are available. It cannot change anything.
+- **Supervised** through **Full access** also let it start, message and stop
+  threads in every project, but it cannot start or steer a thread with more
+  permissions than the mode you chose.
+
+Use an HTTPS address: T3 Connect, Tailscale Serve, or `localhost` on the host
+itself. Agents refuse to sign in through a plain `http://` LAN or tailnet
+address. The agent appears under **Settings → Connections** like any other
+client; revoke it there. Sign-ins last 30 days.
 
 ## Manage or revoke access
 

@@ -1,52 +1,53 @@
 "use client";
 
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
+import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
+
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
 import { useActivePreviewSessions } from "~/previewStateStore";
-import { usePreviewTunnel, usePreviewTunnelCredentials } from "~/state/previewTunnel";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
+import { rendersServerTabNatively } from "./previewRuntime";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
-
-/** Keeps one remote environment's tunnel credentials current while it has tabs. */
-function PreviewTunnelCredentials({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  usePreviewTunnelCredentials(environmentId, usePreviewTunnel(environmentId) === true);
-  return null;
-}
 
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const sessions = useMemo(
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
         const threadRef = parseScopedThreadKey(threadKey);
+        // Server tabs of other environments stream; this desktop's own server tabs render here.
         return threadRef
-          ? Object.values(previewState.sessions).map((snapshot) => ({
-              threadRef,
-              snapshot,
-              runtimeTabId: previewRuntimeTabId(
+          ? Object.values(previewState.sessions)
+              .filter(
+                (snapshot) =>
+                  snapshot.runtime !== "server" ||
+                  rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot),
+              )
+              .map((snapshot) => ({
                 threadRef,
-                previewState.serverEpoch,
-                snapshot.tabId,
-              ),
-              pictureInPicture:
-                previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
-              zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
-            }))
+                snapshot,
+                runtimeTabId: previewRuntimeTabId(
+                  threadRef,
+                  previewState.serverEpoch,
+                  snapshot.tabId,
+                ),
+                pictureInPicture:
+                  previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
+                zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
+              }))
           : [];
       }),
-    [previewByThreadKey],
-  );
-  const environmentIds = useMemo(
-    () => [...new Set(sessions.map(({ threadRef }) => threadRef.environmentId))],
-    [sessions],
+    [previewByThreadKey, primaryEnvironmentId],
   );
 
   useEffect(() => {
@@ -93,9 +94,6 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
-      {environmentIds.map((environmentId) => (
-        <PreviewTunnelCredentials key={environmentId} environmentId={environmentId} />
-      ))}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
@@ -109,6 +107,15 @@ export function ElectronBrowserHost() {
             pictureInPicture={pictureInPicture}
             profileId={snapshot.profileId}
             zoomFactor={zoomFactor}
+            serverDriven={snapshot.runtime === "server"}
+            {...(snapshot.runtime === "server"
+              ? {
+                  serverRendering: {
+                    colorScheme: snapshot.colorScheme ?? "system",
+                    zoomFactor: snapshot.zoomFactor ?? 1,
+                  },
+                }
+              : {})}
           />
         );
       })}

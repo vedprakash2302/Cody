@@ -10,7 +10,6 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { previewBridge } from "~/components/preview/previewBridge";
-import { usePreviewTunnel } from "~/state/previewTunnel";
 
 const PREVIEW_CONFIG_STALE_TIME_MS = 5 * 60_000;
 const PREVIEW_CONFIG_IDLE_TTL_MS = 10 * 60_000;
@@ -48,23 +47,21 @@ export const loadPreviewWebviewConfig = (
   environmentId: EnvironmentId,
   profileId?: string,
   bridge: PreviewConfigBridge | null = previewBridge,
-  tunnel = false,
 ): Effect.Effect<DesktopPreviewWebviewConfig, PreviewWebviewConfigError> => {
   if (bridge === null) {
     return Effect.fail(new PreviewWebviewBridgeUnavailableError({ environmentId }));
   }
 
   return Effect.tryPromise({
-    try: () => bridge.getPreviewConfig(environmentId, profileId, { tunnel }),
+    try: () => bridge.getPreviewConfig(environmentId, profileId),
     catch: (cause) => new PreviewWebviewConfigLoadError({ environmentId, cause }),
   });
 };
 
 /**
- * `Atom.family` keys on its argument, so the tunnel flag, environment, and
- * profile are folded into one string: passing an object would allocate a
- * fresh entry on every render. The flag leads because it is one character
- * and cannot contain the delimiter.
+ * `Atom.family` keys on its argument, so the environment and profile are
+ * folded into one string: passing an object would allocate a fresh entry on
+ * every render.
  *
  * The profile is the tail rather than a second field, so an id containing the
  * delimiter round-trips whole instead of being truncated into a different
@@ -73,29 +70,22 @@ export const loadPreviewWebviewConfig = (
  */
 const CONFIG_KEY_DELIMITER = "\u0000";
 
-const configKey = (
-  environmentId: EnvironmentId,
-  profileId: string | undefined,
-  tunnel: boolean,
-): string => `${tunnel ? "1" : "0"}${environmentId}${CONFIG_KEY_DELIMITER}${profileId ?? ""}`;
+const configKey = (environmentId: EnvironmentId, profileId: string | undefined): string =>
+  `${environmentId}${CONFIG_KEY_DELIMITER}${profileId ?? ""}`;
 
-const parseConfigKey = (
-  key: string,
-): { environmentId: EnvironmentId; profileId?: string; tunnel: boolean } => {
-  const rest = key.slice(1);
-  const delimiter = rest.indexOf(CONFIG_KEY_DELIMITER);
-  const environmentId = (delimiter === -1 ? rest : rest.slice(0, delimiter)) as EnvironmentId;
-  const profileId = delimiter === -1 ? "" : rest.slice(delimiter + CONFIG_KEY_DELIMITER.length);
+const parseConfigKey = (key: string): { environmentId: EnvironmentId; profileId?: string } => {
+  const delimiter = key.indexOf(CONFIG_KEY_DELIMITER);
+  const environmentId = (delimiter === -1 ? key : key.slice(0, delimiter)) as EnvironmentId;
+  const profileId = delimiter === -1 ? "" : key.slice(delimiter + CONFIG_KEY_DELIMITER.length);
   return {
     environmentId,
     ...(profileId === "" ? {} : { profileId }),
-    tunnel: key.startsWith("1"),
   };
 };
 
 const previewWebviewConfigAtom = Atom.family((key: string) => {
-  const { environmentId, profileId, tunnel } = parseConfigKey(key);
-  return Atom.make(loadPreviewWebviewConfig(environmentId, profileId, previewBridge, tunnel)).pipe(
+  const { environmentId, profileId } = parseConfigKey(key);
+  return Atom.make(loadPreviewWebviewConfig(environmentId, profileId)).pipe(
     Atom.swr({
       staleTime: PREVIEW_CONFIG_STALE_TIME_MS,
       revalidateOnMount: true,
@@ -105,21 +95,10 @@ const previewWebviewConfigAtom = Atom.family((key: string) => {
   );
 });
 
-const PENDING_CONFIG_ATOM = Atom.make(
-  AsyncResult.initial<DesktopPreviewWebviewConfig, PreviewWebviewConfigError>(),
-).pipe(Atom.withLabel("preview:webview-config:pending"));
-
 export function usePreviewWebviewConfig(
   environmentId: EnvironmentId,
   profileId?: string,
 ): DesktopPreviewWebviewConfig | null {
-  const tunnel = usePreviewTunnel(environmentId);
-  // Until the route is known the webview stays unmounted, so it never loads
-  // a page on the wrong machine first.
-  const result = useAtomValue(
-    tunnel === undefined
-      ? PENDING_CONFIG_ATOM
-      : previewWebviewConfigAtom(configKey(environmentId, profileId, tunnel)),
-  );
+  const result = useAtomValue(previewWebviewConfigAtom(configKey(environmentId, profileId)));
   return Option.getOrNull(AsyncResult.value(result));
 }

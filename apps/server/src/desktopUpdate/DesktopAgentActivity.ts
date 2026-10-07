@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 
 import type { OrchestrationV2ThreadShellSnapshot } from "@t3tools/contracts";

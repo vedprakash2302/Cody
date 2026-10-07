@@ -1,15 +1,7 @@
 import {
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
-  DesktopPreviewAutomationClickInputSchema,
-  DesktopPreviewAutomationEvaluateInputSchema,
-  DesktopPreviewAutomationPressInputSchema,
-  DesktopPreviewAutomationScrollInputSchema,
-  DesktopPreviewAutomationStatusSchema,
-  DesktopPreviewAutomationTypeInputSchema,
-  DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
-  DesktopPreviewTunnelCredentialsInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
@@ -17,6 +9,7 @@ import {
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
+  DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
   BrowserImportSource,
   DesktopPreviewClearDataInputSchema,
@@ -25,20 +18,19 @@ import {
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
-  PreviewAutomationSnapshot,
   DEFAULT_BROWSER_PROFILE_ID,
   INCOGNITO_BROWSER_PROFILE_ID,
+  PreviewForwardedShortcut,
+  MAX_KEYBINDINGS_COUNT,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
-import type { Session } from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
-import { PreviewTunnelProxies } from "../../preview/PreviewTunnelProxy.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import { PREVIEW_WEBVIEW_PREFERENCES } from "../../preview/WebviewPreferences.ts";
 import * as IpcChannels from "../channels.ts";
@@ -63,6 +55,16 @@ export const installPreviewEventForwarding = Effect.fn(
   );
 });
 
+export const setForwardedShortcuts = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL,
+  payload: Schema.Array(PreviewForwardedShortcut).check(Schema.isMaxLength(MAX_KEYBINDINGS_COUNT)),
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setForwardedShortcuts")(function* (shortcuts) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setForwardedShortcuts(shortcuts);
+  }),
+});
+
 export const createTab = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATE_TAB_CHANNEL,
   payload: DesktopPreviewCreateTabInputSchema,
@@ -71,9 +73,10 @@ export const createTab = DesktopIpc.makeIpcMethod({
     tabId,
     zoomFactor,
     colorScheme,
+    serverTab,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.createTab(tabId, { zoomFactor, colorScheme });
+    yield* manager.createTab(tabId, { zoomFactor, colorScheme, serverTab });
   }),
 });
 
@@ -160,6 +163,15 @@ export const hardReload = tabMethod(
   "desktop.ipc.preview.hardReload",
   (manager, tabId) => manager.hardReload(tabId),
 );
+export const setZoomFactor = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_ZOOM_FACTOR_CHANNEL,
+  payload: DesktopPreviewSetZoomFactorInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setZoomFactor")(function* ({ tabId, zoomFactor }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setZoomFactor(tabId, zoomFactor);
+  }),
+});
 export const setColorScheme = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL,
   payload: DesktopPreviewSetColorSchemeInputSchema,
@@ -287,73 +299,22 @@ const resolveClearPartitions = Effect.fn("desktop.ipc.preview.resolveClearPartit
   return [yield* manager.getBrowserPartition(scope, persistent, namespace)];
 });
 
-/** Process-wide, like the Electron sessions it serves: one proxy per remote environment. */
-const previewTunnels = new PreviewTunnelProxies();
-const tunneledSessions = new WeakSet<Session>();
-
-/**
- * Points a partition's proxy at the environment's tunnel, or back to the
- * system proxy. `<-loopback>` removes Chromium's implicit loopback bypass,
- * which is the whole point; the tunnel dials every other host directly.
- */
-const routePreviewSession = Effect.fn("desktop.ipc.preview.routeSession")(function* (
-  session: Session,
-  environmentId: string,
-  tunnel: boolean,
-) {
-  if (tunnel === tunneledSessions.has(session)) return;
-  if (tunnel) {
-    const port = yield* Effect.promise(() => previewTunnels.portFor(environmentId));
-    yield* Effect.promise(() =>
-      session.setProxy({
-        mode: "fixed_servers",
-        proxyRules: `socks5://127.0.0.1:${port}`,
-        proxyBypassRules: "<-loopback>",
-      }),
-    );
-    tunneledSessions.add(session);
-  } else {
-    yield* Effect.promise(() => session.setProxy({ mode: "system" }));
-    tunneledSessions.delete(session);
-  }
-  // Connections opened under the previous route would otherwise be reused.
-  yield* Effect.promise(() => session.closeAllConnections());
-});
-
 export const getPreviewConfig = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_GET_CONFIG_CHANNEL,
   payload: DesktopPreviewConfigInputSchema,
   result: DesktopPreviewWebviewConfigSchema,
-  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({
-    environmentId,
-    profileId,
-    tunnel,
-  }) {
+  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({ environmentId, profileId }) {
     const manager = yield* PreviewManager.PreviewManager;
     const { scope, persistent, namespace } = resolvePartitionScope(environmentId, profileId);
     // Creating the session first is what installs the UA rewrite and permission
     // handlers; a guest that attached to an untouched partition would run with
-    // Electron's default UA and Chromium's default permission behaviour. The
-    // route is set here too, so the webview never loads before it applies.
-    const session = yield* manager.getBrowserSession(scope, persistent, namespace);
-    yield* routePreviewSession(session, environmentId, tunnel === true);
+    // Electron's default UA and Chromium's default permission behaviour.
+    yield* manager.getBrowserSession(scope, persistent, namespace);
     return {
       partition: yield* manager.getBrowserPartition(scope, persistent, namespace),
       webPreferences: PREVIEW_WEBVIEW_PREFERENCES,
       preloadUrl: NodeURL.pathToFileURL(`${__dirname}/preview-pick-preload.cjs`).href,
     };
-  }),
-});
-
-export const setTunnelCredentials = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_SET_TUNNEL_CREDENTIALS_CHANNEL,
-  payload: DesktopPreviewTunnelCredentialsInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.setTunnelCredentials")(function* ({
-    environmentId,
-    credentials,
-  }) {
-    yield* Effect.promise(() => previewTunnels.setCredentials(environmentId, credentials));
   }),
 });
 
@@ -446,86 +407,6 @@ export const copyArtifactToClipboard = DesktopIpc.makeIpcMethod({
   }),
 });
 
-export const automationStatus = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL,
-  payload: DesktopPreviewTabInputSchema,
-  result: DesktopPreviewAutomationStatusSchema,
-  handler: Effect.fn("desktop.ipc.preview.automationStatus")(function* ({ tabId }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.automationStatus(tabId);
-  }),
-});
-
-export const automationSnapshot = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL,
-  payload: DesktopPreviewTabInputSchema,
-  result: PreviewAutomationSnapshot,
-  handler: Effect.fn("desktop.ipc.preview.automationSnapshot")(function* ({ tabId }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.automationSnapshot(tabId);
-  }),
-});
-
-export const automationClick = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_CLICK_CHANNEL,
-  payload: DesktopPreviewAutomationClickInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.automationClick")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.automationClick(tabId, input);
-  }),
-});
-
-export const automationType = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_TYPE_CHANNEL,
-  payload: DesktopPreviewAutomationTypeInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.automationType")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.automationType(tabId, input);
-  }),
-});
-
-export const automationPress = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_PRESS_CHANNEL,
-  payload: DesktopPreviewAutomationPressInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.automationPress")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.automationPress(tabId, input);
-  }),
-});
-
-export const automationScroll = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL,
-  payload: DesktopPreviewAutomationScrollInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.automationScroll")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.automationScroll(tabId, input);
-  }),
-});
-
-export const automationEvaluate = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL,
-  payload: DesktopPreviewAutomationEvaluateInputSchema,
-  result: Schema.Unknown,
-  handler: Effect.fn("desktop.ipc.preview.automationEvaluate")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.automationEvaluate(tabId, input);
-  }),
-});
-
-export const automationWaitFor = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL,
-  payload: DesktopPreviewAutomationWaitForInputSchema,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.automationWaitFor")(function* ({ tabId, input }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.automationWaitFor(tabId, input);
-  }),
-});
-
 export const saveRecording = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_RECORDING_SAVE_CHANNEL,
   payload: DesktopPreviewRecordingSaveInputSchema,
@@ -537,8 +418,8 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
 });
 
 export const methods = [
+  setForwardedShortcuts,
   createTab,
-  setTunnelCredentials,
   closeTab,
   registerWebview,
   navigate,
@@ -550,6 +431,7 @@ export const methods = [
   resetZoom,
   hardReload,
   setColorScheme,
+  setZoomFactor,
   setAudioMuted,
   openDevTools,
   clearCookies,
@@ -563,14 +445,6 @@ export const methods = [
   copyArtifactToClipboard,
   openPictureInPicture,
   closePictureInPicture,
-  automationStatus,
-  automationSnapshot,
-  automationClick,
-  automationType,
-  automationPress,
-  automationScroll,
-  automationEvaluate,
-  automationWaitFor,
   startRecording,
   stopRecording,
   saveRecording,

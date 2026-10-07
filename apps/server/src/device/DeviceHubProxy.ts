@@ -24,7 +24,7 @@ import {
 import * as Socket from "effect/socket/Socket";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 
-import { requireUpgradeScope } from "../auth/http.ts";
+import { authenticateMediaRequest } from "../auth/http.ts";
 import * as DeviceService from "./DeviceService.ts";
 
 const ALLOWED_PATHS: ReadonlyArray<RegExp> = [
@@ -168,7 +168,7 @@ const handler = Effect.gen(function* () {
   const controlsDevice =
     (upgrade && hubPath !== "/api/devices/ws") ||
     (!readOnly && /\/api\/(stream-(mode|settings)|fold)$/.test(hubPath));
-  yield* requireUpgradeScope(
+  yield* authenticateMediaRequest(
     controlsDevice ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope,
   );
   const devices = yield* DeviceService.DeviceService;

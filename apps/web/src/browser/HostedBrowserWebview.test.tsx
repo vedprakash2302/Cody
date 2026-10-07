@@ -174,14 +174,8 @@ describe("HostedBrowserWebview settings hydration", () => {
       await retry;
     });
 
-    expect(acquire).toHaveBeenCalledExactlyOnceWith(runtimeTabId);
-    expect(mocks.getPreviewConfig).toHaveBeenCalledExactlyOnceWith(
-      threadRef.environmentId,
-      "work",
-      {
-        tunnel: false,
-      },
-    );
+    expect(acquire).toHaveBeenCalledExactlyOnceWith(runtimeTabId, undefined);
+    expect(mocks.getPreviewConfig).toHaveBeenCalledExactlyOnceWith(threadRef.environmentId, "work");
     expect(createGuest).toHaveBeenCalledOnce();
     expect(createGuest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -202,93 +196,5 @@ describe("HostedBrowserWebview settings hydration", () => {
     expect(mocks.registerWebview).toHaveBeenCalledExactlyOnceWith(runtimeTabId, 41);
     expect(mocks.closeTab).not.toHaveBeenCalled();
     expect(mocks.setClientSettings).not.toHaveBeenCalled();
-  });
-});
-
-describe("HostedBrowserWebview guest loss", () => {
-  const runtimeTabId = "guest-loss-tab";
-
-  /** Mounts a hydrated tab whose guests get ids 41, 42, ... in creation order. */
-  async function mountGuestTab() {
-    mocks.getClientSettings.mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
-    const guests: Array<EventTarget & { isConnected: boolean }> = [];
-    const createGuest = vi.fn((_attributes: unknown) => {
-      const webContentsId = 41 + guests.length;
-      const guest = Object.assign(new EventTarget(), {
-        isConnected: true,
-        getWebContentsId: () => webContentsId,
-      });
-      guests.push(guest);
-      return guest;
-    });
-    const element = (initialUrl: string) => (
-      <HostedBrowserWebview
-        threadRef={{
-          environmentId: EnvironmentId.make("host-guest-loss"),
-          threadId: ThreadId.make("thread-guest-loss"),
-        }}
-        tabId="server-tab"
-        runtimeTabId={runtimeTabId}
-        initialUrl={initialUrl}
-        viewport={FILL_PREVIEW_VIEWPORT}
-        pictureInPicture={false}
-        profileId={undefined}
-        zoomFactor={1}
-      />
-    );
-    await act(async () => {
-      await ensureClientSettingsHydrated();
-      renderer = create(element("http://localhost:3211/candidates"), {
-        createNodeMock: (node) =>
-          node.type === "webview"
-            ? createGuest(node.props)
-            : { scrollLeft: 0, scrollTop: 0, scrollTo: () => undefined },
-      });
-    });
-    expect(mocks.registerWebview).toHaveBeenLastCalledWith(runtimeTabId, 41);
-    return {
-      guests,
-      createGuest,
-      navigate: (url: string) => act(() => renderer!.update(element(url))),
-    };
-  }
-
-  it("attaches a new guest at the tab's latest URL when the mounted webview loses its page", async () => {
-    const { guests, createGuest, navigate } = await mountGuestTab();
-    await navigate("http://localhost:3211/candidates/maya");
-
-    vi.useFakeTimers();
-    await act(async () => {
-      guests[0]!.dispatchEvent(new Event("destroyed"));
-      await vi.runAllTimersAsync();
-    });
-
-    expect(createGuest).toHaveBeenCalledTimes(2);
-    expect(createGuest).toHaveBeenLastCalledWith(
-      expect.objectContaining({ src: "http://localhost:3211/candidates/maya" }),
-    );
-    expect(mocks.registerWebview).toHaveBeenLastCalledWith(runtimeTabId, 42);
-
-    // Removing the element destroys its guest too; that is not a lost page.
-    await act(async () => {
-      guests[1]!.isConnected = false;
-      guests[1]!.dispatchEvent(new Event("destroyed"));
-      await vi.runAllTimersAsync();
-    });
-    expect(createGuest).toHaveBeenCalledTimes(2);
-  });
-
-  it("remounts once when a crashed guest is then destroyed", async () => {
-    const { guests, createGuest } = await mountGuestTab();
-
-    vi.useFakeTimers();
-    await act(async () => {
-      guests[0]!.dispatchEvent(new Event("render-process-gone"));
-      guests[0]!.dispatchEvent(new Event("destroyed"));
-      await vi.runAllTimersAsync();
-    });
-
-    expect(createGuest).toHaveBeenCalledTimes(2);
-    expect(mocks.registerWebview).toHaveBeenLastCalledWith(runtimeTabId, 42);
   });
 });

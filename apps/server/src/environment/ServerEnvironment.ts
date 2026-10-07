@@ -235,7 +235,6 @@ export const make = Effect.gen(function* () {
       threadSnooze: true,
       environmentThemes: true,
       usageLimitSources: true,
-      previewTunnel: true,
       usagePriceOverrides: true,
       usageModelAliases: true,
       threadPinning: true,
@@ -259,6 +258,7 @@ export const make = Effect.gen(function* () {
         ? { serverSelfUpdateProgress: true }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      serverBrowser: true,
     },
   };
 

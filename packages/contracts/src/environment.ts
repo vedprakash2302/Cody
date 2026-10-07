@@ -140,10 +140,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       client reconnecting to one must drop published themes rather than keep
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
-  /** Server tunnels client connections to its own loopback ports at
-      `/api/preview-tunnel`, so the desktop Browser panel can load a remote
-      environment's dev servers. Absent on older servers. */
-  previewTunnel: Schema.optionalKey(Schema.Boolean),
   /** Server streams quota from configured usage-limit sources. Same
       version-skew contract as environmentThemes. */
   usageLimitSources: Schema.optionalKey(Schema.Boolean),
@@ -212,6 +208,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** Server hosts preview tabs in its own headless Chromium (`runtime:
+      "server"`) and streams them over `/api/preview-stream`. Clients
+      without a local browser runtime open server tabs here. */
+  serverBrowser: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
