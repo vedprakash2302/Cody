@@ -22,10 +22,20 @@ are skipped on all platforms.
 ## Windows work-account sign-in
 
 For Microsoft sites that require a managed device, enable **Windows work-account
-sign-in** in **Settings → Integrations → Browser**. The browser uses the work
-account on the Windows device running the desktop app, even when your project
-runs remotely. That device must meet your organization's access requirements.
-Sites that require a corporate network still need your VPN.
+sign-in** in **Settings → Integrations → Browser** on the Windows machine whose
+browser tabs need it. Tabs use the work account of the Windows machine they run
+on, which for a remote environment is the host, not the device you are viewing
+from:
+
+- Tabs the desktop app shows directly use that device's account.
+- Tabs on a WSL backend the desktop app started use the account of the Windows
+  machine running WSL. They pick up a change to the setting the next time Cody
+  starts that backend.
+- Environments not started by the Windows desktop app, such as a Linux server,
+  cannot use it.
+
+That machine must meet your organization's access requirements. Sites that
+require a corporate network still need your VPN.
 
 This is off by default and applies to all persistent browser profiles, including
 agent browsing. Incognito profiles do not use it. Turning it off stops Windows

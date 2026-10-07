@@ -79,6 +79,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./windowsSso": {
+      "types": "./src/windowsSso.ts",
+      "import": "./src/windowsSso.ts"
+    },
     "./semver": {
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"

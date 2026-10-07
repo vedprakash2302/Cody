@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { ClientSettingsSchema } from "@t3tools/contracts";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,8 @@ import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import * as WindowsSsoPath from "../preview/WindowsSsoPath.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
@@ -36,6 +39,8 @@ const encodePersistedServerObservabilitySettingsDocument = Schema.encodeEffect(
 const isDesktopBackendObservabilitySettingsReadError = Schema.is(
   DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
 );
+
+const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 
 const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),
@@ -1160,6 +1165,56 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("T3CODE_OTLP_HEADERS", previousOtlpHeaders);
         restoreEnv("T3CODE_OTLP_PROTOCOL", previousOtlpProtocol);
         for (const [name, value] of ambientOtel) restoreEnv(name, value);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolveWsl passes the Windows sign-in helper only while sign-in is enabled", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      const helper = "C:\\Program Files\\Cody\\resources\\windows-sso\\t3-windows-sso.exe";
+      const previousWslEnv = process.env.WSLENV;
+      const resolveWith = (browserWindowsSso: boolean) =>
+        Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          return yield* configuration.resolveWsl({ port: 5050, distro: null });
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(
+                DesktopClientSettings.layerTest(
+                  Option.some(decodeClientSettings({ browserWindowsSso })),
+                ),
+              ),
+              Layer.provideMerge(Layer.succeed(WindowsSsoPath.WindowsSsoPath, helper)),
+              Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+      try {
+        process.env.WSLENV = "GOPATH/p";
+        const enabled = yield* resolveWith(true);
+        assert.equal(enabled.env.T3CODE_WINDOWS_SSO_HELPER, helper);
+        assert.include((enabled.env.WSLENV ?? "").split(":"), "T3CODE_WINDOWS_SSO_HELPER/p");
+
+        const disabled = yield* resolveWith(false);
+        assert.notProperty(disabled.env, "T3CODE_WINDOWS_SSO_HELPER");
+        assert.notInclude(disabled.env.WSLENV ?? "", "T3CODE_WINDOWS_SSO_HELPER");
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

@@ -33,6 +33,7 @@
   "packages/shared/src/usageMerge.test.ts",
   "apps/web/src/lib/previewAnnotation.test.ts",
   "apps/desktop/src/preview/WindowsSso.test.ts",
+  "apps/server/src/preview/WindowsSso.test.ts",
   "apps/desktop/src/preview/BrowserSession.test.ts",
   "apps/desktop/scripts/windows-sso-toolchain.test.ts",
   "apps/web/src/hooks/useSettings.test.ts",

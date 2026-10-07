@@ -167,7 +167,8 @@ const layerDesktopPreview = PreviewManager.layer.pipe(
   // Merged rather than provided so the IPC handlers can reach the import
   // service alongside the manager; both sit on the same BrowserSession.
   Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
-  Layer.provideMerge(BrowserSession.layer.pipe(Layer.provide(WindowsSsoPath.layer))),
+  // The WSL backend's launch config reads the helper path too.
+  Layer.provideMerge(BrowserSession.layer.pipe(Layer.provideMerge(WindowsSsoPath.layer))),
   Layer.provideMerge(layerDesktopFoundation),
 );
 
