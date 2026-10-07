@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Session } from "electron";
 
-import {
-  createWindowsSsoHandler,
-  installWindowsSso,
-  isWindowsSsoUrl,
-  parseWindowsSsoResponse,
-} from "./WindowsSso.ts";
+import { isWindowsSsoUrl, parseWindowsSsoResponse } from "@t3tools/shared/windowsSso";
+
+import { createWindowsSsoHandler, installWindowsSso } from "./WindowsSso.ts";
 
 const login = "https://login.microsoftonline.com/tenant/oauth2/authorize?sso_nonce=test";
 const auth = {

@@ -911,7 +911,7 @@ function BrowserWindowsSsoSetting() {
   return (
     <SettingsRow
       {...searchableSetting("browser-windows-sso")}
-      description="Use this Windows device's work account for Microsoft sign-in, including agent browsing. Excludes incognito. Turning this off does not sign out existing website sessions."
+      description="Use this Windows device's work account for Microsoft sign-in, including agent browsing. Excludes incognito. Browser tabs on this device's WSL backend use it after Cody restarts. Turning this off does not sign out existing website sessions."
       control={
         <Switch
           disabled={saving}

@@ -2,6 +2,7 @@ import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import { WINDOWS_SSO_HELPER_ENV } from "@t3tools/shared/windowsSso";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -20,6 +21,8 @@ import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import * as WindowsSsoPath from "../preview/WindowsSsoPath.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
@@ -161,7 +164,7 @@ const mergeWslEnv = (
       .filter((name) => name.length > 0),
   );
 
-  const additions = forwardedEnvNames.filter((name) => !seenNames.has(name));
+  const additions = forwardedEnvNames.filter((entry) => !seenNames.has(getWslEnvEntryName(entry)));
 
   // Preserve the user's WSLENV exactly as Windows handed it to us — empty
   // "::" segments and duplicate entries are harmless no-ops to WSL and not
@@ -611,6 +614,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   input: SharedBootstrapInput & {
     readonly port: number;
     readonly distro: string | null;
+    /** The Windows sign-in helper, when the user enabled work-account sign-in. */
+    readonly windowsSsoHelper?: string | undefined;
   },
 ): Effect.fn.Return<
   DesktopBackendManager.DesktopBackendStartConfig,
@@ -738,6 +743,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       forwardedEnvNames.push(name);
     }
   }
+  if (input.windowsSsoHelper !== undefined) {
+    // `/p` translates the Windows path into its /mnt path inside the distro.
+    forwardedEnv[WINDOWS_SSO_HELPER_ENV] = input.windowsSsoHelper;
+    forwardedEnvNames.push(`${WINDOWS_SSO_HELPER_ENV}/p`);
+  }
 
   // Build an explicit copy of process.env minus T3CODE_HOME (dev-runner
   // exports the Windows-side base dir for the primary; if it leaks into
@@ -840,6 +850,15 @@ export const make = Effect.gen(function* () {
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const crypto = yield* Crypto.Crypto;
+  const windowsSsoPath = yield* WindowsSsoPath.WindowsSsoPath;
+  const clientSettings = yield* Effect.serviceOption(DesktopClientSettings.DesktopClientSettings);
+  // Read at each launch, so turning sign-in on or off reaches WSL browser tabs
+  // when the backend next starts.
+  const windowsSsoHelper = Effect.gen(function* () {
+    if (windowsSsoPath === undefined || Option.isNone(clientSettings)) return undefined;
+    const current = yield* clientSettings.value.get.pipe(Effect.orElseSucceed(() => Option.none()));
+    return Option.getOrUndefined(current)?.browserWindowsSso === true ? windowsSsoPath : undefined;
+  });
   // SynchronizedRef (not a plain Ref) so the read-generate-write is atomic.
   // crypto.randomBytes is a yield point, and resolvePrimary + resolveWsl can
   // resolve concurrently; with a plain Ref both could observe None, generate
@@ -898,6 +917,7 @@ export const make = Effect.gen(function* () {
       ...shared,
       port: backendExposure.port,
       distro: persistedSettings.wslDistro,
+      windowsSsoHelper: yield* windowsSsoHelper,
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
@@ -967,7 +987,11 @@ export const make = Effect.gen(function* () {
     resolveWsl: (input) =>
       Effect.gen(function* () {
         const shared = yield* sharedInputs;
-        return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
+        return yield* resolveWslStartConfig({
+          ...shared,
+          ...input,
+          windowsSsoHelper: yield* windowsSsoHelper,
+        }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
           Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
