@@ -93,11 +93,13 @@ git merge --no-ff --no-commit origin/main
 
 Apply this rule: **prefer upstream's implementation when it includes or supersedes the personal fix and preserves its required behavior.** Matching titles or a closed issue do not establish that. Compare the affected functions and edge cases, then run the personal regression tests against the upstream implementation.
 
+The goal is functional parity: after the sync, Ved can still do everything Cody's patches let him do before it. Before merging, list the fork-only commits (`git log --no-merges t3/main..HEAD`) and write each capability as one sentence, such as "Ved can sign in to Microsoft work pages in browser tabs on a WSL backend". Note the code that delivers it and the tests that cover it. Then check every incoming upstream commit that touches that code, including commits that merge without a conflict. A clean merge can still break a capability. When upstream moved browser tabs from the desktop app to the server (#15328), the merge was clean and the Windows work-account sign-in tests still passed, but nothing called that code anymore.
+
 For each overlap:
 
 - If upstream covers the fix, keep upstream's implementation and remove redundant personal code. Preserve useful regression coverage that upstream lacks.
 - If upstream covers only part of it, keep upstream's implementation plus the smallest remaining personal change. Describe which behavior still needs the patch.
-- If upstream replaced the underlying design, express any still-needed behavior using the new design rather than restoring old abstractions.
+- If upstream replaced the underlying design, rebuild the capability on the new design rather than restoring old abstractions. Trace from where Ved triggers it, such as a setting, button, provider, or launch flag, to the code that does the work, and confirm the merged code still calls it. Add a regression test that fails if that path stops being called.
 - If coverage is uncertain, retain the personal behavior temporarily or ask the user about the specific tradeoff. Do not silently discard a working feature.
 
 Resolve individual conflicting sections. Do not use blanket `-X theirs`, a wholesale checkout of the upstream tree, a hard reset, or GitHub's discard-changes sync on `personal/main`. During an upstream merge, "ours" is the integration branch and "theirs" is upstream, but taking an entire upstream file can erase unrelated personal changes.
@@ -109,9 +111,9 @@ After reconciliation:
 1. Review every resolved file and the final diff against upstream. Confirm the remaining differences are intentional personal changes.
 2. Run `.github/scripts/check-personal-fixes.sh` and focused checks for the affected code. Adapt obsolete test paths to upstream's replacement tests instead of dropping coverage blindly.
 3. Commit the checked merge and any necessary cleanup, then push only to the fork's `personal/main`. Do not force-push.
-4. Report the upstream commit incorporated, which personal changes upstream superseded, which patches remain, and the checks run. Keep this report in the thread or the owning issue, not a new committed implementation checklist.
+4. Report to Ved in plain language, keeping the report in the thread or the owning issue rather than a committed checklist. Cover the patches first: which capabilities now come from upstream, which were rebuilt on upstream's new code and how you confirmed they still work, which patches remain, and anything he must test by hand. Then explain every upstream change since the last Cody release, including commits the daily workflow merged unreviewed. Group them by what he will notice. For each one, say what used to happen and what happens now, which machine needs the update (the server that runs threads, the app he looks at, or both), and anything that breaks until a later fix or needs him to act. Read the upstream PR description when a title is unclear. Skip internal refactors, tests, and CI. End with the upstream commit incorporated and the checks run.
 
-If resolving the merge would require uncertain product decisions, leave the remote branch unchanged. Explain the conflict and the decision needed.
+If resolving the merge would require uncertain product decisions, or a capability can only be confirmed by hand, leave `personal/main` unchanged. Push the checked merge to a new `sync/<date>` branch instead of discarding it, and explain the conflict and the decision or test needed.
 
 ## Build and install separately
 
