@@ -68,5 +68,6 @@
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts",
   "apps/server/src/orchestration-v2/EffectWorker.test.ts",
   "apps/server/src/desktopUpdate/DesktopAgentActivity.test.ts",
-  "apps/desktop/src/updates/DesktopAutoUpdate.test.ts"
+  "apps/desktop/src/updates/DesktopAutoUpdate.test.ts",
+  "apps/desktop/src/app/DesktopCliCommand.test.ts"
 ]

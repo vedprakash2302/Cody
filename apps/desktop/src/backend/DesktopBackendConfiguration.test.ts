@@ -1177,6 +1177,8 @@ describe("DesktopBackendConfiguration", () => {
       });
       const helper = "C:\\Program Files\\Cody\\resources\\windows-sso\\t3-windows-sso.exe";
       const previousWslEnv = process.env.WSLENV;
+      // A Cody backend with sign-in on exports this, so tests run there inherit it.
+      const previousHelperEnv = process.env.T3CODE_WINDOWS_SSO_HELPER;
       const resolveWith = (browserWindowsSso: boolean) =>
         Effect.gen(function* () {
           const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
@@ -1206,6 +1208,7 @@ describe("DesktopBackendConfiguration", () => {
         );
       try {
         process.env.WSLENV = "GOPATH/p";
+        delete process.env.T3CODE_WINDOWS_SSO_HELPER;
         const enabled = yield* resolveWith(true);
         assert.equal(enabled.env.T3CODE_WINDOWS_SSO_HELPER, helper);
         assert.include((enabled.env.WSLENV ?? "").split(":"), "T3CODE_WINDOWS_SSO_HELPER/p");
@@ -1215,6 +1218,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.notInclude(disabled.env.WSLENV ?? "", "T3CODE_WINDOWS_SSO_HELPER");
       } finally {
         restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("T3CODE_WINDOWS_SSO_HELPER", previousHelperEnv);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
