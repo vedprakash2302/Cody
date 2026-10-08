@@ -3260,6 +3260,38 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         yield* removeMcp(state.mcp);
         state.mcp = undefined;
       }
+      // OpenCode drops servers added at runtime when it evicts a directory after
+      // an hour without session activity, then rebuilds it from config alone on
+      // the next request. Each turn checks that this thread's server is still there.
+      if (wanted !== undefined && state.mcp !== undefined) {
+        const status = yield* client.mcp.list({ location: { directory } }).pipe(
+          Effect.timeout(INVENTORY_TIMEOUT),
+          Effect.map(
+            (listed) =>
+              listed.data.find((server) => server.name === name)?.status.status ?? "missing",
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not list OpenCode's MCP servers.", cause).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
+        if (status === "missing") {
+          yield* Effect.logWarning("OpenCode dropped T3 Code's MCP server; adding it again.", {
+            server: name,
+            directory,
+          });
+          state.mcp = undefined;
+        } else if (status === "failed") {
+          yield* Effect.logWarning("T3 Code's MCP server failed in OpenCode; reconnecting it.", {
+            server: name,
+            directory,
+          });
+          yield* client.mcp
+            .connect({ server: name, location: { directory } })
+            .pipe(Effect.timeout(INVENTORY_TIMEOUT), Effect.ignore({ log: true }));
+        }
+      }
       // T3's tools are an addition: a server that cannot add them still runs the turn.
       if (wanted !== undefined && state.mcp === undefined) {
         const added = yield* client.mcp
