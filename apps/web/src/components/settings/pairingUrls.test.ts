@@ -1,10 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import {
+  resolveDesktopPairingUrl,
+  resolveHostedPairingUrl,
+  resolveOriginPairingUrl,
+} from "./pairingUrls";
 
 describe("settings pairing URL helpers", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("never builds a pairing link on the desktop app's private scheme", () => {
+    expect(resolveOriginPairingUrl("t3code://app/settings/connections", "PAIRCODE")).toBeNull();
+    expect(resolveOriginPairingUrl("https://t3.example.com/settings", "PAIRCODE")).toBe(
+      "https://t3.example.com/pair#token=PAIRCODE",
+    );
   });
 
   it("uses direct backend pairing URLs for HTTP endpoints", () => {

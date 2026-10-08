@@ -1,11 +1,14 @@
 import {
   type AdvertisedEndpoint,
+  type AdvertisedEndpointProvider,
   type AuthGrantScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
   type DesktopBridge,
   type DesktopWslState,
+  type ServerDirectEndpoint,
 } from "@t3tools/contracts";
+import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
 
 /**
  * Operating terminals without being able to list them leaves a client
@@ -46,6 +49,52 @@ type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistr
  */
 export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
   return endpoint.status !== "unavailable" && endpoint.reachability !== "loopback";
+}
+
+const SERVER_TAILNET_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
+  id: "tailscale",
+  label: "Tailscale",
+  kind: "private-network",
+  isAddon: true,
+};
+
+/**
+ * Adds the tailnet addresses the backend reports listening on to the desktop's
+ * own list. The desktop only sees its own machine's network, which misses a
+ * WSL backend: that binds every interface inside the distro, and a distro
+ * running Tailscale is its own tailnet node. HTTPS names are left to the
+ * desktop's Tailscale Serve row.
+ */
+export function withServerTailnetEndpoints(
+  endpoints: ReadonlyArray<AdvertisedEndpoint>,
+  directEndpoints: ReadonlyArray<ServerDirectEndpoint> | undefined,
+): ReadonlyArray<AdvertisedEndpoint> {
+  const listed = new Set(endpoints.map((endpoint) => endpoint.httpBaseUrl));
+  const added: AdvertisedEndpoint[] = [];
+  for (const directEndpoint of directEndpoints ?? []) {
+    if (directEndpoint.kind !== "tailnet") continue;
+    let endpoint: AdvertisedEndpoint;
+    try {
+      endpoint = createAdvertisedEndpoint({
+        provider: SERVER_TAILNET_ENDPOINT_PROVIDER,
+        source: "desktop-addon",
+        id: `tailscale-ip:${directEndpoint.httpBaseUrl}`,
+        label: "Tailscale IP",
+        httpBaseUrl: directEndpoint.httpBaseUrl,
+        reachability: "private-network",
+        status: "available",
+        description: "Reachable from devices on the same Tailnet.",
+      });
+    } catch {
+      continue;
+    }
+    if (new URL(endpoint.httpBaseUrl).protocol !== "http:" || listed.has(endpoint.httpBaseUrl)) {
+      continue;
+    }
+    listed.add(endpoint.httpBaseUrl);
+    added.push(endpoint);
+  }
+  return added.length === 0 ? endpoints : [...endpoints, ...added];
 }
 
 export function isWslSettingsRowVisible(input: {

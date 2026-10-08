@@ -69,7 +69,11 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
-import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import {
+  resolveDesktopPairingUrl,
+  resolveHostedPairingUrl,
+  resolveOriginPairingUrl,
+} from "./pairingUrls";
 import {
   applyWslEnableSelection,
   canRevokeOtherClients,
@@ -77,6 +81,7 @@ import {
   isWslSettingsRowVisible,
   selectQrEndpointOption,
   togglePairingScopeSelection,
+  withServerTailnetEndpoints,
 } from "./ConnectionsSettings.logic";
 import {
   SettingsPageContainer,
@@ -143,7 +148,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { AnimatedHeight } from "../AnimatedHeight";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { Textarea } from "../ui/textarea";
-import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
+import { getPairingTokenFromUrl } from "../../pairingUrl";
 import { readHostedPairingRequest } from "../../hostedPairing";
 import {
   createServerPairingCredential,
@@ -615,9 +620,8 @@ function resolveAdvertisedEndpointPairingUrl(
   return resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential);
 }
 
-function resolveCurrentOriginPairingUrl(credential: string): string {
-  const url = new URL("/pair", window.location.href);
-  return setPairingTokenOnUrl(url, credential).toString();
+function resolveCurrentOriginPairingUrl(credential: string): string | null {
+  return resolveOriginPairingUrl(window.location.href, credential);
 }
 
 function isHostedAppPairingUrl(value: string): boolean {
@@ -2891,10 +2895,13 @@ export function ConnectionsSettings() {
   );
   const visibleDesktopNetworkAdvertisedEndpoints = useMemo(
     () =>
-      isLocalBackendNetworkAccessible
-        ? desktopAdvertisedEndpoints.filter((endpoint) => !isTailscaleHttpsEndpoint(endpoint))
-        : [],
-    [desktopAdvertisedEndpoints, isLocalBackendNetworkAccessible],
+      withServerTailnetEndpoints(
+        isLocalBackendNetworkAccessible
+          ? desktopAdvertisedEndpoints.filter((endpoint) => !isTailscaleHttpsEndpoint(endpoint))
+          : [],
+        primaryServerConfig?.directEndpoints,
+      ),
+    [desktopAdvertisedEndpoints, isLocalBackendNetworkAccessible, primaryServerConfig],
   );
   const visibleDesktopAdvertisedEndpoints = useMemo(
     () =>
