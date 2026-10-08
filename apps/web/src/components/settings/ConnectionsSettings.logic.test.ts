@@ -7,6 +7,7 @@ import {
   isWslSettingsRowVisible,
   selectQrEndpointOption,
   togglePairingScopeSelection,
+  withServerTailnetEndpoints,
 } from "./ConnectionsSettings.logic";
 
 describe("togglePairingScopeSelection", () => {
@@ -230,5 +231,37 @@ describe("canRevokeOtherClients", () => {
     expect(canRevokeOtherClients([])).toBe(false);
     expect(canRevokeOtherClients([{ current: true }])).toBe(false);
     expect(canRevokeOtherClients([{ current: true }, { current: false }])).toBe(true);
+  });
+});
+
+describe("withServerTailnetEndpoints", () => {
+  it("offers a WSL backend's tailnet address when the desktop lists none", () => {
+    const endpoints = withServerTailnetEndpoints(
+      [],
+      [
+        { kind: "lan", httpBaseUrl: "http://172.30.75.225:4773/" },
+        { kind: "tailnet", httpBaseUrl: "http://100.83.122.60:4773/" },
+      ],
+    );
+    expect(endpoints.map((endpoint) => endpoint.httpBaseUrl)).toEqual([
+      "http://100.83.122.60:4773/",
+    ]);
+    expect(isQrShareableEndpoint(endpoints[0]!)).toBe(true);
+  });
+
+  it("keeps the desktop's own copy of an address and leaves HTTPS names to Serve", () => {
+    const desktop = makeEndpoint({
+      id: "tailscale-ip:http://100.83.122.60:4773",
+      httpBaseUrl: "http://100.83.122.60:4773/",
+    });
+    expect(
+      withServerTailnetEndpoints(
+        [desktop],
+        [
+          { kind: "tailnet", httpBaseUrl: "http://100.83.122.60:4773/" },
+          { kind: "tailnet", httpBaseUrl: "https://host.example.ts.net:8443/" },
+        ],
+      ),
+    ).toEqual([desktop]);
   });
 });
