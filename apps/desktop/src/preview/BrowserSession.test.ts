@@ -4,6 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { fromPartition, sessions } = vi.hoisted(() => ({
@@ -21,17 +22,36 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
   >(),
 }));
 
+const { fromWebContents } = vi.hoisted(() => ({
+  fromWebContents: vi.fn<(webContents: unknown) => unknown>(() => null),
+}));
+
 vi.mock("electron", () => ({
+  BrowserWindow: { fromWebContents },
   session: {
     fromPartition,
   },
 }));
 
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import { WindowsSsoPath } from "./WindowsSsoPath.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 
+const { showMessageBox } = vi.hoisted(() => ({
+  showMessageBox: vi.fn<
+    (options: Electron.MessageBoxOptions, owner?: Electron.BrowserWindow) => number
+  >(() => 1),
+}));
+const layerDialog = Layer.succeed(ElectronDialog.ElectronDialog, {
+  pickFolder: () => Effect.die("unused"),
+  pickFiles: () => Effect.die("unused"),
+  showMessageBox: (options, owner) =>
+    Effect.sync(() => ({ response: showMessageBox(options, owner), checkboxChecked: false })),
+  showErrorBox: () => Effect.void,
+});
 const layer = BrowserSession.layer.pipe(
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.merge(NodeServices.layer, layerDialog)),
   Layer.provide(DesktopClientSettings.layerTest()),
 );
 
@@ -52,6 +72,37 @@ describe("BrowserSession", () => {
       return browserSession;
     });
   });
+
+  // Cody: since upstream #17316 the desktop runs the tabs a person opens for a
+  // remote environment in its own browser, so every persistent session it
+  // creates must carry Windows work-account sign-in.
+  it.effect("installs Windows work-account sign-in on persistent sessions only", () =>
+    Effect.gen(function* () {
+      const webRequests = new Map<string, ReturnType<typeof vi.fn>>();
+      fromPartition.mockImplementation((partition: string) => {
+        const onBeforeSendHeaders = vi.fn();
+        webRequests.set(partition, onBeforeSendHeaders);
+        return {
+          setPermissionRequestHandler: vi.fn(),
+          setPermissionCheckHandler: vi.fn(),
+          webRequest: { onBeforeSendHeaders, onCompleted: vi.fn(), onErrorOccurred: vi.fn() },
+        };
+      });
+      const browserSessions = yield* BrowserSession.BrowserSession;
+
+      yield* browserSessions.getSession("remote-environment::default");
+      yield* browserSessions.getSession("remote-environment::incognito", false);
+
+      const persistent = yield* browserSessions.getPartition("remote-environment::default");
+      const incognito = yield* browserSessions.getPartition("remote-environment::incognito", false);
+      assert.strictEqual(webRequests.get(persistent)?.mock.calls.length, 1);
+      assert.strictEqual(webRequests.get(incognito)?.mock.calls.length, 0);
+    }).pipe(
+      Effect.provide(layer),
+      Effect.provideService(HostProcessPlatform, "win32"),
+      Effect.provideService(WindowsSsoPath, "C:\\Cody\\resources\\windows-sso\\t3-windows-sso.exe"),
+    ),
+  );
 
   it.effect("derives deterministic partitions and memoizes sessions", () =>
     Effect.gen(function* () {
@@ -172,6 +223,7 @@ describe("BrowserSession", () => {
         "clipboard-sanitized-write",
         "notifications",
         "geolocation",
+        "fullscreen",
       ]) {
         assert.isTrue(requestAllows(permission), `request handler should allow ${permission}`);
         assert.isTrue(
@@ -190,6 +242,73 @@ describe("BrowserSession", () => {
           `check handler should deny ${permission}`,
         );
       }
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("opens custom-scheme links externally only after the user confirms", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+      const requestHandler =
+        sessions.get(partition)?.setPermissionRequestHandler.mock.calls[0]?.[0];
+      assert.isFunction(requestHandler);
+
+      const request = (externalURL: string) =>
+        Effect.callback<boolean>((resume) => {
+          requestHandler(
+            null,
+            "openExternal",
+            (granted: boolean) => resume(Effect.succeed(granted)),
+            { externalURL },
+          );
+        });
+
+      showMessageBox.mockReset();
+      showMessageBox.mockReturnValueOnce(0).mockReturnValueOnce(1);
+      assert.isTrue(yield* request("slack://open?team=T1"));
+      assert.isFalse(yield* request("zoommtg://zoom.us/join"));
+      assert.strictEqual(showMessageBox.mock.calls.length, 2);
+
+      for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"]) {
+        assert.isFalse(yield* request(url), `${url} must never open externally`);
+      }
+      assert.strictEqual(showMessageBox.mock.calls.length, 2);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  // A prompt without an owner can open behind the app window, leaving the one
+  // prompt slot taken and every later link silently denied.
+  it.effect("attaches the open-externally prompt to the window hosting the preview", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+      const requestHandler =
+        sessions.get(partition)?.setPermissionRequestHandler.mock.calls[0]?.[0];
+      assert.isFunction(requestHandler);
+
+      const hostWindow = { id: 7 } as unknown as Electron.BrowserWindow;
+      const host = { isDestroyed: () => false };
+      const guest = { isDestroyed: () => false, hostWebContents: host };
+      fromWebContents.mockImplementation((webContents) =>
+        webContents === host ? hostWindow : null,
+      );
+      showMessageBox.mockReset();
+      showMessageBox.mockReturnValueOnce(1);
+
+      yield* Effect.callback<boolean>((resume) => {
+        requestHandler(
+          guest,
+          "openExternal",
+          (granted: boolean) => resume(Effect.succeed(granted)),
+          {
+            externalURL: "slack://open?team=T1",
+          },
+        );
+      });
+
+      assert.strictEqual(showMessageBox.mock.calls[0]?.[1], hostWindow);
     }).pipe(Effect.provide(layer)),
   );
 
@@ -225,7 +344,7 @@ describe("BrowserSession", () => {
     }).pipe(
       Effect.provide(
         BrowserSession.layer.pipe(
-          Layer.provide(layerFailingCrypto),
+          Layer.provide(Layer.merge(layerFailingCrypto, layerDialog)),
           Layer.provide(DesktopClientSettings.layerTest()),
         ),
       ),

@@ -24,13 +24,15 @@ are skipped on all platforms.
 For Microsoft sites that require a managed device, enable **Windows work-account
 sign-in** in **Settings → Integrations → Browser** on the Windows machine whose
 browser tabs need it. Tabs use the work account of the Windows machine they run
-on, which for a remote environment is the host, not the device you are viewing
-from:
+on:
 
-- Tabs the desktop app shows directly use that device's account.
+- Tabs the desktop app shows directly use that device's account. This includes
+  tabs you open for a remote environment, which run on the device you are
+  viewing from.
 - Tabs on a WSL backend the desktop app started use the account of the Windows
-  machine running WSL. They pick up a change to the setting the next time Cody
-  starts that backend.
+  machine running WSL. These are the tabs agents open, and tabs you move there
+  with **Open in <environment>'s browser** in the tab's More menu. They pick up
+  a change to the setting the next time Cody starts that backend.
 - Environments not started by the Windows desktop app, such as a Linux server,
   cannot use it.
 
