@@ -13,11 +13,7 @@
  * server asks tailscaled instead and advertises that one name.
  */
 import { type RemoteOpenTarget, RemoteOpenUser } from "@t3tools/contracts";
-import {
-  HostProcessHostname,
-  HostProcessPlatform,
-  HostProcessUsername,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import { readTailscaleSshEnabled, readTailscaleStatus } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
@@ -54,7 +50,7 @@ export const make = Effect.gen(function* () {
   // interruption to every load waiting on it.
   const resolveTailscaleSshTargets = Effect.gen(function* () {
     // Tailscale SSH has no Windows server, so skip the CLI there.
-    if ((yield* HostProcessPlatform) === "win32") {
+    if ((yield* HostProcess.Platform) === "win32") {
       return [];
     }
     // Ask both at once: each tailscale CLI start can take hundreds of
@@ -75,7 +71,7 @@ export const make = Effect.gen(function* () {
     // Tailscale SSH signs in as the user the editor names, and editors
     // default to the viewing machine's username. Naming this process's
     // account opens the project as the user T3 Code runs as.
-    const user = yield* HostProcessUsername;
+    const user = yield* HostProcess.Username;
     const target: RemoteOpenTarget =
       user !== undefined && isRemoteOpenUser(user)
         ? { kind: "tailscale-ssh", host: magicDnsName, user }
@@ -106,7 +102,7 @@ export const make = Effect.gen(function* () {
 
     // os.hostname() may already be an FQDN (macOS often reports
     // "Name.local"); mDNS names are always `<first-label>.local`.
-    const hostname = yield* HostProcessHostname;
+    const hostname = yield* HostProcess.Hostname;
     const shortHostname = hostname.split(".")[0]?.trim();
     if (shortHostname !== undefined && shortHostname.length > 0) {
       targets.push({ kind: "mdns", host: `${shortHostname}.local` });

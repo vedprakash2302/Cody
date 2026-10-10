@@ -30,6 +30,7 @@ import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { observeResize } from "~/lib/observeResize";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -86,11 +87,9 @@ export function SidebarBrandWidthProbe({
 }) {
   const observeWidth = useCallback(
     (probe: HTMLDivElement) => {
-      const observer = new ResizeObserver(([entry]) => {
+      return observeResize(probe, ([entry]) => {
         if (entry) onWidthChange(entry.borderBoxSize[0]?.inlineSize ?? probe.offsetWidth);
       });
-      observer.observe(probe);
-      return () => observer.disconnect();
     },
     [onWidthChange],
   );
@@ -113,7 +112,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
     <Link
       aria-label="Go to threads"
       className={cn(
-        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
@@ -125,9 +124,15 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
+    // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
     <span className="inline-flex min-w-0 items-center gap-1.5 text-sm leading-none font-medium tracking-tight">
       <CodyMark aria-hidden className="size-4 shrink-0 text-black dark:text-white" />
-      <span className={cn("truncate", onBackdrop ? "text-white/70" : "text-muted-foreground")}>
+      <span
+        className={cn(
+          "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
+          onBackdrop ? "text-white/70" : "text-muted-foreground",
+        )}
+      >
         {APP_BASE_NAME}
       </span>
     </span>

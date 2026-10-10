@@ -1,4 +1,4 @@
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { Session, WebContents } from "electron";
 import { BrowserWindow, session } from "electron";
 import * as Context from "effect/Context";
@@ -219,7 +219,7 @@ const previewHostWindow = (guest: WebContents | null): BrowserWindow | undefined
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const helper = yield* WindowsSsoPath;
   const clientSettings = yield* DesktopClientSettings;
   const ssoEnabled = () =>

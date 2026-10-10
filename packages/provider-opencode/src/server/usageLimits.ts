@@ -1,5 +1,3 @@
-import * as NodeOS from "node:os";
-
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -9,13 +7,16 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Hex from "effect/encoding/Hex";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import {
   clampPercent,
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const AuthFile = Schema.Struct({
   "opencode-go": Schema.optionalKey(Schema.Unknown),
@@ -206,7 +207,11 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
     const env = input.environment;
     const dataHome =
       env.XDG_DATA_HOME ||
-      path.join(env.HOME || env.USERPROFILE || NodeOS.homedir(), ".local", "share");
+      path.join(
+        env.HOME || env.USERPROFILE || (yield* HostProcess.HomeDirectory),
+        ".local",
+        "share",
+      );
     const authPath = path.join(dataHome, "opencode", "auth.json");
     const contents =
       env.OPENCODE_AUTH_CONTENT ||

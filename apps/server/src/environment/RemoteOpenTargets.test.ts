@@ -1,9 +1,5 @@
 import { it } from "@effect/vitest";
-import {
-  HostProcessHostname,
-  HostProcessPlatform,
-  HostProcessUsername,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -102,9 +98,9 @@ const onMachine = <A, E>(
   program: Effect.Effect<A, E, RemoteOpenTargets.RemoteOpenTargets>,
 ) =>
   program.pipe(
-    Effect.provideService(HostProcessHostname, input.hostname),
-    Effect.provideService(HostProcessUsername, "username" in input ? input.username : "theo"),
-    Effect.provideService(HostProcessPlatform, input.platform ?? "linux"),
+    Effect.provideService(HostProcess.Hostname, input.hostname),
+    Effect.provideService(HostProcess.Username, "username" in input ? input.username : "theo"),
+    Effect.provideService(HostProcess.Platform, input.platform ?? "linux"),
     Effect.provide(
       RemoteOpenTargets.layer.pipe(
         Layer.provide(

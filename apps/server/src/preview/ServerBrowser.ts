@@ -42,11 +42,7 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type PreviewAppearancePreference,
 } from "@t3tools/contracts";
-import {
-  HostProcessArchitecture,
-  HostProcessEnvironment,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import { WINDOWS_SSO_HELPER_ENV } from "@t3tools/shared/windowsSso";
@@ -478,7 +474,7 @@ const CLIPBOARD_SCRIPT = `(() => {
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
-  const host = { platform: yield* HostProcessPlatform, arch: yield* HostProcessArchitecture };
+  const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
   const manager = yield* PreviewManager.PreviewManager;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -488,7 +484,7 @@ const make = Effect.gen(function* () {
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   // The fix every host error names, rendered for how this server was launched.
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
-  const windowsSso = windowsSsoFromEnv((yield* HostProcessEnvironment)[WINDOWS_SSO_HELPER_ENV]);
+  const windowsSso = windowsSsoFromEnv((yield* HostProcess.Environment)[WINDOWS_SSO_HELPER_ENV]);
 
   const tabs = new Map<string, ServerTab>();
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -2374,7 +2370,7 @@ const make = Effect.gen(function* () {
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
   // Whoever runs the server learns the fix before anyone opens a tab.
   if (
-    !PreviewBrowserHost.sandboxDisabled(yield* HostProcessEnvironment) &&
+    !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
     (yield* PreviewBrowserHost.sandboxBlocked)
   ) {
     yield* Effect.logWarning(

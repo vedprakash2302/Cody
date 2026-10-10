@@ -4,7 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { fromPartition, sessions } = vi.hoisted(() => ({
@@ -99,7 +99,7 @@ describe("BrowserSession", () => {
       assert.strictEqual(webRequests.get(incognito)?.mock.calls.length, 0);
     }).pipe(
       Effect.provide(layer),
-      Effect.provideService(HostProcessPlatform, "win32"),
+      Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(WindowsSsoPath, "C:\\Cody\\resources\\windows-sso\\t3-windows-sso.exe"),
     ),
   );

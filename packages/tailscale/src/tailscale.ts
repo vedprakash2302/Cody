@@ -1,4 +1,4 @@
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -227,7 +227,7 @@ export const parseTailscaleStatus = (
 const readTailscaleCommandOutput = (subcommand: "status" | "get", args: readonly string[]) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const hostPlatform = yield* HostProcessPlatform;
+    const hostPlatform = yield* HostProcess.Platform;
     const executable = tailscaleCommandForPlatform(hostPlatform);
     const commandContext = {
       executable,
@@ -326,7 +326,7 @@ const runTailscaleCommand = (
 ): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const hostPlatform = yield* HostProcessPlatform;
+    const hostPlatform = yield* HostProcess.Platform;
     const executable = tailscaleCommandForPlatform(hostPlatform);
     const commandContext = {
       executable,

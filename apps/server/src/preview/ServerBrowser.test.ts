@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { WINDOWS_SSO_HELPER_ENV } from "@t3tools/shared/windowsSso";
 import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
@@ -1586,7 +1586,7 @@ it.live("headless tabs install Windows work-account sign-in, except incognito", 
     }),
   ).pipe(
     Effect.provide(layer),
-    Effect.provideService(HostProcessEnvironment, {
+    Effect.provideService(HostProcess.Environment, {
       ...process.env,
       [WINDOWS_SSO_HELPER_ENV]: "/mnt/c/Cody/windows-sso/t3-windows-sso.exe",
     }),
@@ -1604,6 +1604,9 @@ it.live("headless tabs skip Windows sign-in when the desktop app did not enable 
     }),
   ).pipe(
     Effect.provide(layer),
-    Effect.provideService(HostProcessEnvironment, { ...process.env, [WINDOWS_SSO_HELPER_ENV]: "" }),
+    Effect.provideService(HostProcess.Environment, {
+      ...process.env,
+      [WINDOWS_SSO_HELPER_ENV]: "",
+    }),
   ),
 );
