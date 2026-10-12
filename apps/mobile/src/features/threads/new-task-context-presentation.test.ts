@@ -117,6 +117,16 @@ describe("resolveNewTaskBranchLabel", () => {
       ).toBe(label);
     },
   );
+  it("identifies a deferred PR checkout independently of the origin default", () => {
+    expect(
+      resolveNewTaskBranchLabel({
+        branchName: "fork/feature",
+        startFromOrigin: true,
+        workspaceMode: "worktree",
+        pullRequestReference: "https://github.com/acme/repo/pull/123",
+      }),
+    ).toBe("From PR #123");
+  });
   it("shows the checked-out branch without a base-ref prefix", () => {
     expect(
       resolveNewTaskBranchLabel({

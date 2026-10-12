@@ -44,6 +44,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
   worktreeBaseRef: Schema.optional(Schema.NullOr(Schema.String)),
+  pullRequestReference: Schema.optional(Schema.String),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -77,6 +78,7 @@ export interface QueuedThreadCreation {
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
   readonly worktreeBaseRef?: string | null;
+  readonly pullRequestReference?: string;
 }
 
 export interface QueuedThreadMessage {

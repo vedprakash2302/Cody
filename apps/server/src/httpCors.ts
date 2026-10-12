@@ -9,3 +9,11 @@ export const browserApiCorsAllowedHeaders = [
   "dpop",
   ORCHESTRATION_PROTOCOL_HEADER,
 ] as const;
+
+/** Origins of the Electron renderer, packaged and dev. Cody runs at cody://app alongside T3. */
+export const DESKTOP_RENDERER_ORIGINS = [
+  "t3code://app",
+  "t3code-dev://app",
+  "cody://app",
+  "cody-dev://app",
+] as const;

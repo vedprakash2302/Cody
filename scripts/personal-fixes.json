@@ -72,5 +72,10 @@
   "apps/desktop/src/updates/DesktopAutoUpdate.test.ts",
   "apps/desktop/src/app/DesktopCliCommand.test.ts",
   "apps/web/src/components/settings/ConnectionsSettings.logic.test.ts",
-  "apps/web/src/components/settings/pairingUrls.test.ts"
+  "apps/web/src/components/settings/pairingUrls.test.ts",
+  "packages/shared/src/promptLinks.test.ts",
+  "apps/server/src/auth/EnvironmentAuth.test.ts",
+  "apps/server/src/orchestration-v2/testkit/OrchestratorReplayFixtures.integration.test.ts",
+  "apps/mobile/src/features/threads/new-task-context-presentation.test.ts",
+  "apps/mobile/src/lib/projectThreadStartTurn.test.ts"
 ]

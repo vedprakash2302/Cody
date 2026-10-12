@@ -394,7 +394,7 @@ it.effect.each(["startup", "open-url"] as const)(
     }).pipe(Effect.scoped),
 );
 
-it.effect("hands a web link to the renderer and leaves other links alone", () =>
+it.effect("hands web and app links to the renderer and leaves other links alone", () =>
   Effect.gen(function* () {
     storageMock.mockReturnValue(storageAdapter);
     createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
@@ -418,10 +418,22 @@ it.effect("hands a web link to the renderer and leaves other links alone", () =>
       // macOS hands the default browser every web link.
       assert.strictEqual(open("https://example.com/page"), 1);
       assert.strictEqual(open("http://localhost:3000/"), 1);
+      // Prompt and thread links ride the same queue; the renderer routes them in the app.
+      assert.strictEqual(open("t3code://new?prompt=hi"), 1);
+      assert.strictEqual(open("t3code://threads/env-1/thread-1"), 1);
+      // Cody registers cody:// with the OS, so its prompt links land here too.
+      assert.strictEqual(open("cody://new?prompt=hi"), 1);
       // Anything else is not a web page; Electron keeps its own handling.
       assert.strictEqual(open("mailto:hello@example.com"), 0);
+      assert.strictEqual(open("t3code://somewhere-else"), 0);
       yield* Effect.yieldNow;
-      assert.deepStrictEqual(received, ["https://example.com/page", "http://localhost:3000/"]);
+      assert.deepStrictEqual(received, [
+        "https://example.com/page",
+        "http://localhost:3000/",
+        "t3code://new?prompt=hi",
+        "t3code://threads/env-1/thread-1",
+        "cody://new?prompt=hi",
+      ]);
     }).pipe(
       Effect.provide(layerDesktopClerk(true, [], "darwin")),
       Effect.provideService(HostProcess.Arguments, ["t3"]),

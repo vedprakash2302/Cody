@@ -1,4 +1,5 @@
 import { sanitizeNewRefName, worktreeBaseLabel } from "@t3tools/shared/git";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -65,7 +66,12 @@ export function resolveNewTaskBranchLabel(input: {
   readonly branchIsRemote?: boolean | null;
   readonly startFromOrigin: boolean;
   readonly workspaceMode: WorkspaceMode;
+  readonly pullRequestReference?: string;
 }): string {
+  if (input.workspaceMode === "worktree" && input.pullRequestReference) {
+    const pr = parseChangeRequestUrl(input.pullRequestReference);
+    if (pr) return `From PR #${pr.number}`;
+  }
   if (!input.branchName) {
     return "Choose branch";
   }
