@@ -182,9 +182,9 @@ type ScheduledTaskThreadCandidate = Pick<
 >;
 
 /**
- * Threads a task can post its runs to, most recently active first. Archived
- * threads and provider subagents are left out, except the thread the task
- * already posts to, so opening the editor never drops a saved choice.
+ * Top-level threads a task can post its runs to, most recently active first.
+ * Archived threads and subagent threads are left out, except the thread the
+ * task already posts to, so opening the editor never drops a saved choice.
  */
 export function scheduledTaskThreadOptions(
   threads: ReadonlyArray<ScheduledTaskThreadCandidate>,
