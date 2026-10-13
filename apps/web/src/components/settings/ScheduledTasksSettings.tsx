@@ -944,8 +944,13 @@ function ScheduledTaskEditorDialog({
       draft.baseModelSelection.model === selection.model
         ? draft.baseModelSelection
         : selection;
+    // A task that posts to a thread never launches one, and its hidden checkout
+    // path may be blank, so store the project checkout rather than an invalid one.
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
-      draft.workspaceMode === "root"
+      draft.workspaceMode === "root" ||
+      (draft.threadId &&
+        draft.workspaceMode === "existing_worktree" &&
+        !draft.existingWorktreePath.trim())
         ? { type: "root" }
         : draft.workspaceMode === "existing_worktree"
           ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
@@ -1102,6 +1107,8 @@ function ScheduledTaskEditorDialog({
                   onValueChange={(value) =>
                     setDraft((current) => ({
                       ...current,
+                      // Pin the fallback project so the thread can't outlive it.
+                      projectId: selectedProjectId,
                       threadId: !value || value === NEW_THREAD_EACH_RUN ? "" : value,
                     }))
                   }
