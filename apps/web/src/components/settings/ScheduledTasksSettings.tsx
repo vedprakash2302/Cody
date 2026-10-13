@@ -53,7 +53,8 @@ import {
   useEnvironmentHttpBaseUrl,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { useProjects, useThreadShell, useThreadShellsForProjectRefs } from "../../state/entities";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -67,6 +68,7 @@ import {
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
+  scheduledTaskThreadOptions,
   taskToDraft,
   type DraftState,
   type ScheduleMode,
@@ -106,6 +108,9 @@ import {
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
+
+/** Select value for "start a new thread each run", which stores no thread. */
+const NEW_THREAD_EACH_RUN = "new-thread";
 
 const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   worktree: "Create a new worktree",
@@ -415,6 +420,9 @@ function ScheduledTaskRow({
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
+  const targetThread = useThreadShell(
+    task.threadId === null ? null : scopeThreadRef(environmentId, task.threadId),
+  );
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -460,6 +468,9 @@ function ScheduledTaskRow({
                   ? `Next run ${relativeLabel(task.nextRunAt)}`
                   : "Not scheduled"}
           </span>
+          {task.threadId !== null ? (
+            <span>Posts to {targetThread?.title ?? "an unavailable thread"}</span>
+          ) : null}
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
@@ -820,6 +831,17 @@ function ScheduledTaskEditorDialog({
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const selectedProjectRefs = useMemo(
+    () =>
+      selectedProjectId ? [scopeProjectRef(environmentId, selectedProjectId as ProjectId)] : [],
+    [environmentId, selectedProjectId],
+  );
+  const projectThreads = useThreadShellsForProjectRefs(selectedProjectRefs);
+  const threadOptions = useMemo(
+    () => scheduledTaskThreadOptions(projectThreads, draft.threadId),
+    [projectThreads, draft.threadId],
+  );
+  const selectedThreadTitle = threadOptions.find((option) => option.id === draft.threadId)?.title;
   // The task runs in selectedProject, so its model picker should reflect that
   // project's effective enablement, not just the machine's.
   const instanceEntries = useMemo(
@@ -906,7 +928,11 @@ function ScheduledTaskEditorDialog({
       reportFailure("Invalid interval", "Enter an interval of at least one minute.");
       return;
     }
-    if (draft.workspaceMode === "existing_worktree" && !draft.existingWorktreePath.trim()) {
+    if (
+      !draft.threadId &&
+      draft.workspaceMode === "existing_worktree" &&
+      !draft.existingWorktreePath.trim()
+    ) {
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
@@ -989,6 +1015,7 @@ function ScheduledTaskEditorDialog({
                   setDraft((current) => ({
                     ...current,
                     projectId: "",
+                    threadId: "",
                     modelKey: "",
                     baseModelSelection: null,
                     baseRef: "main",
@@ -1047,7 +1074,11 @@ function ScheduledTaskEditorDialog({
                 <Select
                   value={selectedProjectId}
                   onValueChange={(projectId) =>
-                    setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                    setDraft((current) =>
+                      projectId === (current.projectId || projects[0]?.id)
+                        ? current
+                        : { ...current, projectId: projectId ?? "", threadId: "" },
+                    )
                   }
                 >
                   <SelectTrigger size="sm" id="scheduled-task-project">
@@ -1065,6 +1096,39 @@ function ScheduledTaskEditorDialog({
                 </Select>
               </Field>
 
+              <Field label="Post runs to" htmlFor="scheduled-task-thread">
+                <Select
+                  value={draft.threadId || NEW_THREAD_EACH_RUN}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({
+                      ...current,
+                      threadId: !value || value === NEW_THREAD_EACH_RUN ? "" : value,
+                    }))
+                  }
+                >
+                  <SelectTrigger size="sm" id="scheduled-task-thread">
+                    <SelectValue>
+                      {draft.threadId ? selectedThreadTitle : "A new thread each run"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value={NEW_THREAD_EACH_RUN}>A new thread each run</SelectItem>
+                    {threadOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.title}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </Field>
+            </div>
+
+            {draft.threadId ? (
+              <p className="text-xs text-muted-foreground">
+                Each run is sent to this thread and works in its checkout. Runs wait for the
+                thread's current turn to finish.
+              </p>
+            ) : (
               <Field label="Workspace" htmlFor="scheduled-task-workspace">
                 <Select
                   value={draft.workspaceMode}
@@ -1082,9 +1146,9 @@ function ScheduledTaskEditorDialog({
                   </SelectPopup>
                 </Select>
               </Field>
-            </div>
+            )}
 
-            {draft.workspaceMode === "worktree" ? (
+            {!draft.threadId && draft.workspaceMode === "worktree" ? (
               <Field label="Base branch" htmlFor="scheduled-task-base-ref">
                 <WorktreeBaseBranchPicker
                   key={`${environmentId}:${selectedProjectId}`}
@@ -1101,7 +1165,7 @@ function ScheduledTaskEditorDialog({
                 />
               </Field>
             ) : null}
-            {draft.workspaceMode === "existing_worktree" ? (
+            {!draft.threadId && draft.workspaceMode === "existing_worktree" ? (
               <Field label="Checkout path" htmlFor="scheduled-task-checkout">
                 <Input
                   id="scheduled-task-checkout"

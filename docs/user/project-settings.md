@@ -73,6 +73,14 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+## Post scheduled runs to one thread
+
+Each run of a scheduled task starts a new thread by default. On desktop and
+web, set **Post runs to** in the task's editor to send every run to one thread
+in the task's project instead. Runs then work in that thread's checkout and
+wait for its current turn to finish. Choose **A new thread each run** to go
+back. Mobile keeps a task's thread when you edit it, but can't change it.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**
