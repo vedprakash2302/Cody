@@ -10,6 +10,7 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import { parseMaxDeliveryAge } from "@t3tools/client-runtime/scheduled-task-webhook";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 import {
   resolveProjectSettings,
@@ -168,6 +169,39 @@ export function taskToDraft(task: ScheduledTask): DraftState {
         ? String(schedule.maxDeliveryAgeMinutes)
         : "",
   };
+}
+
+export interface ScheduledTaskThreadOption {
+  readonly id: string;
+  readonly title: string;
+}
+
+type ScheduledTaskThreadCandidate = Pick<
+  EnvironmentThreadShell,
+  "id" | "title" | "archivedAt" | "lineage" | "updatedAt"
+>;
+
+/**
+ * Threads a task can post its runs to, most recently active first. Archived
+ * threads and provider subagents are left out, except the thread the task
+ * already posts to, so opening the editor never drops a saved choice.
+ */
+export function scheduledTaskThreadOptions(
+  threads: ReadonlyArray<ScheduledTaskThreadCandidate>,
+  selectedThreadId: string,
+): ReadonlyArray<ScheduledTaskThreadOption> {
+  const options = threads
+    .filter(
+      (thread) =>
+        thread.id === selectedThreadId ||
+        (thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent"),
+    )
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .map((thread) => ({ id: thread.id, title: thread.title }));
+  if (selectedThreadId && !options.some((option) => option.id === selectedThreadId)) {
+    return [{ id: selectedThreadId, title: "Unavailable thread" }, ...options];
+  }
+  return options;
 }
 
 /** Use configured defaults before the catalog's advertised default model. */
