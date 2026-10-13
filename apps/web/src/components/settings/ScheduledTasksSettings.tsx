@@ -24,6 +24,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { DEFAULT_WEBHOOK_PROMPT } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { scheduledTaskThreadOptions } from "@t3tools/client-runtime/scheduled-task-threads";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
@@ -68,7 +69,6 @@ import {
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
-  scheduledTaskThreadOptions,
   taskToDraft,
   type DraftState,
   type ScheduleMode,

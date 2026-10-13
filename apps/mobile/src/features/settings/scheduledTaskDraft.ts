@@ -6,6 +6,7 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsertSchedule,
   ScheduledTaskWebhookSignature,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
@@ -137,6 +138,8 @@ export type ScheduledTaskDraft = {
   readonly title: string;
   readonly prompt: string;
   readonly projectId: ProjectId | null;
+  /** Thread that receives every run; null starts a new thread each run. */
+  readonly threadId: ThreadId | null;
   readonly modelSelection: ModelSelection | null;
   readonly modelSelectionIsExplicit: boolean;
   readonly schedule: ScheduleDraft;
@@ -153,6 +156,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.title,
     draft.prompt,
     draft.projectId,
+    draft.threadId,
     draft.modelSelection?.instanceId,
     draft.modelSelection?.model,
     [...(draft.modelSelection?.options ?? [])]
@@ -188,6 +192,7 @@ export function createDraft(
     title: "",
     prompt: "",
     projectId,
+    threadId: null,
     modelSelection,
     modelSelectionIsExplicit: false,
     schedule: DEFAULT_SCHEDULE,
@@ -206,6 +211,7 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
     title: task.title,
     prompt: task.prompt,
     projectId: task.projectId,
+    threadId: task.threadId,
     modelSelection: task.modelSelection,
     modelSelectionIsExplicit: true,
     schedule: scheduleDraftForTask(task),
