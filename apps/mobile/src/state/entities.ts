@@ -88,6 +88,13 @@ export function useNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShel
   return useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
 }
 
+/** Thread shells for these projects only, so callers skip updates from other projects. */
+export function useThreadShellsForProjectRefs(
+  refs: ReadonlyArray<ScopedProjectRef>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(environmentThreadShells.threadShellsForProjectRefsAtom(refs));
+}
+
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
   return useAtomValue(ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectAtom(ref));
 }

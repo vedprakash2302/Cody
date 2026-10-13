@@ -7,6 +7,7 @@ import {
   ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   scheduledTaskDefaultModel,
@@ -254,6 +255,16 @@ describe("editing scheduled task branch settings", () => {
       workspaceStrategy: { type: "worktree", baseRef: "release", startFromOrigin },
     });
     expect(draft.startFromOrigin).toBe(startFromOrigin);
+  });
+});
+
+describe("scheduled task thread", () => {
+  it("starts a new thread each run by default and edits keep the task's thread", () => {
+    const threadId = ThreadId.make("thread-1");
+    expect(createDraft(null, null).threadId).toBeNull();
+    const draft = editDraft({ ...legacyTask, threadId });
+    expect(draft.threadId).toBe(threadId);
+    expect(hasScheduledTaskDraftChanges(draft, { ...draft, threadId: null })).toBe(true);
   });
 });
 

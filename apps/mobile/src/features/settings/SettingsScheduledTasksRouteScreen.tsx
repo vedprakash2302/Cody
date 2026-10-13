@@ -9,6 +9,7 @@ import type {
   ProjectId,
   ScheduledTask,
   ScheduledTaskUpsertInput,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
@@ -55,7 +56,14 @@ import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
+import {
+  useProjects,
+  useEnvironmentServerConfig,
+  useThreadShell,
+  useThreadShellsForProjectRefs,
+} from "../../state/entities";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scheduledTaskThreadOptions } from "@t3tools/client-runtime/scheduled-task-threads";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -101,6 +109,21 @@ const DAYS = [
   { index: 6, label: "Sat" },
   { index: 0, label: "Sun" },
 ] as const;
+
+/** Menu id for "start a new thread each run", which stores no thread. */
+const NEW_THREAD_EACH_RUN = "new-thread";
+
+function ScheduledTaskThreadLabel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const thread = useThreadShell(scopeThreadRef(props.environmentId, props.threadId));
+  return (
+    <Text className="text-sm text-foreground-muted" numberOfLines={1}>
+      Posts to {thread?.title ?? "an unavailable thread"}
+    </Text>
+  );
+}
 
 function describeSchedule(task: ScheduledTask): string {
   if (task.schedule.type === "webhook") return "On webhook";
@@ -589,6 +612,15 @@ function TaskForm({
     () => buildModelOptions(config, null, undefined, draft.projectId),
     [config, draft.projectId],
   );
+  const projectRefs = useMemo(
+    () => (draft.projectId ? [scopeProjectRef(environmentId, draft.projectId)] : []),
+    [environmentId, draft.projectId],
+  );
+  const projectThreads = useThreadShellsForProjectRefs(projectRefs);
+  const threadOptions = useMemo(
+    () => scheduledTaskThreadOptions(projectThreads, draft.threadId),
+    [projectThreads, draft.threadId],
+  );
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -646,7 +678,7 @@ function TaskForm({
       !draft.projectId ||
       !draft.modelSelection ||
       !schedule ||
-      (draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
+      (!draft.threadId && draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
     ) {
       Alert.alert(
         "Incomplete task",
@@ -666,9 +698,12 @@ function TaskForm({
       modelSelection: draft.modelSelection,
       schedule,
       enabled: draft.enabled,
-      threadId: draft.task?.threadId ?? null,
+      threadId: draft.threadId,
+      // A task that posts to a thread never launches one, and its hidden checkout
+      // path may be blank, so store the project checkout rather than an invalid one.
       workspaceStrategy:
-        draft.workspace === "root"
+        draft.workspace === "root" ||
+        (draft.threadId && draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
           ? { type: "root" }
           : draft.workspace === "existing_worktree"
             ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
@@ -776,6 +811,7 @@ function TaskForm({
             setDraft({
               ...draft,
               projectId: project.id,
+              threadId: project.id === draft.projectId ? draft.threadId : null,
               modelSelection: keepsExplicitModel
                 ? draft.modelSelection
                 : scheduledTaskDefaultModel(config, project),
@@ -802,37 +838,72 @@ function TaskForm({
 
       <SettingsSection title="Workspace">
         <SelectRow
-          label="Run in"
+          label="Post runs to"
           value={
-            draft.workspace === "worktree"
-              ? "New worktree"
-              : draft.workspace === "root"
-                ? "Project checkout"
-                : "Specific checkout"
+            draft.threadId
+              ? (threadOptions.find((option) => option.id === draft.threadId)?.title ??
+                "Unavailable thread")
+              : "New thread each run"
           }
           actions={[
             {
-              id: "worktree",
-              title: "New worktree",
-              state: draft.workspace === "worktree" ? "on" : undefined,
+              id: NEW_THREAD_EACH_RUN,
+              title: "New thread each run",
+              state: draft.threadId === null ? "on" : undefined,
             },
-            {
-              id: "root",
-              title: "Project checkout",
-              state: draft.workspace === "root" ? "on" : undefined,
-            },
-            {
-              id: "existing_worktree",
-              title: "Specific checkout",
-              state: draft.workspace === "existing_worktree" ? "on" : undefined,
-            },
+            ...threadOptions.map((option) => ({
+              id: option.id,
+              title: option.title,
+              state: option.id === draft.threadId ? ("on" as const) : undefined,
+            })),
           ]}
-          onSelect={(id) => {
-            if (id === "worktree" || id === "root" || id === "existing_worktree")
-              setDraft({ ...draft, workspace: id });
-          }}
+          onSelect={(id) =>
+            setDraft({
+              ...draft,
+              threadId: id === NEW_THREAD_EACH_RUN ? null : (id as ThreadId),
+            })
+          }
         />
-        {draft.workspace === "worktree" ? (
+        {draft.threadId ? (
+          <Text className="border-t border-border-subtle px-4 py-3 text-sm text-foreground-muted">
+            Each run is sent to this thread and works in its checkout. Runs wait for the thread's
+            current turn to finish.
+          </Text>
+        ) : (
+          <SelectRow
+            label="Run in"
+            borderTop
+            value={
+              draft.workspace === "worktree"
+                ? "New worktree"
+                : draft.workspace === "root"
+                  ? "Project checkout"
+                  : "Specific checkout"
+            }
+            actions={[
+              {
+                id: "worktree",
+                title: "New worktree",
+                state: draft.workspace === "worktree" ? "on" : undefined,
+              },
+              {
+                id: "root",
+                title: "Project checkout",
+                state: draft.workspace === "root" ? "on" : undefined,
+              },
+              {
+                id: "existing_worktree",
+                title: "Specific checkout",
+                state: draft.workspace === "existing_worktree" ? "on" : undefined,
+              },
+            ]}
+            onSelect={(id) => {
+              if (id === "worktree" || id === "root" || id === "existing_worktree")
+                setDraft({ ...draft, workspace: id });
+            }}
+          />
+        )}
+        {!draft.threadId && draft.workspace === "worktree" ? (
           <PickerRow
             label="Base branch"
             value={resolveNewTaskBranchLabel({
@@ -845,7 +916,7 @@ function TaskForm({
             onPress={() => navigation.navigate("SettingsScheduledTaskBranch")}
           />
         ) : null}
-        {draft.workspace === "existing_worktree" ? (
+        {!draft.threadId && draft.workspace === "existing_worktree" ? (
           <FormField
             label="Checkout path"
             disabled={saving}
@@ -1225,6 +1296,9 @@ function EnvironmentTasks({
                     ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
                     : ""}
               </Text>
+              {task.threadId !== null ? (
+                <ScheduledTaskThreadLabel environmentId={environmentId} threadId={task.threadId} />
+              ) : null}
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
                   Last run failed: {task.lastRunError}
