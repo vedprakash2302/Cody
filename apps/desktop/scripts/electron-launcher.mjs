@@ -20,7 +20,8 @@ const APP_BUNDLE_ID = isDevelopment
   ? `com.vedpandey.cody.dev.${devBundleIdSuffix || "local"}`
   : "com.vedpandey.cody";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["cody-dev"] : ["cody"];
-const LAUNCHER_VERSION = 20;
+// Cody and upstream both used 20; bump so cached dev bundles pick up the autofill opt-out.
+const LAUNCHER_VERSION = 21;
 const developmentMacIconPngPath = NodePath.join(repoRoot, "assets", "cody", "icon-1024.png");
 const productionMacIconPngPath = developmentMacIconPngPath;
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone launcher script has no Effect runtime.
@@ -275,6 +276,8 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, executableName) {
   for (const [key, value] of Object.entries(resolveMacBundleInfoPlistStrings(executableName))) {
     setPlistString(infoPlistPath, key, value);
   }
+  // macOS 26 offers Messages/Mail codes in every text field unless opted out.
+  setPlistJson(infoPlistPath, "NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac", true);
   setPlistJson(infoPlistPath, "CFBundleURLTypes", [
     {
       CFBundleURLName: APP_BUNDLE_ID,
