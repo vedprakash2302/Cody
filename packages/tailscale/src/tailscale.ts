@@ -19,7 +19,7 @@ const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "
 
 const TailscaleCommandContext = {
   executable: Schema.Literals(["tailscale", "tailscale.exe"]),
-  subcommand: Schema.Literals(["status", "serve", "get"]),
+  subcommand: Schema.Literals(["status", "serve", "debug"]),
   argumentCount: Schema.Number,
 };
 
@@ -126,15 +126,6 @@ export class TailscaleStatusParseError extends Schema.TaggedError<TailscaleStatu
   }
 }
 
-export class TailscaleSettingParseError extends Schema.TaggedError<TailscaleSettingParseError>()(
-  "TailscaleSettingParseError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Failed to decode tailscale get JSON.";
-  }
-}
-
 const TailscaleStatusSelf = Schema.Struct({
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
@@ -223,8 +214,8 @@ export const parseTailscaleStatus = (
     }),
   );
 
-/** Runs a read-only tailscale subcommand and returns its stdout. */
-const readTailscaleCommandOutput = (subcommand: "status" | "get", args: readonly string[]) =>
+/** Runs a read-only tailscale command and returns its stdout. */
+const readTailscaleOutput = (subcommand: "status" | "debug", args: readonly string[]) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostPlatform = yield* HostProcess.Platform;
@@ -235,7 +226,7 @@ const readTailscaleCommandOutput = (subcommand: "status" | "get", args: readonly
       argumentCount: args.length,
     };
     return yield* Effect.gen(function* () {
-      const child = yield* spawner.spawn(ChildProcess.make(executable, args)).pipe(
+      const child = yield* spawner.spawn(ChildProcess.make(executable, [...args])).pipe(
         Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
         // Spawning can also fail as a defect rather than a typed error - a
         // non-directory entry on PATH makes node throw ENOTDIR synchronously.
@@ -282,29 +273,32 @@ const readTailscaleCommandOutput = (subcommand: "status" | "get", args: readonly
     );
   });
 
-export const readTailscaleStatus = readTailscaleCommandOutput("status", ["status", "--json"]).pipe(
+export const readTailscaleStatus = readTailscaleOutput("status", ["status", "--json"]).pipe(
   Effect.flatMap(parseTailscaleStatus),
 );
 
-const decodeTailscaleSshSettingJson = Schema.decodeEffect(
-  Schema.fromJsonString(Schema.Struct({ ssh: Schema.Boolean })),
-);
+const TailscalePrefsJson = Schema.Struct({
+  RunSSH: Schema.optional(Schema.Unknown),
+  WantRunning: Schema.optional(Schema.Unknown),
+});
+
+const decodeTailscalePrefsJson = Schema.decodeEffect(Schema.fromJsonString(TailscalePrefsJson));
 
 /**
- * Whether this node runs Tailscale SSH (`tailscale set --ssh`). `tailscale get`
- * arrived in Tailscale 1.102; older CLIs fail here, which callers read as off.
+ * Whether this node serves Tailscale SSH (`tailscale up --ssh`), read from its
+ * prefs. `tailscale status --json` does not report this for the local node.
+ * `tailscale down` clears WantRunning but keeps RunSSH, so check both.
  */
-export const readTailscaleSshEnabled = readTailscaleCommandOutput("get", [
-  "get",
-  "--json",
-  "ssh",
-]).pipe(
-  Effect.flatMap((stdout) =>
-    decodeTailscaleSshSettingJson(stdout).pipe(
-      Effect.mapError((cause) => new TailscaleSettingParseError({ cause })),
-    ),
-  ),
-  Effect.map((setting) => setting.ssh),
+export const parseTailscaleSshEnabled = (
+  rawPrefsJson: string,
+): Effect.Effect<boolean, TailscaleStatusParseError> =>
+  decodeTailscalePrefsJson(rawPrefsJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((prefs) => prefs.RunSSH === true && prefs.WantRunning !== false),
+  );
+
+export const readTailscaleSshEnabled = readTailscaleOutput("debug", ["debug", "prefs"]).pipe(
+  Effect.flatMap(parseTailscaleSshEnabled),
 );
 
 export function buildTailscaleHttpsBaseUrl(input: {

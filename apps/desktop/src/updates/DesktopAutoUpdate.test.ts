@@ -74,6 +74,14 @@ describe("nextAutoUpdateStep", () => {
     assert.equal(step({ failedInstallVersion: NEXT_VERSION }), "wait");
     assert.equal(step({ state: { ...downloadedState, errorContext: "install" } }), "wait");
   });
+
+  it("does not reinstall a version that did not apply after the restart", () => {
+    assert.equal(step({ state: { ...downloadedState, notAppliedVersion: NEXT_VERSION } }), "wait");
+    assert.equal(
+      step({ state: { ...downloadedState, notAppliedVersion: "0.0.46-nightly.20261005.31" } }),
+      "install",
+    );
+  });
 });
 
 type BackendAnswer = "idle" | "busy" | "unreachable";

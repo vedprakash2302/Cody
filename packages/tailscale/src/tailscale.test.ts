@@ -16,6 +16,7 @@ import {
   ensureTailscaleServe,
   isTailscaleIpv4Address,
   parseTailscaleMagicDnsName,
+  parseTailscaleSshEnabled,
   parseTailscaleStatus,
   readTailscaleSshEnabled,
   readTailscaleStatus,
@@ -23,7 +24,6 @@ import {
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
   TailscaleCommandTimeoutError,
-  TailscaleSettingParseError,
   TailscaleStatusParseError,
 } from "./tailscale.ts";
 
@@ -165,6 +165,26 @@ describe("tailscale", () => {
       assert.notInclude(error.message, String(error.cause));
     }),
   );
+
+  it.effect("reads Tailscale SSH enablement from local prefs", () => {
+    // `tailscale debug prefs` output, trimmed.
+    const prefsJson =
+      '{\n\t"ControlURL": "https://controlplane.tailscale.com",\n\t"RunSSH": true,\n\t"WantRunning": true\n}\n';
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["debug", "prefs"]);
+      return { stdout: prefsJson };
+    });
+
+    return Effect.gen(function* () {
+      assert.isTrue(yield* readTailscaleSshEnabled.pipe(Effect.provide(layer)));
+      assert.isFalse(yield* parseTailscaleSshEnabled('{"RunSSH":false,"WantRunning":true}'));
+      assert.isFalse(yield* parseTailscaleSshEnabled('{"RunSSH":true,"WantRunning":false}'));
+      assert.isFalse(yield* parseTailscaleSshEnabled("{}"));
+      const error = yield* parseTailscaleSshEnabled("{not-json").pipe(Effect.flip);
+      assert.instanceOf(error, TailscaleStatusParseError);
+    });
+  });
 
   it.effect("builds clean HTTPS base URLs", () =>
     Effect.sync(() => {
@@ -322,44 +342,6 @@ describe("tailscale", () => {
       assert.equal(error.message, "tailscale status timed out after 1500ms.");
     }).pipe(Effect.provide(layer));
   });
-
-  it.effect("reads the Tailscale SSH setting through tailscale get", () =>
-    Effect.gen(function* () {
-      for (const enabled of [true, false]) {
-        const layer = layerMockSpawner((command, args) => {
-          assert.equal(command, "tailscale");
-          assert.deepEqual(args, ["get", "--json", "ssh"]);
-          return { stdout: `{\n  "ssh": ${String(enabled)}\n}\n` };
-        });
-        assert.equal(yield* readTailscaleSshEnabled.pipe(Effect.provide(layer)), enabled);
-      }
-    }),
-  );
-
-  it.effect("fails the Tailscale SSH read on CLIs without tailscale get", () => {
-    const layer = layerMockSpawner(() => ({
-      code: 1,
-      stderr: 'tailscale: unknown subcommand "get"',
-    }));
-
-    return Effect.gen(function* () {
-      const error = yield* readTailscaleSshEnabled.pipe(Effect.flip, Effect.provide(layer));
-
-      assert.instanceOf(error, TailscaleCommandExitError);
-      assert.equal(error.subcommand, "get");
-      assert.equal(error.message, "tailscale get exited with code 1.");
-    });
-  });
-
-  it.effect("rejects tailscale get output without a boolean ssh setting", () =>
-    Effect.gen(function* () {
-      for (const stdout of ["true", "{}", '{"ssh":"true"}']) {
-        const layer = layerMockSpawner(() => ({ stdout }));
-        const error = yield* readTailscaleSshEnabled.pipe(Effect.flip, Effect.provide(layer));
-        assert.instanceOf(error, TailscaleSettingParseError);
-      }
-    }),
-  );
 
   it.effect("configures tailscale serve through the process spawner service", () => {
     const layer = layerMockSpawner((command, args) => {

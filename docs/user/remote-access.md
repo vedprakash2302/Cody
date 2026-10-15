@@ -187,9 +187,9 @@ For Antigravity's Google callback on a remote host, see
 For a remote environment, **Open** in the chat header opens the project in VS
 Code, Cursor, VSCodium, or Zed on the device you are using. The editor connects
 to the host over SSH on its own, so the host must run an SSH server: OpenSSH,
-or [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) with Tailscale
-1.102 or later. VS Code, Cursor, and VSCodium also need their remote SSH
-extension. When the host has neither server, the menu shows **No SSH route**.
+or [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh). VS Code,
+Cursor, and VSCodium also need their remote SSH extension. When the host has
+neither server, the menu shows **No SSH route**.
 
 With OpenSSH, the host must accept your SSH key. With Tailscale SSH, the device
 running the editor must reach the host over your tailnet, and the editor signs
@@ -307,8 +307,14 @@ the workspace. These scopes control direct file access from the client.
 To remove an environment from T3 Connect, open your account menu's **T3 Connect**
 page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped. Removing an environment from a device's connection
-settings only forgets it on that device; it stays registered to your account.
+offline or has been wiped. When T3 Connect rejects a host's link, the host
+shows that it was removed from T3 Connect. To link it again, turn on
+**T3 Connect** in **Settings → Connections** on a desktop host, or run
+`t3 connect link` on a command-line host and then restart T3 Code there. A
+command-line host that released its tunnel when it last stopped may link itself
+again on its next start; run `t3 connect unlink` on that host to keep it off.
+Removing an environment from a device's connection settings only forgets it on
+that device; it stays registered to your account.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
 tunnel after it stays offline for several minutes. The environment stays linked

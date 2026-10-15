@@ -56,6 +56,8 @@ export function nextAutoUpdateStep(input: {
     state.errorContext === null &&
     state.downloadedVersion !== null &&
     state.downloadedVersion !== input.failedInstallVersion &&
+    // The app came back on its old version after installing this one.
+    state.downloadedVersion !== state.notAppliedVersion &&
     input.idleSinceMs !== null &&
     nowMs - input.idleSinceMs >= Duration.toMillis(AUTO_INSTALL_IDLE) &&
     input.downloadedAtMs !== null &&

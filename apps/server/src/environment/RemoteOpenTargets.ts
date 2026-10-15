@@ -3,14 +3,11 @@
  * for remote open-in-editor deep links (`vscode://vscode-remote/ssh-remote+…`).
  *
  * The server can only check itself: sshd listening locally, tailscaled
- * reporting a MagicDNS name, and the machine hostname for mDNS. Whether a
- * given name resolves from the viewer's machine is inherently client-side.
+ * reporting a MagicDNS name and whether Tailscale SSH is on, and the machine
+ * hostname for mDNS. Whether a given name resolves from the viewer's machine
+ * is inherently client-side.
  * Targets are ordered most-reachable first (tailnet name works from anywhere
  * on the tailnet; `<hostname>.local` only on the same LAN).
- *
- * Without sshd, Tailscale SSH can still serve the tailnet name. It answers
- * port 22 only for tailnet peers, so the loopback probe cannot see it; the
- * server asks tailscaled instead and advertises that one name.
  */
 import { type RemoteOpenTarget, RemoteOpenUser } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -38,47 +35,6 @@ export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const net = yield* NetService.NetService;
 
-  // Tailscale absent or down is the common case, not an error.
-  const readMagicDnsName = readTailscaleStatus.pipe(
-    Effect.map((status) => status.magicDnsName),
-    Effect.orElseSucceed(() => null),
-    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-  );
-
-  // Read on every config load, as the sshd path reads `tailscale status`.
-  // Sharing one read across loads would hand a disconnecting client's
-  // interruption to every load waiting on it.
-  const resolveTailscaleSshTargets = Effect.gen(function* () {
-    // Tailscale SSH has no Windows server, so skip the CLI there.
-    if ((yield* HostProcess.Platform) === "win32") {
-      return [];
-    }
-    // Ask both at once: each tailscale CLI start can take hundreds of
-    // milliseconds, and config loads wait on this.
-    const [sshEnabled, magicDnsName] = yield* Effect.all(
-      [
-        readTailscaleSshEnabled.pipe(
-          Effect.orElseSucceed(() => false),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        ),
-        readMagicDnsName,
-      ],
-      { concurrency: "unbounded" },
-    );
-    if (!sshEnabled || magicDnsName === null) {
-      return [];
-    }
-    // Tailscale SSH signs in as the user the editor names, and editors
-    // default to the viewing machine's username. Naming this process's
-    // account opens the project as the user T3 Code runs as.
-    const user = yield* HostProcess.Username;
-    const target: RemoteOpenTarget =
-      user !== undefined && isRemoteOpenUser(user)
-        ? { kind: "tailscale-ssh", host: magicDnsName, user }
-        : { kind: "tailscale-ssh", host: magicDnsName };
-    return [target];
-  });
-
   const resolveTargets = Effect.gen(function* () {
     // Check both loopback families: sshd can be bound IPv6-only.
     const sshdListening = yield* Effect.zipWith(
@@ -86,16 +42,41 @@ export const make = Effect.gen(function* () {
       net.hasListenerOnHost(SSH_PORT, "::1"),
       (ipv4, ipv6) => ipv4 || ipv6,
     );
-    // No local sshd leaves Tailscale SSH as the only possible route; with
-    // neither, advertise nothing so clients render a clear "no SSH route"
-    // state instead of links that hang.
-    if (!sshdListening) {
-      return yield* resolveTailscaleSshTargets;
-    }
+
+    // Tailscale absent or down is the common case, not an error.
+    const magicDnsName = yield* readTailscaleStatus.pipe(
+      Effect.map((status) => status.magicDnsName),
+      Effect.orElseSucceed(() => null),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
 
     const targets: Array<RemoteOpenTarget> = [];
 
-    const magicDnsName = yield* readMagicDnsName;
+    if (!sshdListening) {
+      // Tailscale SSH answers on the tailnet name with no local sshd, so only
+      // that name can work. A running tailscaled alone is not an SSH route.
+      // With neither, advertise nothing so clients render a clear "no SSH
+      // route" state instead of links that hang.
+      if (
+        magicDnsName !== null &&
+        (yield* readTailscaleSshEnabled.pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ))
+      ) {
+        // Tailscale SSH signs in as the user the editor names, and editors
+        // default to the viewing machine's username. Naming this process's
+        // account opens the project as the user T3 Code runs as.
+        const user = yield* HostProcess.Username;
+        targets.push(
+          user !== undefined && isRemoteOpenUser(user)
+            ? { kind: "tailscale-ssh", host: magicDnsName, user }
+            : { kind: "tailscale-ssh", host: magicDnsName },
+        );
+      }
+      return targets;
+    }
+
     if (magicDnsName !== null) {
       targets.push({ kind: "tailscale", host: magicDnsName });
     }
