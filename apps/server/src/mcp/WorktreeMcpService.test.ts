@@ -298,9 +298,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 
   // Optional deterministic Path semantics: providing this BEFORE the general
   // mocks means the service resolves Path here rather than from NodeServices,
-  // so absolute-path validation is testable independently of the host OS. The
-  // service only calls isAbsolute; the minimal per-platform semantics are
-  // inlined so the test does not depend on the host's path module.
+  // so absolute-path validation is testable independently of the host OS.
   const win32IsAbsolute = (value: string) => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(value);
   const posixIsAbsolute = (value: string) => value.startsWith("/");
   const layerService =
@@ -469,7 +467,6 @@ describe("t3_worktree_handoff", () => {
           creationSource: "mcp",
         }),
       );
-      // The continuation must be durably queued before anything slower runs.
       expect(harness.sendToThread.mock.invocationCallOrder[0]).toBeLessThan(
         harness.runForThread.mock.invocationCallOrder[0]!,
       );
@@ -659,8 +656,6 @@ describe("t3_worktree_handoff", () => {
   it.effect("does not trip the pre-flight on similarly named branches", () => {
     const harness = makeHarness({ existingBranchWorktreePath: null });
     return Effect.gen(function* () {
-      // "feature/taken" exists in the mock branch list; "feature/take" does
-      // not, and a substring-based check would wrongly match it.
       const result = yield* runHandoff(harness, { branch: "feature/take" });
       expect(result.branch).toBe("feature/take");
       expect(harness.createWorktree).toHaveBeenCalledTimes(1);
@@ -685,8 +680,6 @@ describe("t3_worktree_handoff", () => {
       if (!Exit.isFailure(exit)) {
         return expect.fail("expected a failure exit");
       }
-      // Whether the binding committed is unknown on interruption, so the
-      // worktree must not be force-deleted and no typed failure is invented.
       expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
       expect(harness.removeWorktree).not.toHaveBeenCalled();
     });
@@ -743,7 +736,6 @@ describe("t3_worktree_handoff", () => {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/raced" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
       expect(harness.createWorktree).toHaveBeenCalledTimes(1);
-      // The freshly created worktree must not be left orphaned.
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/raced",
@@ -778,7 +770,6 @@ describe("t3_worktree_handoff", () => {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/archived-race" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
       expect(harness.dispatch).not.toHaveBeenCalled();
-      // The created worktree must not be left orphaned.
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/archived-race",
@@ -801,9 +792,6 @@ describe("t3_worktree_handoff", () => {
       const gate = yield* Deferred.make<void>();
       const harness = makeHarness({ dispatchGate: Deferred.await(gate) });
 
-      // Interrupt arrives while the metadata dispatch is in flight; the
-      // binding-plus-continuation section must run to completion anyway so the
-      // continuation is never lost between the commit and the queue.
       const fiber = yield* Effect.forkChild(
         runHandoff(harness, {
           branch: "feature/interrupted",
@@ -819,8 +807,6 @@ describe("t3_worktree_handoff", () => {
 
       expect(harness.dispatch).toHaveBeenCalledTimes(1);
       expect(harness.sendToThread).toHaveBeenCalledTimes(1);
-      // The setup script must also survive the pending interrupt; otherwise
-      // the continuation run starts in a worktree that was never set up.
       expect(harness.runForThread).toHaveBeenCalledTimes(1);
     }),
   );
@@ -868,8 +854,6 @@ describe("t3_worktree_handoff", () => {
   it.effect("rejects a Windows drive path under posix path semantics", () => {
     const harness = makeHarness({ pathSemantics: "posix" });
     return Effect.gen(function* () {
-      // The schema-level pattern admits drive paths cross-platform; the
-      // runtime check reflects the host the worktree would be created on.
       const exit = yield* Effect.exit(
         runHandoff(harness, { branch: "feature/windows-path", path: "C:\\worktrees\\custom" }),
       );
@@ -889,7 +873,6 @@ describe("t3_worktree_handoff", () => {
         service.handoff(harness.scope, { branch: "feature/guard-1" }),
       );
       expectTypedFailure(first, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
-      // A leaked guard would surface as handoff_in_progress here.
       const second = yield* Effect.exit(
         service.handoff(harness.scope, { branch: "feature/guard-2" }),
       );
@@ -912,14 +895,11 @@ describe("t3_worktree_handoff", () => {
 
       const service = yield* resolveService(harness);
 
-      // First handoff acquires the per-thread guard and blocks on the gate.
       const first = yield* Effect.forkChild(
         Effect.exit(service.handoff(harness.scope, { branch: "feature/race-1" })),
       );
       yield* Effect.yieldNow;
 
-      // Second handoff for the same thread must be refused while the first
-      // is still in flight.
       const second = yield* Effect.exit(
         service.handoff(harness.scope, { branch: "feature/race-2" }),
       );

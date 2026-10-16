@@ -12,7 +12,6 @@ T3 Code keeps the last message of a finished turn visible and may collapse earli
 
 /**
  * Shared runtime context; omit model and effort when the harness manages them dynamically.
- * `modelName` is the display name users see in the model picker; `model` is the slug.
  */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
