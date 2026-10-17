@@ -103,7 +103,7 @@ it.layer(TestLayer)("worktree base preparation", (it) => {
         const { cwd, root, remote, initial, git } = yield* fixture;
         const workflow = yield* GitWorkflowService.GitWorkflowService;
         if (reason === "deleted") {
-          yield* git(remote, ["update-ref", "-d", "refs/heads/main"]);
+          yield* git(remote, ["--git-dir", remote, "update-ref", "-d", "refs/heads/main"]);
         } else {
           yield* git(cwd, ["remote", "set-url", "t3", `${root}/missing`]);
         }

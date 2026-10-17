@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -24,7 +24,7 @@ export function AutoInstallUpdatesRow() {
     };
   }, [getAutoInstall]);
 
-  const handleChange = useCallback((checked: boolean) => {
+  const handleChange = (checked: boolean) => {
     const setAutoInstall = window.desktopBridge?.setAutoInstallUpdates;
     if (!setAutoInstall) return;
     setIsSaving(true);
@@ -40,7 +40,7 @@ export function AutoInstallUpdatesRow() {
         );
       })
       .finally(() => setIsSaving(false));
-  }, []);
+  };
 
   if (!getAutoInstall || enabled === null) return null;
   return (
