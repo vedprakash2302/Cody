@@ -34,7 +34,7 @@ import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { usePaginatedBranches } from "../state/queries";
-import { useProject, useThreadShell } from "../state/entities";
+import { useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "../state/threads";
@@ -43,7 +43,7 @@ import { vcsEnvironment } from "../state/vcs";
 import { cn } from "../lib/utils";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./chat/threadDetailsPanelStyles";
 import { ThreadDetailsPrRows } from "./chat/ThreadDetailsPrRows";
-import { parsePullRequestReference } from "../pullRequestReference";
+import { parsePullRequestReference } from "@t3tools/client-runtime/pull-request-link-input";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
@@ -98,39 +98,6 @@ function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
-// The picker's list keys on these arrays, so they stay cached across the
-// queries and transitions the selector calls after computing them.
-function useBranchPickerItems({
-  refs,
-  createBranchItemValue,
-  checkoutPullRequestItemValue,
-  normalizedQuery,
-}: {
-  refs: ReadonlyArray<VcsRef>;
-  createBranchItemValue: string | null;
-  checkoutPullRequestItemValue: string | null;
-  normalizedQuery: string;
-}) {
-  "use memo";
-  const branchPickerItems = [
-    ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
-    ...refs.map(worktreeBaseRef),
-    ...(createBranchItemValue ? [createBranchItemValue] : []),
-  ];
-  const filteredBranchPickerItems =
-    normalizedQuery.length === 0
-      ? branchPickerItems
-      : branchPickerItems.filter((itemValue) =>
-          shouldIncludeBranchPickerItem({
-            itemValue,
-            normalizedQuery,
-            createBranchItemValue,
-            checkoutPullRequestItemValue,
-          }),
-        );
-  return { branchPickerItems, filteredBranchPickerItems };
-}
-
 export function BranchToolbarBranchSelector({
   forceNewWorktree = false,
   ref,
@@ -168,7 +135,7 @@ export function BranchToolbarBranchSelector({
     reportFailure: false,
   });
   const threadRef = scopeThreadRef(environmentId, threadId);
-  const serverThread = useThreadShell(threadRef);
+  const serverThread = useQuietThreadShell(threadRef);
   const serverSession = serverThread?.runtime ?? null;
   const draftThread = useComposerDraftStore((store) =>
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
@@ -276,36 +243,18 @@ export function BranchToolbarBranchSelector({
           input: { cwd: branchCwd },
         }),
   );
-  const trimmedBranchQuery = branchQuery.trim();
-  const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
-  // The server filters refs by substring, so it has to be given the sanitized
-  // name as well: querying the raw "new branch" drops an existing new-branch
-  // from the response entirely, which would defeat the collision check below.
-  // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
-  const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
   const branchRefState = usePaginatedBranches({
     environmentId,
     cwd: branchCwd,
-    query: branchRefQuery,
+    // The server filters refs by substring, so it has to be given the sanitized
+    // name as well: querying the raw "new branch" drops an existing new-branch
+    // from the response entirely, which would defeat the collision check below.
+    // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
+    query: sanitizeNewRefName(deferredBranchQuery.trim()),
   });
+  const trimmedBranchQuery = branchQuery.trim();
+  const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
   const refs = branchRefState.refs;
-  const hasNextPage =
-    branchRefState.data?.nextCursor !== null && branchRefState.data?.nextCursor !== undefined;
-  const isFetchingNextPage = branchRefState.isFetchingNextPage;
-  const isInitialBranchesLoadPending = branchRefState.isPending && branchRefState.data === null;
-  const currentGitBranch =
-    branchStatusQuery.data?.refName ?? refs.find((refName) => refName.current)?.name ?? null;
-  const sourceControlPresentation = getSourceControlPresentation(
-    branchStatusQuery.data?.sourceControlProvider,
-  );
-  const SourceControlIcon = sourceControlPresentation.Icon;
-  const canonicalActiveBranch = resolveBranchToolbarValue({
-    envMode: effectiveEnvMode,
-    activeWorktreePath,
-    activeThreadBranch,
-    worktreeBaseRef: selectedWorktreeBaseRef,
-    currentGitBranch,
-  });
   const branchByName = new Map(refs.map((refName) => [worktreeBaseRef(refName), refName] as const));
   const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
   const prReference = parsePullRequestReference(trimmedBranchQuery);
@@ -322,11 +271,41 @@ export function BranchToolbarBranchSelector({
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
-  const { branchPickerItems, filteredBranchPickerItems } = useBranchPickerItems({
-    refs,
-    createBranchItemValue: hasExactBranchMatch ? null : createBranchItemValue,
-    checkoutPullRequestItemValue,
-    normalizedQuery: normalizedDeferredBranchQuery,
+  const defaultBranchRef = refs.find((refName) => refName.isDefault);
+  const defaultBranchName = defaultBranchRef ? worktreeBaseRef(defaultBranchRef) : null;
+  const pickerCreateBranchItemValue = hasExactBranchMatch ? null : createBranchItemValue;
+  const branchPickerItems = [
+    ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
+    ...refs.map(worktreeBaseRef),
+    ...(pickerCreateBranchItemValue ? [pickerCreateBranchItemValue] : []),
+  ];
+  const filteredBranchPickerItems =
+    normalizedDeferredBranchQuery.length === 0
+      ? branchPickerItems
+      : branchPickerItems.filter((itemValue) =>
+          shouldIncludeBranchPickerItem({
+            itemValue,
+            normalizedQuery: normalizedDeferredBranchQuery,
+            createBranchItemValue: pickerCreateBranchItemValue,
+            checkoutPullRequestItemValue,
+          }),
+        );
+  const hasNextPage =
+    branchRefState.data?.nextCursor !== null && branchRefState.data?.nextCursor !== undefined;
+  const isFetchingNextPage = branchRefState.isFetchingNextPage;
+  const isInitialBranchesLoadPending = branchRefState.isPending && branchRefState.data === null;
+  const currentGitBranch =
+    branchStatusQuery.data?.refName ?? refs.find((refName) => refName.current)?.name ?? null;
+  const sourceControlPresentation = getSourceControlPresentation(
+    branchStatusQuery.data?.sourceControlProvider,
+  );
+  const SourceControlIcon = sourceControlPresentation.Icon;
+  const canonicalActiveBranch = resolveBranchToolbarValue({
+    envMode: effectiveEnvMode,
+    activeWorktreePath,
+    activeThreadBranch,
+    worktreeBaseRef: selectedWorktreeBaseRef,
+    currentGitBranch,
   });
   const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
     canonicalActiveBranch,
@@ -524,8 +503,6 @@ export function BranchToolbarBranchSelector({
     });
   };
 
-  const defaultBranchRef = refs.find((refName) => refName.isDefault);
-  const defaultBranchName = defaultBranchRef ? worktreeBaseRef(defaultBranchRef) : null;
   const worktreeBaseBranchCandidate = isInitialBranchesLoadPending
     ? null
     : (defaultBranchName ?? currentGitBranch);
