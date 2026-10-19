@@ -33,6 +33,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  MessagesSquare,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -144,6 +145,10 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  /** Cody: present only where side chats are supported. */
+  onAddSideChat?: () => void;
+  sideChatAvailable?: boolean;
+  sideChatDisabledReason?: string;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -194,6 +199,25 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: "No linked pull requests available.",
   device: "Available from a thread.",
 } as const;
+
+/** Cody: the side chat entry, listed only where the server supports side chats. */
+function sideChatSurfaceActions(props: {
+  readonly onAddSideChat?: (() => void) | undefined;
+  readonly sideChatAvailable?: boolean | undefined;
+  readonly sideChatDisabledReason?: string | undefined;
+}) {
+  if (props.onAddSideChat === undefined) return [];
+  return [
+    {
+      label: "Side chat",
+      icon: MessagesSquare,
+      shortcut: "S",
+      available: props.sideChatAvailable === true,
+      disabledReason: props.sideChatDisabledReason ?? "Side chats aren't available here.",
+      onClick: props.onAddSideChat,
+    },
+  ];
+}
 
 type TabContextMenuAction =
   | "rename"
@@ -321,6 +345,9 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  onAddSideChat?: () => void;
+  sideChatAvailable?: boolean;
+  sideChatDisabledReason?: string;
 }) {
   const [highlight, setHighlight] = useState(-1);
 
@@ -382,6 +409,7 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
     },
+    ...sideChatSurfaceActions(props),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -564,6 +592,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
+    case "side-chat":
+      return "Side chat";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -654,6 +684,8 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "side-chat":
+      return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1081,6 +1113,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
     },
+    ...sideChatSurfaceActions(props),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1461,6 +1494,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             deviceAvailable={props.deviceAvailable}
+            {...(props.onAddSideChat === undefined
+              ? {}
+              : {
+                  onAddSideChat: props.onAddSideChat,
+                  sideChatAvailable: props.sideChatAvailable ?? false,
+                  ...(props.sideChatDisabledReason === undefined
+                    ? {}
+                    : { sideChatDisabledReason: props.sideChatDisabledReason }),
+                })}
           />
         ) : (
           props.children

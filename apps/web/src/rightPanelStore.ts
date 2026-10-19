@@ -21,6 +21,7 @@ const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "pull-requests",
+  "side-chat",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -77,7 +78,9 @@ export type RightPanelSurface =
       number: number;
       url?: string;
     }
-  | { id: "pull-requests"; kind: "pull-requests" };
+  | { id: "pull-requests"; kind: "pull-requests" }
+  /** Cody: a side chat of this thread; `resourceId` is the side chat's thread id. */
+  | { id: `side-chat:${string}`; kind: "side-chat"; resourceId: string };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 14;
@@ -122,7 +125,7 @@ interface RightPanelStoreState {
   ) => boolean;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat">,
   ) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
@@ -154,6 +157,7 @@ interface RightPanelStoreState {
     },
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  openSideChat: (ref: ScopedThreadRef, sideChatThreadId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -180,7 +184,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat">,
   ) => void;
   setThreadPanelOpen: (
     ref: ScopedThreadRef,
@@ -203,7 +207,7 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "side-chat">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -764,6 +768,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             upsertSurface(current, terminalSurface(terminalId)),
           ),
         ),
+      openSideChat: (ref, sideChatThreadId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, {
+              id: `side-chat:${sideChatThreadId}`,
+              kind: "side-chat",
+              resourceId: sideChatThreadId,
+            }),
+          ),
+        ),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => ({
@@ -1096,6 +1110,7 @@ useRightPanelStore.subscribe((next, previous) => {
     for (const surface of closedInOrder) {
       if (
         surface.kind === "terminal" ||
+        surface.kind === "side-chat" ||
         (surface.kind === "preview" && surface.resourceId !== null)
       )
         continue;

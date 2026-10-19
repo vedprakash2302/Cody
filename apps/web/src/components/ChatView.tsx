@@ -27,6 +27,7 @@ import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment"
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { parseSideChatCommand, useSideChatEntry } from "../cody/sideChats";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { useThreadTerminalActions } from "./terminal/useThreadTerminalActions";
@@ -1473,6 +1474,17 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  const sideChatEntry = useSideChatEntry({ thread: serverThread, runs: serverProjection?.runs });
+  const openSideChatStable = useStableCallback(() => void sideChatEntry.open());
+  const sideChatPanelProps = sideChatEntry.enabled
+    ? {
+        onAddSideChat: openSideChatStable,
+        sideChatAvailable: sideChatEntry.available && canOperateThread,
+        ...(sideChatEntry.disabledReason === undefined
+          ? {}
+          : { sideChatDisabledReason: sideChatEntry.disabledReason }),
+      }
+    : {};
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -5568,6 +5580,10 @@ export default function ChatView(props: ChatViewProps) {
         openThreadFindStable();
       },
       "rightPanel.toggle": () => toggleRightPanelStable(),
+      "thread.sideChat": () => {
+        if (!sideChatEntry.available) return false;
+        openSideChatStable();
+      },
       "rightPanel.toggleMaximized": ({ event }) => {
         if (!event.repeat) toggleRightPanelMaximizedStable();
       },
@@ -5984,6 +6000,25 @@ export default function ChatView(props: ChatViewProps) {
         setComposerDraftPrompt(composerDraftTarget, "");
         composerRef.current?.resetCursorState();
       }
+      return;
+    }
+    const sideChatQuestion =
+      sideChatEntry.enabled && !directAnnotation && !composerHasNonPromptContent
+        ? parseSideChatCommand(promptRef.current)
+        : null;
+    if (sideChatQuestion !== null) {
+      if (!sideChatEntry.available) {
+        toastManager.add({
+          type: "warning",
+          title: "No side chat yet",
+          description: sideChatEntry.disabledReason,
+        });
+        return;
+      }
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+      void sideChatEntry.open({ send: sideChatQuestion });
       return;
     }
 
@@ -8300,6 +8335,9 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollKeyUp={onComposerPageScrollKeyUpStable}
                               onPageScrollRelease={onComposerPageScrollReleaseStable}
                               onCompactContext={onComposerCompactContextStable}
+                              {...(sideChatEntry.available
+                                ? { onOpenSideChat: openSideChatStable }
+                                : {})}
                               onSend={onComposerSendStable}
                               onResume={onComposerResumeStable}
                               onInterrupt={onInterruptStable}
@@ -8553,6 +8591,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
+          {...sideChatPanelProps}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
@@ -8608,6 +8647,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurfaceStable}
             onAddPullRequests={addPullRequestsSurfaceStable}
             onAddDevice={addDeviceSurfaceStable}
+            {...sideChatPanelProps}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
             diffAvailable={isServerThread && isGitRepo}

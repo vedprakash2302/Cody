@@ -69,6 +69,7 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   MonitorIcon,
   MoonIcon,
   PaletteIcon,
@@ -105,6 +106,7 @@ import {
 } from "./promptLinks/copyPromptLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { useSideChatEntry } from "../cody/sideChats";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -761,6 +763,7 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
+  const sideChatEntry = useSideChatEntry({ thread: activeThread ?? null });
   const activeThreadReferenceCopyTarget =
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
       ? null
@@ -1732,6 +1735,20 @@ function OpenCommandPaletteDialog(props: {
         icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
         run: async () => {
           useRightPanelStore.getState().open(threadRef, "pull-requests");
+        },
+      });
+    }
+    if (sideChatEntry.enabled) {
+      actionItems.push({
+        kind: "action",
+        value: "action:open-side-chat",
+        searchTerms: ["side chat", "side", "btw", "ask", "question"],
+        title: "Open side chat",
+        disabled: !sideChatEntry.available,
+        icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "thread.sideChat",
+        run: async () => {
+          await sideChatEntry.open();
         },
       });
     }

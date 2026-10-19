@@ -23,9 +23,7 @@ export function openSideChatsOf(
         thread.archivedAt === null &&
         thread.deletedAt === null,
     )
-    .toSorted(
-      (left, right) => right.updatedAt.epochMilliseconds - left.updatedAt.epochMilliseconds,
-    );
+    .sort((left, right) => right.updatedAt.epochMilliseconds - left.updatedAt.epochMilliseconds);
 }
 
 export function createCodySideChatAtoms<R, E>(input: {
