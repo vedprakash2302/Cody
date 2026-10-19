@@ -15,37 +15,38 @@ import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
-import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   AuthOrchestrationOperateScope,
   ThreadId,
-  type ProviderApprovalDecision,
+  type OrchestrationV2ConversationMessage,
   type RunId,
-  type RuntimeRequestId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowUpIcon, MoreHorizontalIcon, SquareIcon } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import {
+  ArrowUpRightIcon,
+  CornerUpLeftIcon,
+  GitBranchIcon,
+  Maximize2Icon,
+  MoreHorizontalIcon,
+  RotateCcwIcon,
+  XIcon,
+} from "lucide-react";
+import { useRef, useState } from "react";
 
-import { ComposerPendingApprovalActions } from "../components/chat/ComposerPendingApprovalActions";
-import { ComposerPendingApprovalPanel } from "../components/chat/ComposerPendingApprovalPanel";
+import { ThreadVisitWatermark } from "../components/ChatView";
 import { MessagesTimeline } from "../components/chat/MessagesTimeline";
 import { Button } from "../components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../components/ui/menu";
-import { Textarea } from "../components/ui/textarea";
 import { toastManager } from "../components/ui/toast";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
-import { newMessageId, newThreadId } from "../lib/utils";
-import { useRightPanelStore } from "../rightPanelStore";
+import { newThreadId } from "../lib/utils";
 import {
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
-  derivePendingApprovals,
   derivePhase,
   isLatestRunSettled,
 } from "../session-logic";
@@ -61,18 +62,37 @@ import { useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { SideChatComposer } from "./SideChatComposer";
 import {
-  codySideChats,
-  useOpenSideChat,
+  mergeBackRunIdOf,
+  useSideChatActions,
   useSideChatDraftStore,
   useSideChatOwnTurnItems,
 } from "./sideChats";
+import { useSideChatRequests } from "./useSideChatRequests";
 
 const NO_MESSAGES: never[] = [];
 const noop = () => {};
+const EXCERPT_LENGTH = 80;
 
-const failureMessage = (error: unknown, fallback: string) =>
-  error instanceof Error && error.message.length > 0 ? error.message : fallback;
+/** Main's answer at the fork point, as one plain line. */
+function forkPointExcerpt(
+  messages: ReadonlyArray<OrchestrationV2ConversationMessage> | undefined,
+  runId: RunId | null,
+): string | null {
+  if (messages === undefined || runId === null) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant" || message.runId !== runId) continue;
+    const line = message.text
+      .replace(/[`*_#>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (line.length === 0) return null;
+    return line.length > EXCERPT_LENGTH ? `${line.slice(0, EXCERPT_LENGTH).trimEnd()}…` : line;
+  }
+  return null;
+}
 
 /**
  * A side chat of `parentRef`, beside it in the right panel. It shows only the
@@ -98,7 +118,12 @@ export function SideChatPanel(props: {
     shellExists: shell !== null,
     waitForShell: true,
   });
+  const parentDetailRef = resolveThreadDetailRef(parentRef, {
+    shellExists: parentShell !== null,
+    waitForShell: true,
+  });
   const projection = useThreadProjection(detailRef)?.projection ?? null;
+  const parentProjection = useThreadProjection(parentDetailRef)?.projection ?? null;
   const turnDiffSummaries = useThreadCheckpointSummaries(detailRef);
   const ownItems = useSideChatOwnTurnItems(detailRef);
   const timelineEntries = useIncrementalTimelineEntries(threadKey, {
@@ -108,146 +133,34 @@ export function SideChatPanel(props: {
       ? {}
       : { attempts: projection.attempts, nodes: projection.nodes, plans: projection.plans }),
   });
+  const requests = useSideChatRequests(sideRef, projection);
 
   const settings = useEnvironmentSettings(environmentId);
   const { resolvedTheme } = useTheme();
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const listRef = useRef<LegendListRef | null>(null);
   const [liveFollow, setLiveFollow] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
-  const draft = useSideChatDraftStore((state) => state.drafts[props.sideChatThreadId] ?? "");
-  const setDraft = (text: string) =>
-    useSideChatDraftStore.getState().setDraft(props.sideChatThreadId, text);
-
-  const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, { reportFailure: false });
-  const interruptTurn = useOrchestrationCommand(threadEnvironment.interruptTurn, {
-    reportFailure: false,
-  });
-  const respondToApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
-    reportFailure: false,
-  });
-  const mergeBack = useOrchestrationCommand(threadEnvironment.mergeBack, {
-    reportFailure: false,
-  });
+  const dismissedMovedOn = useSideChatDraftStore(
+    (state) => state.dismissedMovedOn[props.sideChatThreadId],
+  );
+  const runAction = useSideChatActions();
   const forkFromRun = useOrchestrationCommand(threadEnvironment.forkFromRun, {
     reportFailure: false,
   });
-  const promote = useOrchestrationCommand(codySideChats.promote, { reportFailure: false });
-  const openSideChat = useOpenSideChat();
 
   const latestRun = projection === null ? null : deriveLatestThreadRun(projection);
   const activityRun = projection === null ? null : deriveThreadActivityRun(projection);
   const runtime = projection === null ? null : deriveThreadRuntime(projection);
   const runlessWorkStartedAt = projection === null ? null : deriveRunlessWorkStartedAt(projection);
-  const isWorking = derivePhase(runtime) === "running" || sending || runlessWorkStartedAt !== null;
+  const isWorking = derivePhase(runtime) === "running" || runlessWorkStartedAt !== null;
   const canInterrupt = canOperate && deriveCanInterruptRunningThread(shell !== null, runtime);
-  const requests = projection === null ? null : derivePendingThreadRequests(projection);
-  const activeApproval = derivePendingApprovals(requests?.approvals ?? [])[0] ?? null;
-  const pendingApprovalCount = requests?.approvals.length ?? 0;
-  const hasPendingQuestion = (requests?.userInputs.length ?? 0) > 0;
-  const mergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
   const cwd = shell?.worktreePath ?? project?.workspaceRoot ?? undefined;
 
-  const reportFailure = (title: string, error: unknown, fallback: string) =>
-    toastManager.add({ type: "error", title, description: failureMessage(error, fallback) });
-
-  const openInFullView = () =>
-    void navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(sideRef) });
-
-  const send = async () => {
-    const text = draft.trim();
-    if (text.length === 0 || shell === null || sending) return;
-    setSending(true);
-    setDraft("");
-    const result = await startTurn({
-      environmentId,
-      input: {
-        threadId: sideRef.threadId,
-        message: { messageId: newMessageId(), role: "user", text, attachments: [] },
-        runtimeMode: shell.runtimeMode,
-        interactionMode: shell.interactionMode,
-        dispatchMode: "auto",
-      },
+  const openThread = (threadId: ThreadId) =>
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
     });
-    setSending(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      setDraft(text);
-      reportFailure(
-        "Couldn't send",
-        squashAtomCommandFailure(result),
-        "Failed to send the message.",
-      );
-    }
-  };
-
-  const stop = async () => {
-    const result = await interruptTurn({ environmentId, input: { threadId: sideRef.threadId } });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      reportFailure("Couldn't stop", squashAtomCommandFailure(result), "Failed to stop the turn.");
-    }
-  };
-
-  const onRespondToApproval = async (
-    requestId: RuntimeRequestId,
-    decision: ProviderApprovalDecision,
-  ) => {
-    setRespondingRequestIds((ids) => [...ids, requestId]);
-    const result = await respondToApproval({
-      environmentId,
-      input: { threadId: sideRef.threadId, requestId, decision },
-    });
-    setRespondingRequestIds((ids) => ids.filter((id) => id !== requestId));
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      reportFailure(
-        "Couldn't answer the request",
-        squashAtomCommandFailure(result),
-        "Failed to answer the approval request.",
-      );
-    }
-  };
-
-  const bringBackToMain = async () => {
-    if (mergeBackRun === null) return;
-    const result = await mergeBack({
-      environmentId,
-      input: {
-        sourceThreadId: sideRef.threadId,
-        targetThreadId: parentRef.threadId,
-        runId: mergeBackRun.id,
-      },
-    });
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        reportFailure("Couldn't bring it back", squashAtomCommandFailure(result), "Merge failed.");
-      }
-      return;
-    }
-    toastManager.add({
-      type: "success",
-      title: "Brought back to main",
-      description: "A summary of this side chat goes in with your next message there.",
-    });
-  };
-
-  const keepAsThread = async () => {
-    const result = await promote({ environmentId, input: { threadId: sideRef.threadId } });
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        reportFailure("Couldn't keep it", squashAtomCommandFailure(result), "Promotion failed.");
-      }
-      return;
-    }
-    useRightPanelStore.getState().closeSurface(parentRef, `side-chat:${props.sideChatThreadId}`);
-    toastManager.add({
-      type: "success",
-      title: "Kept as a thread",
-      description: "It's in your thread list now.",
-    });
-  };
-
-  // The server closes this side chat before starting the new one.
-  const startFresh = () => void openSideChat(parentRef, { fresh: true });
 
   const forkResponse = async (input: {
     readonly sourceThreadId: ThreadId;
@@ -265,23 +178,18 @@ export function SideChatPanel(props: {
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
-        reportFailure("Couldn't fork", squashAtomCommandFailure(result), "Fork failed.");
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Couldn't fork",
+          description: error instanceof Error ? error.message : "Fork failed.",
+        });
       }
       return;
     }
-    const targetRef = scopeThreadRef(environmentId, targetThreadId);
-    if (await waitForThreadShell(targetRef)) {
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(targetRef),
-      });
+    if (await waitForThreadShell(scopeThreadRef(environmentId, targetThreadId))) {
+      openThread(targetThreadId);
     }
-  };
-
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    void send();
   };
 
   if (shell === null || shell.source.codySideChat !== true) {
@@ -291,11 +199,11 @@ export function SideChatPanel(props: {
         <p className="text-muted-foreground text-sm">
           {promoted
             ? "This side chat is a regular thread now."
-            : "This side chat was closed. Reopen it from the thread's lineage."}
+            : "This side chat was closed. Reopen it from the thread's details."}
         </p>
         <div className="flex gap-2">
           {promoted ? (
-            <Button size="sm" variant="outline" onClick={openInFullView}>
+            <Button size="sm" variant="outline" onClick={() => openThread(sideRef.threadId)}>
               Open thread
             </Button>
           ) : null}
@@ -307,58 +215,63 @@ export function SideChatPanel(props: {
     );
   }
 
-  const parentWorking = parentShell !== null && threadRuntimeIsActive(parentShell.runtime);
-  const parentNeedsYou =
-    parentShell !== null && (parentShell.hasPendingApprovals || parentShell.hasPendingUserInput);
   const forkedFromRunId = shell.forkedFrom?.type === "run" ? shell.forkedFrom.runId : null;
+  const excerpt = forkPointExcerpt(parentProjection?.messages, forkedFromRunId);
+  const parentWorking = parentShell !== null && threadRuntimeIsActive(parentShell.runtime);
+  const parentLatestRunId =
+    parentShell?.latestRun?.completedAt != null ? parentShell.latestRun.runId : null;
   const parentMovedOn =
     !parentWorking &&
-    parentShell?.latestRun != null &&
-    parentShell.latestRun.completedAt !== null &&
-    parentShell.latestRun.runId !== forkedFromRunId;
-  const parentStatus = parentNeedsYou
-    ? "Main needs you"
-    : parentWorking
-      ? "Main is working"
-      : parentMovedOn
-        ? "Main has moved on since this side chat started"
-        : "Sees the main thread up to its last finished response";
+    parentLatestRunId !== null &&
+    parentLatestRunId !== forkedFromRunId &&
+    dismissedMovedOn !== parentLatestRunId;
 
   return (
     <FileMetadataThreadProvider threadRef={sideRef} cwd={cwd} checkpoints={projection?.checkpoints}>
+      {props.visible ? <ThreadVisitWatermark threadRef={sideRef} /> : null}
       <div className="flex h-full min-h-0 flex-col" data-cody-side-chat>
-        <div className="flex items-center gap-2 border-b px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-medium text-sm">Side chat</div>
-            <div className="truncate text-muted-foreground text-xs">{parentStatus}</div>
-          </div>
-          {parentMovedOn ? (
-            <Button size="xs" variant="outline" onClick={startFresh}>
-              New side chat
-            </Button>
-          ) : null}
+        <div className="flex h-8 shrink-0 items-center gap-1.5 border-b ps-3 pe-1.5 text-muted-foreground text-xs">
+          <GitBranchIcon className="size-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1 truncate">
+            {excerpt === null ? (
+              "Sees main up to its last finished response"
+            ) : (
+              <>
+                Sees main up to <span className="text-foreground/80">“{excerpt}”</span>
+              </>
+            )}
+          </span>
           <Menu>
             <MenuTrigger
               render={<Button size="icon-xs" variant="ghost" aria-label="Side chat actions" />}
             >
               <MoreHorizontalIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup align="end">
+            <MenuPopup align="end" className="min-w-56">
               <MenuItem
-                disabled={!canOperate || mergeBackRun === null}
-                onClick={() => void bringBackToMain()}
+                disabled={!canOperate || mergeBackRunIdOf(shell) === null}
+                onClick={() => void runAction("bring-back", sideRef)}
               >
+                <CornerUpLeftIcon className="size-3.5" />
                 Bring back to main
               </MenuItem>
-              <MenuItem disabled={!canOperate} onClick={() => void keepAsThread()}>
+              <MenuItem disabled={!canOperate} onClick={() => void runAction("keep", sideRef)}>
+                <ArrowUpRightIcon className="size-3.5" />
                 Keep as thread
               </MenuItem>
-              <MenuItem disabled={!canOperate} onClick={startFresh}>
-                New side chat
+              <MenuItem disabled={!canOperate} onClick={() => void runAction("fresh", sideRef)}>
+                <RotateCcwIcon className="size-3.5" />
+                Start fresh from main
               </MenuItem>
-              <MenuItem onClick={openInFullView}>Open in full view</MenuItem>
+              <MenuItem onClick={() => void runAction("full-view", sideRef)}>
+                <Maximize2Icon className="size-3.5" />
+                Open in full view
+              </MenuItem>
               <MenuSeparator />
-              <MenuItem onClick={props.onClose}>Close side chat</MenuItem>
+              <MenuItem onClick={props.onClose}>
+                <XIcon className="size-3.5" />
+                Close side chat
+              </MenuItem>
             </MenuPopup>
           </Menu>
         </div>
@@ -366,15 +279,14 @@ export function SideChatPanel(props: {
         <div className="relative flex min-h-0 flex-1 flex-col">
           {ownItems.length === 0 ? (
             <div className="flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
-              Ask anything about this thread. The side chat sees it up to its last finished
-              response, works in the same files, and asks before it edits anything.
+              Ask about this thread while main keeps working.
             </div>
           ) : (
             <MessagesTimeline
               isWorking={isWorking}
               runlessWorkActive={runlessWorkStartedAt !== null}
               activeTurnInProgress={isWorking || !isLatestRunSettled(latestRun, runtime)}
-              awaitingUser={activeApproval !== null || hasPendingQuestion}
+              awaitingUser={requests.activeApproval !== null || requests.activeUserInput !== null}
               activeTurnStartedAt={
                 deriveActiveWorkStartedAt(activityRun, runtime, null) ?? runlessWorkStartedAt
               }
@@ -386,13 +298,8 @@ export function SideChatPanel(props: {
               turnDiffSummaries={turnDiffSummaries}
               activeThreadEnvironmentId={environmentId}
               routeThreadKey={threadKey}
-              onOpenTurnDiff={openInFullView}
-              onOpenThread={(threadId) =>
-                void navigate({
-                  to: "/$environmentId/$threadId",
-                  params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
-                })
-              }
+              onOpenTurnDiff={() => void runAction("full-view", sideRef)}
+              onOpenThread={openThread}
               onForkFromRun={forkResponse}
               // Restoring a side chat checkpoint would roll back files the main thread shares.
               supportsConversationRollback={false}
@@ -417,61 +324,27 @@ export function SideChatPanel(props: {
           )}
         </div>
 
-        <div className="flex flex-col gap-2 border-t p-2">
-          {activeApproval !== null ? (
-            <div className="flex flex-col gap-2 rounded-lg border p-2">
-              <ComposerPendingApprovalPanel
-                approval={activeApproval}
-                pendingCount={pendingApprovalCount}
-              />
-              <ComposerPendingApprovalActions
-                requestId={activeApproval.requestId}
-                disabled={!canOperate}
-                isResponding={respondingRequestIds.includes(activeApproval.requestId)}
-                options={activeApproval.options}
-                canRespond={activeApproval.responseCapability === "live"}
-                onRespondToApproval={onRespondToApproval}
-              />
-            </div>
-          ) : null}
-          {hasPendingQuestion ? (
-            <div className="flex items-center gap-2 text-muted-foreground text-xs">
-              <span className="flex-1">The side chat is asking you a question.</span>
-              <Button size="xs" variant="outline" onClick={openInFullView}>
-                Answer in full view
-              </Button>
-            </div>
-          ) : null}
-          <div className="flex items-end gap-2">
-            <Textarea
-              size="sm"
-              value={draft}
-              disabled={!canOperate}
-              placeholder="Ask about this thread"
-              aria-label="Side chat message"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-            />
-            {canInterrupt ? (
-              <Button
-                size="icon-sm"
-                variant="outline"
-                aria-label="Stop the side chat"
-                onClick={() => void stop()}
-              >
-                <SquareIcon className="size-3.5" />
-              </Button>
-            ) : (
-              <Button
-                size="icon-sm"
-                aria-label="Send to side chat"
-                disabled={!canOperate || sending || draft.trim().length === 0}
-                onClick={() => void send()}
-              >
-                <ArrowUpIcon className="size-4" />
-              </Button>
-            )}
-          </div>
+        <div className="shrink-0 px-3 pb-3">
+          <SideChatComposer
+            sideRef={sideRef}
+            shell={shell}
+            requests={requests}
+            canOperate={canOperate}
+            isWorking={isWorking}
+            canInterrupt={canInterrupt}
+            cwd={cwd}
+            movedOnNotice={
+              parentMovedOn && parentLatestRunId !== null
+                ? {
+                    onStartFresh: () => void runAction("fresh", sideRef),
+                    onDismiss: () =>
+                      useSideChatDraftStore
+                        .getState()
+                        .dismissMovedOn(props.sideChatThreadId, parentLatestRunId),
+                  }
+                : null
+            }
+          />
         </div>
       </div>
     </FileMetadataThreadProvider>

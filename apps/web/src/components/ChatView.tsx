@@ -27,7 +27,7 @@ import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment"
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useStableCallback } from "../hooks/useStableCallback";
-import { parseSideChatCommand, useSideChatEntry } from "../cody/sideChats";
+import { parseSideChatCommand, type SideChatAction, useSideChatEntry } from "../cody/sideChats";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { useThreadTerminalActions } from "./terminal/useThreadTerminalActions";
@@ -1480,6 +1480,8 @@ export default function ChatView(props: ChatViewProps) {
     ? {
         onAddSideChat: openSideChatStable,
         sideChatAvailable: sideChatEntry.available && canOperateThread,
+        onSideChatAction: (action: SideChatAction, sideChatRef: ScopedThreadRef) =>
+          void sideChatEntry.runAction(action, sideChatRef),
         ...(sideChatEntry.disabledReason === undefined
           ? {}
           : { sideChatDisabledReason: sideChatEntry.disabledReason }),
@@ -8686,7 +8688,7 @@ function PreviewSessionSync(props: { readonly threadRef: ScopedThreadRef }) {
 // The visit watermark is the one part of the chat view that follows the
 // shell's updatedAt, which ticks while a run streams. Keeping it in a leaf lets
 // ChatView read the quiet shell.
-function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRef }) {
+export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRef }) {
   const serverThread = useThreadShell(props.threadRef);
   const threadKey = scopedThreadKey(props.threadRef);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);

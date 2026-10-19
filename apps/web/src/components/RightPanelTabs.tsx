@@ -1,6 +1,9 @@
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import { pullRequestHostOf, type SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { readThreadShell, useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import { SideChatTabStatusDot } from "../cody/SideChatTabStatusDot";
+import { mergeBackRunIdOf, type SideChatAction } from "../cody/sideChats";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
@@ -12,6 +15,7 @@ import type {
   ProjectId,
   PullRequestState,
   ResolvedKeybindingsConfig,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -149,6 +153,7 @@ interface RightPanelTabsProps {
   onAddSideChat?: () => void;
   sideChatAvailable?: boolean;
   sideChatDisabledReason?: string;
+  onSideChatAction?: (action: SideChatAction, sideChatRef: ScopedThreadRef) => void;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -223,6 +228,7 @@ type TabContextMenuAction =
   | "rename"
   | "copy-path"
   | "toggle-mute"
+  | `side-chat:${SideChatAction}`
   | "close"
   | "close-others"
   | "close-to-right"
@@ -891,6 +897,12 @@ function RightPanelTab(
             aria-hidden
           />
         ) : null}
+        {surface.kind === "side-chat" && props.environmentId !== null ? (
+          <SideChatTabStatusDot
+            environmentId={props.environmentId}
+            sideChatThreadId={surface.resourceId}
+          />
+        ) : null}
       </PanelTabCloseButton>
       {audio === "none" || !audioRuntimeTabId ? null : (
         <Tooltip>
@@ -1153,8 +1165,29 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }),
       });
     }
+    const sideChatRef =
+      surface.kind === "side-chat" &&
+      props.environmentId !== null &&
+      props.onSideChatAction !== undefined
+        ? scopeThreadRef(props.environmentId, ThreadId.make(surface.resourceId))
+        : null;
+    const runSideChatAction = (action: SideChatAction) => {
+      if (sideChatRef !== null) props.onSideChatAction?.(action, sideChatRef);
+    };
+    if (sideChatRef !== null) {
+      items.push(
+        {
+          id: "side-chat:bring-back",
+          label: "Bring back to main",
+          disabled: mergeBackRunIdOf(readThreadShell(sideChatRef)) === null,
+        },
+        { id: "side-chat:keep", label: "Keep as thread" },
+        { id: "side-chat:fresh", label: "Start fresh from main" },
+        { id: "side-chat:full-view", label: "Open in full view" },
+      );
+    }
     items.push(
-      { id: "close", label: "Close" },
+      { id: "close", label: "Close", separatorBefore: sideChatRef !== null },
       {
         id: "close-others",
         label: "Close others",
@@ -1192,6 +1225,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       }
+      case "side-chat:bring-back":
+        runSideChatAction("bring-back");
+        break;
+      case "side-chat:keep":
+        runSideChatAction("keep");
+        break;
+      case "side-chat:fresh":
+        runSideChatAction("fresh");
+        break;
+      case "side-chat:full-view":
+        runSideChatAction("full-view");
+        break;
       case "close":
         props.onCloseSurface(surface);
         break;

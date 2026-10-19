@@ -7,16 +7,20 @@ import {
 import { createCodySideChatAtoms } from "@t3tools/client-runtime/state/cody-side-chats";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  ModelSelection,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2Run,
+  RunId,
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import { create } from "zustand";
 
@@ -33,6 +37,7 @@ import {
   threadEnvironment,
 } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { buildThreadRouteParams } from "../threadRoutes";
 
 export const codySideChats = createCodySideChatAtoms({
   runtime: connectionAtomRuntime,
@@ -81,10 +86,18 @@ export function useSideChatsSupported(environmentId: EnvironmentId | null): bool
 /** Unsent side chat text, kept while the panel shows another tab. */
 export const useSideChatDraftStore = create<{
   readonly drafts: Readonly<Record<string, string>>;
+  /** A model picked in the side chat that its next message switches to. */
+  readonly models: Readonly<Record<string, ModelSelection>>;
+  /** The parent run whose "main has moved on" notice was dismissed. */
+  readonly dismissedMovedOn: Readonly<Record<string, string>>;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
   readonly appendDraft: (sideChatThreadId: string, text: string) => void;
+  readonly setModel: (sideChatThreadId: string, model: ModelSelection | null) => void;
+  readonly dismissMovedOn: (sideChatThreadId: string, parentRunId: string) => void;
 }>((set) => ({
   drafts: {},
+  models: {},
+  dismissedMovedOn: {},
   setDraft: (sideChatThreadId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [sideChatThreadId]: text } })),
   appendDraft: (sideChatThreadId, text) =>
@@ -97,6 +110,15 @@ export const useSideChatDraftStore = create<{
         },
       };
     }),
+  setModel: (sideChatThreadId, model) =>
+    set((state) => {
+      const { [sideChatThreadId]: _previous, ...rest } = state.models;
+      return { models: model === null ? rest : { ...rest, [sideChatThreadId]: model } };
+    }),
+  dismissMovedOn: (sideChatThreadId, parentRunId) =>
+    set((state) => ({
+      dismissedMovedOn: { ...state.dismissedMovedOn, [sideChatThreadId]: parentRunId },
+    })),
 }));
 
 const failureMessage = (error: unknown, fallback: string) =>
@@ -220,6 +242,7 @@ export function useSideChatEntry(input: {
   const { thread } = input;
   const supported = useSideChatsSupported(thread?.environmentId ?? null);
   const openSideChat = useOpenSideChat();
+  const runAction = useSideChatActions();
   const enabled =
     supported &&
     thread !== null &&
@@ -240,5 +263,94 @@ export function useSideChatEntry(input: {
       thread === null
         ? Promise.resolve(null)
         : openSideChat(scopeThreadRef(thread.environmentId, thread.id), options),
+    runAction,
+  };
+}
+
+export type SideChatAction = "bring-back" | "keep" | "fresh" | "full-view";
+
+const MERGE_BACK_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "waiting"]);
+
+/** The run "Bring back to main" summarizes, or null while the side chat has none finished. */
+export function mergeBackRunIdOf(
+  sideChat: Pick<EnvironmentThreadShell, "latestRun"> | null,
+): RunId | null {
+  const run = sideChat?.latestRun;
+  return run != null && MERGE_BACK_RUN_STATUSES.has(run.status) ? run.runId : null;
+}
+
+/**
+ * The side chat actions the tab's context menu and the panel's menu share.
+ * Closing is the panel's own close, which archives the side chat.
+ */
+export function useSideChatActions() {
+  const navigate = useNavigate();
+  const mergeBack = useOrchestrationCommand(threadEnvironment.mergeBack, { reportFailure: false });
+  const promote = useOrchestrationCommand(codySideChats.promote, { reportFailure: false });
+  const openSideChat = useOpenSideChat();
+
+  const fail = (title: string, result: AtomCommandResult<unknown, unknown>) => {
+    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+    toastManager.add({
+      type: "error",
+      title,
+      description: failureMessage(squashAtomCommandFailure(result), "Try again in a moment."),
+    });
+  };
+
+  return async (action: SideChatAction, sideChatRef: ScopedThreadRef) => {
+    const sideChat = readThreadShell(sideChatRef);
+    const parentThreadId = sideChat?.lineage.parentThreadId ?? null;
+    const parentRef =
+      parentThreadId === null ? null : scopeThreadRef(sideChatRef.environmentId, parentThreadId);
+    switch (action) {
+      case "bring-back": {
+        const runId = mergeBackRunIdOf(sideChat);
+        if (runId === null || parentRef === null) return;
+        const result = await mergeBack({
+          environmentId: sideChatRef.environmentId,
+          input: {
+            sourceThreadId: sideChatRef.threadId,
+            targetThreadId: parentRef.threadId,
+            runId,
+          },
+        });
+        if (result._tag === "Failure") return fail("Couldn't bring it back to main", result);
+        toastManager.add({
+          type: "success",
+          title: "Brought back to main",
+          description: "Main gets a summary of this side chat with your next message.",
+        });
+        return;
+      }
+      case "keep": {
+        const result = await promote({
+          environmentId: sideChatRef.environmentId,
+          input: { threadId: sideChatRef.threadId },
+        });
+        if (result._tag === "Failure") return fail("Couldn't keep it as a thread", result);
+        // Leaves the panel without the close that would archive it.
+        if (parentRef !== null) {
+          useRightPanelStore
+            .getState()
+            .closeSurface(parentRef, `side-chat:${sideChatRef.threadId}`);
+        }
+        toastManager.add({
+          type: "success",
+          title: "Kept as a thread",
+          description: "It's in your thread list now.",
+        });
+        return;
+      }
+      case "fresh":
+        if (parentRef !== null) await openSideChat(parentRef, { fresh: true });
+        return;
+      case "full-view":
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(sideChatRef),
+        });
+        return;
+    }
   };
 }
