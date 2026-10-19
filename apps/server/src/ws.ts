@@ -1,6 +1,19 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  CODY_CLIENT_FEATURES_PARAM,
+  CODY_SIDE_CHAT_WS_METHODS,
+  readCodyClientFeatures,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as SideChatService from "./cody/SideChatService.ts";
+import * as SideChatStore from "./cody/SideChatStore.ts";
+import {
+  filterArchivedShellSnapshot,
+  filterArchivedShellStream,
+  filterShellStream,
+  sideChatVisibility,
+} from "./cody/sideChatVisibility.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1164,12 +1177,19 @@ const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  codyClientFeatures: { readonly sideChats: boolean },
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+      const sideChatService = yield* SideChatService.SideChatService;
+      const sideChatMembership = yield* SideChatStore.SideChatMembership;
+      const threadVisibility = sideChatVisibility({
+        isSideChat: sideChatMembership.isSideChat,
+        clientWantsSideChats: codyClientFeatures.sideChats,
+      });
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
         | ThreadLaunchService.ThreadLaunchService
@@ -1731,6 +1751,7 @@ const layerWsRpc = (
           threads: threads.archivedThreads,
         } as const;
       }).pipe(
+        Effect.map((snapshot) => filterArchivedShellSnapshot(snapshot, threadVisibility)),
         Effect.flatMap((snapshot) =>
           enrichProjectShells(snapshot.projects).pipe(
             Effect.map(({ projects }) => ({ ...snapshot, projects })),
@@ -1838,6 +1859,9 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
+        [CODY_SIDE_CHAT_WS_METHODS.open]: (input) => sideChatService.open(input),
+        [CODY_SIDE_CHAT_WS_METHODS.close]: (input) => sideChatService.close(input),
+        [CODY_SIDE_CHAT_WS_METHODS.promote]: (input) => sideChatService.promote(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
@@ -1881,6 +1905,12 @@ const layerWsRpc = (
             .pipe(Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           threadSearch.search(input).pipe(
+            Effect.map((result) => ({
+              ...result,
+              matches: result.matches.filter(
+                (match) => !sideChatMembership.isSideChat(match.threadId),
+              ),
+            })),
             Effect.mapError(
               (cause) =>
                 new OrchestrationSearchThreadsError({
@@ -2012,9 +2042,13 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: (_input) =>
-          Stream.unwrap(subscribeOrchestrationV2ArchivedShell()),
+          Stream.unwrap(subscribeOrchestrationV2ArchivedShell()).pipe(
+            filterArchivedShellStream(threadVisibility),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input) =>
-          Stream.unwrap(subscribeOrchestrationV2Shell(input)),
+          Stream.unwrap(subscribeOrchestrationV2Shell(input)).pipe(
+            filterShellStream(threadVisibility),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>
           Stream.unwrap(
             Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
@@ -2440,6 +2474,12 @@ const layerWsRpc = (
                 ? Effect.succeed({ threads: [] })
                 : listLinkedPullRequestThreads(key).pipe(
                     Effect.provideService(SqlClient.SqlClient, sql),
+                    Effect.map((result) => ({
+                      ...result,
+                      threads: result.threads.filter(
+                        (thread) => !sideChatMembership.isSideChat(thread.id),
+                      ),
+                    })),
                   ),
             ),
           ),
@@ -3124,6 +3164,11 @@ export const layer = Layer.unwrap(
         );
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
+        const codyClientFeatures = readCodyClientFeatures(
+          Option.getOrUndefined(HttpServerRequest.toURL(request))?.searchParams.get(
+            CODY_CLIENT_FEATURES_PARAM,
+          ),
+        );
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
@@ -3162,6 +3207,7 @@ export const layer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               serverBrowser,
+              codyClientFeatures,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

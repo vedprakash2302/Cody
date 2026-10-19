@@ -1867,6 +1867,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
     ),
   ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
+  /**
+   * Cody only: set on side chats in shells sent to Cody clients. Other
+   * clients never receive side chats, and nothing persists this field.
+   */
+  codySideChat: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
 

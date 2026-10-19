@@ -7,6 +7,7 @@ import {
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
+import { CODY_SIDE_CHAT_WS_METHODS } from "./codySideChat.ts";
 import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
@@ -46,6 +47,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
+  [CODY_SIDE_CHAT_WS_METHODS.open]: AuthOrchestrationOperateScope,
+  [CODY_SIDE_CHAT_WS_METHODS.close]: AuthOrchestrationOperateScope,
+  [CODY_SIDE_CHAT_WS_METHODS.promote]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

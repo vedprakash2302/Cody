@@ -49,6 +49,7 @@ import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environme
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as SideChatStore from "../cody/SideChatStore.ts";
 import { forkParked } from "../serverActivation.ts";
 
 export class AgentAwarenessRelay extends Context.Service<
@@ -364,6 +365,7 @@ export const make = Effect.gen(function* () {
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
+  const sideChats = yield* SideChatStore.SideChatMembership;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
   const cloudLinkKeyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
@@ -516,16 +518,19 @@ export const make = Effect.gen(function* () {
     // of one thread's activity proportional to how many threads exist.
     const threadShell = yield* threads.getThreadShell(threadId);
     if (
-      threadShell?.lineage.relationshipToParent === "subagent" &&
+      (threadShell?.lineage.relationshipToParent === "subagent" ||
+        sideChats.isSideChat(threadId)) &&
       !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
     ) {
       // Subagents never project activity, so the relay holds no row to clear.
       // Their events would otherwise publish a tombstone each, and every
-      // publish re-delivers the user's aggregate.
+      // publish re-delivers the user's aggregate. Cody side chats stay off
+      // phones entirely: the official apps never list them, so a push for
+      // one would open nothing.
       return;
     }
     const thread =
-      threadShell === null || threadShell.archivedAt !== null
+      threadShell === null || threadShell.archivedAt !== null || sideChats.isSideChat(threadId)
         ? Option.none<OrchestrationV2ThreadShell>()
         : Option.some(threadShell);
     const project = Option.isSome(thread)
@@ -713,7 +718,7 @@ export const make = Effect.gen(function* () {
       environmentId,
       startedAt,
       projects: projectSnapshot.projects,
-      threads: shellSnapshot.threads,
+      threads: shellSnapshot.threads.filter((thread) => !sideChats.isSideChat(thread.id)),
     });
     if (activeThreadIds.length === 0) {
       yield* Effect.logDebug("agent activity snapshot has no publishable threads");
