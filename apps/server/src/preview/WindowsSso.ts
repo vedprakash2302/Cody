@@ -15,9 +15,13 @@ import {
 } from "@t3tools/shared/windowsSso";
 import type { CDPSession } from "playwright-core";
 
+import { enableFetchPatterns, isResponseStage } from "./FetchInterception.ts";
+
 interface PausedRequest {
   readonly requestId: string;
   readonly request: { readonly url: string; readonly headers: Record<string, string> };
+  readonly responseStatusCode?: number;
+  readonly responseErrorReason?: string;
 }
 
 /** Helper processes a host runs at once; more sign-in hops continue without a proof. */
@@ -62,6 +66,7 @@ export function makeWindowsSso(readAuth: (url: string) => Promise<WindowsSsoAuth
   return {
     install: async (cdp) => {
       cdp.on("Fetch.requestPaused", (event: PausedRequest) => {
+        if (isResponseStage(event)) return;
         void proofHeaders(event).then((headers) =>
           cdp
             .send("Fetch.continueRequest", {
@@ -71,15 +76,13 @@ export function makeWindowsSso(readAuth: (url: string) => Promise<WindowsSsoAuth
             .catch(() => undefined),
         );
       });
-      await cdp.send("Fetch.enable", {
-        patterns: [
-          {
-            urlPattern: "https://login.microsoftonline.com/*",
-            resourceType: "Document",
-            requestStage: "Request",
-          },
-        ],
-      });
+      await enableFetchPatterns(cdp, [
+        {
+          urlPattern: "https://login.microsoftonline.com/*",
+          resourceType: "Document",
+          requestStage: "Request",
+        },
+      ]);
     },
   };
 }

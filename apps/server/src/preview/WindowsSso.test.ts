@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { CDPSession } from "playwright-core";
 
+import { installPdfDocumentNavigation } from "./PdfDocumentNavigation.ts";
 import { makeWindowsSso, withWindowsSsoProof } from "./WindowsSso.ts";
 
 const proof = {
@@ -73,6 +74,73 @@ describe("server browser Windows sign-in", () => {
       requestId: "https://login.microsoftonline.com/common",
     });
     assert.deepStrictEqual(urls, ["https://login.microsoftonline.com/common"]);
+  });
+
+  it("shares the tab's interception with PDF navigation", async () => {
+    const listeners: Array<(event: unknown) => void> = [];
+    const sent: Array<{ method: string; params: { requestId?: string; headers?: unknown } }> = [];
+    const answered = new Map<string, PromiseWithResolvers<void>>();
+    const cdp = {
+      on: (_event: string, listener: (event: unknown) => void) => listeners.push(listener),
+      send: async (method: string, params: { requestId?: string } = {}) => {
+        sent.push({ method, params });
+        if (method === "Runtime.evaluate") return { result: { value: false } };
+        if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+        if (params.requestId) answered.get(params.requestId)?.resolve();
+        return {};
+      },
+    } as unknown as CDPSession;
+    const pause = async (event: { requestId: string } & Record<string, unknown>) => {
+      const done = Promise.withResolvers<void>();
+      answered.set(event.requestId, done);
+      for (const listener of listeners) listener(event);
+      await done.promise;
+      // The fake answers in microtasks; one macrotask lets a second listener answer too.
+      await new Promise((resolve) => setImmediate(resolve));
+      return sent.filter(({ params }) => params.requestId === event.requestId);
+    };
+    await installPdfDocumentNavigation(cdp);
+    await makeWindowsSso(async () => proof).install(cdp);
+
+    const enables = sent.filter(({ method }) => method === "Fetch.enable");
+    assert.deepStrictEqual(enables.at(-1)?.params, {
+      patterns: [
+        { urlPattern: "*/api/assets/*", resourceType: "Document", requestStage: "Response" },
+        {
+          urlPattern: "https://login.microsoftonline.com/*",
+          resourceType: "Document",
+          requestStage: "Request",
+        },
+      ],
+    } as never);
+
+    const signIn = await pause({
+      requestId: "sign-in",
+      frameId: "main",
+      request: {
+        url: "https://login.microsoftonline.com/common",
+        method: "GET",
+        headers: { Accept: "text/html" },
+      },
+    });
+    assert.equal(signIn.length, 1);
+    assert.deepStrictEqual(signIn[0]?.params.headers, [
+      { name: "Accept", value: "text/html" },
+      { name: "x-ms-RefreshTokenCredential", value: "account-proof" },
+      { name: "x-ms-DeviceCredential", value: "device" },
+    ]);
+
+    const pdf = await pause({
+      requestId: "pdf",
+      frameId: "main",
+      request: { url: "https://env.test/api/assets/token/guide.pdf", method: "GET", headers: {} },
+      responseStatusCode: 200,
+      responseHeaders: [{ name: "Content-Type", value: "application/pdf" }],
+    });
+    assert.deepStrictEqual(
+      pdf.map(({ method }) => method),
+      ["Fetch.fulfillRequest"],
+    );
   });
 
   it("leaves requests unchanged when Windows returns no proofs", () => {
