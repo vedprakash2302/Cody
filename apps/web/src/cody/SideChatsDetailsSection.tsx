@@ -13,12 +13,8 @@ import { codySideChats, useOpenSideChat, useSideChatsSupported } from "./sideCha
 
 const CLOSED_SIDE_CHAT_PREVIEW = 5;
 
-const sideChatLabel = (thread: OrchestrationV2ThreadShell) => {
-  const message = thread.latestVisibleMessage;
-  return message !== null && DateTime.isGreaterThanOrEqualTo(message.updatedAt, thread.createdAt)
-    ? message.text
-    : "No messages yet";
-};
+const sideChatLabel = (thread: OrchestrationV2ThreadShell) =>
+  `Started ${formatRelativeTimeLabel(DateTime.formatIso(thread.createdAt))}`;
 
 /**
  * A thread's side chats in its details panel. The open one shows in the right
@@ -59,9 +55,7 @@ export function SideChatsDetailsSection(props: {
         }
       >
         <span className="min-w-0 truncate">{sideChatLabel(thread)}</span>
-        <span className="shrink-0 text-muted-foreground">
-          {isOpen ? "Open" : formatRelativeTimeLabel(DateTime.formatIso(thread.updatedAt))}
-        </span>
+        <span className="shrink-0 text-muted-foreground">{isOpen ? "Open" : "Closed"}</span>
       </Button>
     </li>
   );
