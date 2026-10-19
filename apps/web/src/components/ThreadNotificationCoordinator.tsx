@@ -153,7 +153,10 @@ function EnvironmentNotifications({
       const kind =
         attention && attention !== prior.attention
           ? "input"
-          : completion !== null && (prior.completion === null || completion > prior.completion)
+          : // A Cody side chat's answers show in its panel; only its approvals notify.
+            completion !== null &&
+              rawThread.codySideChat !== true &&
+              (prior.completion === null || completion > prior.completion)
             ? "completion"
             : null;
       if (!kind) continue;

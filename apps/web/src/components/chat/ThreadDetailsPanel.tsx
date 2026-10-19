@@ -21,6 +21,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { SideChatsDetailsSection } from "../../cody/SideChatsDetailsSection";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -177,6 +178,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
           {density === "full" && !props.draftId ? (
             <ThreadRelationshipsPanel
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+            />
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <SideChatsDetailsSection
               environmentId={props.environmentId}
               threadId={props.threadId}
             />

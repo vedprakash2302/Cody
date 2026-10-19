@@ -256,10 +256,11 @@ export function ThreadRelationshipsPanel(props: {
   const workflowGroupsById = new Map(
     deriveWorkflowGroups(runtimeSubagents).map((group) => [group.workflow.id, group]),
   );
+  // Cody side chats have their own section; the one being viewed keeps its row.
   const shells: ReadonlyArray<OrchestrationV2ThreadShell> = [
     ...relationshipShells,
     ...(archivedShells ?? []),
-  ];
+  ].filter((thread) => thread.codySideChat !== true || thread.id === props.threadId);
   const graph = deriveThreadRelationshipGraph({ threads: shells, projection });
   const currentThread = projection?.thread ?? graph.nodes.get(props.threadId)?.thread;
   const currentProject = projects.find((project) => project.id === currentThread?.projectId);
