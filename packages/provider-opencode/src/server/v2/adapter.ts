@@ -3849,9 +3849,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         Effect.gen(function* () {
           const source = forkInput.sourceProviderThread;
           const sourceId = yield* sessionIdOf(source);
-          // OpenCode forks whatever history the source has, so a fork taken
-          // while anything writes to it would copy a run half done.
-          yield* ensureQuiet(sourceId, "fork");
           const selected =
             forkInput.providerTurnId === undefined
               ? undefined
@@ -3871,6 +3868,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                   selected,
                   yield* userMessages(sourceId),
                 );
+          // Without a cut OpenCode copies whatever history the source has, so a
+          // fork taken while anything writes to it would copy a run half done. A
+          // cut at the prompt of the turn that follows leaves out everything the
+          // session writes from there on, so the source may keep working.
+          if (before === null) yield* ensureQuiet(sourceId, "fork");
           // A fork copies the source's history, model, location and rules; its
           const forked = yield* client.session.fork({
             sessionID: Session.ID.make(sourceId),

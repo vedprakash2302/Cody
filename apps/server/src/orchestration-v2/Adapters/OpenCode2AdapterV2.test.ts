@@ -4301,6 +4301,67 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("forks at a finished turn while a later turn runs, cutting at that turn's prompt", () =>
+    Effect.gen(function* () {
+      const FORK = "ses_f1484db83ffeLGtrRCFimo1H0e";
+      const earlierPrompt = `msg_t3_turn_${SESSION}:attempt:earlier`;
+      const runningPrompt = `msg_t3_turn_${SESSION}:attempt:opencode2-adapter`;
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        out("message.list", "<any>"),
+        reply("message.list", {
+          data: [
+            { id: runningPrompt, time: { created: 2 }, text: "hi", type: "user" },
+            { id: earlierPrompt, time: { created: 1 }, text: "earlier", type: "user" },
+          ],
+          cursor: {},
+        }),
+        out("session.fork", { sessionID: SESSION, before: runningPrompt }),
+        replyData("session.fork", sessionInfo({ id: FORK })),
+        out("session.update", { sessionID: FORK, permissions: "<any>" }),
+        reply("session.update", null),
+      ]);
+      yield* runtime.startTurn(turnInput(thread));
+      const now = yield* DateTime.now;
+      const turn = (input: {
+        readonly key: string;
+        readonly prompt: string;
+        readonly ordinal: number;
+        readonly status: "completed" | "running";
+      }): OrchestrationV2ProviderTurn => ({
+        id: ProviderTurnId.make(`provider-turn:${input.key}`),
+        providerThreadId: thread.id,
+        nodeId: NodeId.make(`node:${input.key}`),
+        runAttemptId: RunAttemptId.make(`attempt:${input.key}`),
+        nativeTurnRef: { driver: OPENCODE_PROVIDER, nativeId: input.prompt, strength: "weak" },
+        ordinal: input.ordinal,
+        status: input.status,
+        startedAt: now,
+        completedAt: input.status === "completed" ? now : null,
+      });
+      const earlier = turn({
+        key: "earlier",
+        prompt: earlierPrompt,
+        ordinal: 1,
+        status: "completed",
+      });
+      const running = turn({
+        key: "running",
+        prompt: runningPrompt,
+        ordinal: 2,
+        status: "running",
+      });
+      const forked = yield* runtime.forkThread({
+        sourceProviderThread: thread,
+        targetThreadId: ThreadId.make("thread:opencode2-adapter:fork"),
+        providerTurnId: earlier.id,
+        sourceProviderTurns: [earlier, running],
+      });
+      assert.equal(forked.nativeThreadRef?.nativeId, FORK);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("moves a fork into its target thread's worktree before the first prompt", () =>
     Effect.gen(function* () {
       const FORK = "ses_f1484db83ffeLGtrRCFimo1H0e";
