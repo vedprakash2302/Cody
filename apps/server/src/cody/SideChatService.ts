@@ -108,6 +108,48 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
 
+  /**
+   * Closes one side chat: deleted when nothing was asked yet, otherwise its
+   * turn stops and it is archived, so it can be reopened.
+   */
+  const closeShell = (shell: OrchestrationV2ThreadShell) =>
+    Effect.gen(function* () {
+      const threadId = shell.id;
+      const fail = (reason: CodySideChatError["reason"], cause?: unknown) =>
+        new CodySideChatError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
+      if (shell.latestRunId === null) {
+        yield* threads
+          .dispatch({
+            type: "thread.delete",
+            commandId: CommandId.make(`cody:side-chat:${threadId}:close-delete`),
+            threadId,
+          })
+          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+        yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
+        return "deleted" as const;
+      }
+      if (shell.activeRunId !== null) {
+        yield* threads
+          .interruptThread({
+            projectId: shell.projectId,
+            commandId: yield* freshCommandId(threadId, "close-interrupt"),
+            threadId,
+            reason: "Side chat closed",
+          })
+          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+      }
+      if (shell.archivedAt === null) {
+        yield* threads
+          .dispatch({
+            type: "thread.archive",
+            commandId: yield* freshCommandId(threadId, "close-archive"),
+            threadId,
+          })
+          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+      }
+      return "archived" as const;
+    });
+
   const open: SideChatService["Service"]["open"] = Effect.fn("SideChatService.open")(
     function* (input) {
       const parentThreadId = input.parentThreadId;
@@ -121,12 +163,46 @@ const make = Effect.gen(function* () {
       const parent = yield* shellOf(parentThreadId);
       if (!isLiveShell(parent)) return yield* fail("thread-not-found");
 
-      const existing = (yield* sideChatsOf(parentThreadId))
+      const sideChats = yield* sideChatsOf(parentThreadId);
+      const openSideChats = sideChats
         .filter((shell) => shell.archivedAt === null)
         .toSorted(
           (left, right) => right.updatedAt.epochMilliseconds - left.updatedAt.epochMilliseconds,
-        )[0];
-      if (existing !== undefined) return { threadId: existing.id, created: false };
+        );
+      // A parent keeps at most one open side chat, so reopening or starting
+      // fresh closes the others first.
+      const closeOpenExcept = (keep: ThreadId | null) =>
+        Effect.forEach(
+          openSideChats.filter((shell) => shell.id !== keep),
+          closeShell,
+          { discard: true },
+        );
+
+      if (input.reopenThreadId !== undefined) {
+        const reopenThreadId = input.reopenThreadId;
+        const target = sideChats.find((shell) => shell.id === reopenThreadId);
+        if (target === undefined || !store.has(target.id)) {
+          return yield* new CodySideChatError({
+            threadId: reopenThreadId,
+            reason: "not-a-side-chat",
+          });
+        }
+        yield* closeOpenExcept(target.id);
+        if (target.archivedAt !== null) {
+          yield* threads
+            .dispatch({
+              type: "thread.unarchive",
+              commandId: yield* freshCommandId(target.id, "reopen"),
+              threadId: target.id,
+            })
+            .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+        }
+        return { threadId: target.id, created: false };
+      }
+
+      if (input.fresh !== true && openSideChats[0] !== undefined) {
+        return { threadId: openSideChats[0].id, created: false };
+      }
 
       // `latest_stable` forks the newest completed run with a checkpoint, so a
       // running parent still has a fork point once one turn has finished.
@@ -139,6 +215,7 @@ const make = Effect.gen(function* () {
       // Providers without a native fork only pass a truncated summary, which is
       // too thin to ask about the thread.
       if (!(yield* supportsNativeFork(parent))) return yield* fail("provider-unsupported");
+      yield* closeOpenExcept(null);
 
       const threadId = yield* ids.allocate
         .thread({ projectId: parent.projectId })
@@ -190,46 +267,26 @@ const make = Effect.gen(function* () {
   const close: SideChatService["Service"]["close"] = Effect.fn("SideChatService.close")(
     function* (input) {
       const threadId = input.threadId;
-      const fail = (reason: CodySideChatError["reason"], cause?: unknown) =>
-        new CodySideChatError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
       yield* requireSideChat(threadId);
       const shell = yield* shellOf(threadId);
       if (!isLiveShell(shell)) {
-        yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
+        yield* store
+          .remove(threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new CodySideChatError({ threadId, reason: "store-failed", cause }),
+            ),
+          );
         return { outcome: "deleted" as const };
       }
-      // Nothing was asked yet, so there is nothing worth reopening.
-      if (shell.latestRunId === null) {
-        yield* threads
-          .dispatch({
-            type: "thread.delete",
-            commandId: CommandId.make(`cody:side-chat:${threadId}:close-delete`),
-            threadId,
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-        yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
-        return { outcome: "deleted" as const };
-      }
-      if (shell.activeRunId !== null) {
-        yield* threads
-          .interruptThread({
-            projectId: shell.projectId,
-            commandId: yield* freshCommandId(threadId, "close-interrupt"),
-            threadId,
-            reason: "Side chat closed",
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-      }
-      if (shell.archivedAt === null) {
-        yield* threads
-          .dispatch({
-            type: "thread.archive",
-            commandId: yield* freshCommandId(threadId, "close-archive"),
-            threadId,
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-      }
-      return { outcome: "archived" as const };
+      const closing = closeShell(shell);
+      const parentThreadId = shell.lineage.parentThreadId;
+      return {
+        outcome:
+          parentThreadId === null
+            ? yield* closing
+            : yield* openLocks.withLock(parentThreadId, closing),
+      };
     },
   );
 
@@ -242,20 +299,17 @@ const make = Effect.gen(function* () {
       const shell = yield* shellOf(threadId);
       if (!isLiveShell(shell)) return yield* fail("thread-not-found");
       yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
-      // Clients that hide side chats only hear about a thread through its
-      // events, so the rename is what makes the promoted thread appear there.
-      // A side chat the user already renamed shows up on their next reconnect.
-      const title = promotedTitle(shell.title);
-      if (title !== undefined) {
-        yield* threads
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: CommandId.make(`cody:side-chat:${threadId}:promote`),
-            threadId,
-            title,
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-      }
+      // Clients hear about a thread through its events, so a rename is what
+      // makes the promoted thread appear in their lists. It renames even to
+      // the same title, which still sends the event.
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`cody:side-chat:${threadId}:promote`),
+          threadId,
+          title: promotedTitle(shell.title) ?? shell.title,
+        })
+        .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
     },
   );
 

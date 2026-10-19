@@ -34,6 +34,10 @@ export function readCodyClientFeatures(value: string | null | undefined): {
 export const CodySideChatOpenInput = Schema.Struct({
   parentThreadId: ThreadId,
   creationSource: Schema.optionalKey(Schema.Literals(["web", "mobile"])),
+  /** Close the parent's open side chat and start a new one from its latest response. */
+  fresh: Schema.optionalKey(Schema.Boolean),
+  /** Reopen this closed side chat of the parent, closing any other open one. */
+  reopenThreadId: Schema.optionalKey(ThreadId),
 });
 export type CodySideChatOpenInput = typeof CodySideChatOpenInput.Type;
 

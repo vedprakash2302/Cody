@@ -55,14 +55,18 @@ import {
   useThreadCheckpointSummaries,
   useThreadProjection,
   useThreadShell,
-  useThreadVisibleTurnItems,
   waitForThreadShell,
 } from "../state/entities";
 import { useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { codySideChats, useOpenSideChat, useSideChatDraftStore } from "./sideChats";
+import {
+  codySideChats,
+  useOpenSideChat,
+  useSideChatDraftStore,
+  useSideChatOwnTurnItems,
+} from "./sideChats";
 
 const NO_MESSAGES: never[] = [];
 const noop = () => {};
@@ -95,9 +99,8 @@ export function SideChatPanel(props: {
     waitForShell: true,
   });
   const projection = useThreadProjection(detailRef)?.projection ?? null;
-  const visibleTurnItems = useThreadVisibleTurnItems(detailRef);
   const turnDiffSummaries = useThreadCheckpointSummaries(detailRef);
-  const ownItems = visibleTurnItems.filter((row) => row.visibility === "local");
+  const ownItems = useSideChatOwnTurnItems(detailRef);
   const timelineEntries = useIncrementalTimelineEntries(threadKey, {
     visibleTurnItems: ownItems,
     optimisticMessages: NO_MESSAGES,
@@ -131,7 +134,6 @@ export function SideChatPanel(props: {
     reportFailure: false,
   });
   const promote = useOrchestrationCommand(codySideChats.promote, { reportFailure: false });
-  const close = useOrchestrationCommand(codySideChats.close, { reportFailure: false });
   const openSideChat = useOpenSideChat();
 
   const latestRun = projection === null ? null : deriveLatestThreadRun(projection);
@@ -244,15 +246,8 @@ export function SideChatPanel(props: {
     });
   };
 
-  const startFresh = async () => {
-    const closed = await close({ environmentId, input: { threadId: sideRef.threadId } });
-    if (closed._tag === "Failure" && !isAtomCommandInterrupted(closed)) {
-      reportFailure("Couldn't close it", squashAtomCommandFailure(closed), "Close failed.");
-      return;
-    }
-    useRightPanelStore.getState().closeSurface(parentRef, `side-chat:${props.sideChatThreadId}`);
-    await openSideChat(parentRef, { fresh: true });
-  };
+  // The server closes this side chat before starting the new one.
+  const startFresh = () => void openSideChat(parentRef, { fresh: true });
 
   const forkResponse = async (input: {
     readonly sourceThreadId: ThreadId;
@@ -338,7 +333,7 @@ export function SideChatPanel(props: {
             <div className="truncate text-muted-foreground text-xs">{parentStatus}</div>
           </div>
           {parentMovedOn ? (
-            <Button size="xs" variant="outline" onClick={() => void startFresh()}>
+            <Button size="xs" variant="outline" onClick={startFresh}>
               New side chat
             </Button>
           ) : null}
@@ -358,7 +353,7 @@ export function SideChatPanel(props: {
               <MenuItem disabled={!canOperate} onClick={() => void keepAsThread()}>
                 Keep as thread
               </MenuItem>
-              <MenuItem disabled={!canOperate} onClick={() => void startFresh()}>
+              <MenuItem disabled={!canOperate} onClick={startFresh}>
                 New side chat
               </MenuItem>
               <MenuItem onClick={openInFullView}>Open in full view</MenuItem>

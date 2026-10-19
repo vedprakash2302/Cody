@@ -37,11 +37,12 @@ Promotion removes the id and renames the thread, so the rename event is what mak
 official clients. Thread routes are not filtered: official clients only learn thread ids from the
 paths above.
 
-## Rules ride on every message
+## Rules ride on every turn
 
 `ProviderTurnStartService` prefixes the side chat rules
-([`sideChatRules`](../../apps/server/src/cody/sideChatRules.ts)) to every side chat message, not
-just the first, so compaction or a rebuilt provider session cannot drop them. Slash commands pass
+([`sideChatRules`](../../apps/server/src/cody/sideChatRules.ts)) to the message that starts each
+side chat turn, not just the first, so compaction or a rebuilt provider session cannot drop them.
+A message that steers a running turn joins a turn that already has them. Slash commands pass
 through untouched.
 
 ## Providers

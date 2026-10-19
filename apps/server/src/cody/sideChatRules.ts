@@ -1,7 +1,8 @@
 /**
- * Sent ahead of every side chat message, not only the first, so the rules
- * survive the provider compacting a long side chat and T3 rebuilding a lost
- * provider session from a summary. Adapted from Codex's `/side` instructions.
+ * Sent ahead of the message that starts each side chat turn, not only the
+ * first, so the rules survive the provider compacting a long side chat and T3
+ * rebuilding a lost provider session from a summary. Adapted from Codex's
+ * `/side` instructions.
  */
 export const SIDE_CHAT_RULES = `<side-chat>
 You are in a side chat, not the main thread. The conversation before the first side chat message was copied from the main thread as reference only. It is not your current task.

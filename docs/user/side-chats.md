@@ -40,7 +40,7 @@ commands, and it is told not to change anything unless you ask it to.
   message there.
 - Choose **Keep as thread** to turn the side chat into an ordinary fork in your thread list.
 
-The thread's details list its side chats. Select a closed one to reopen it. Archiving or deleting
-a thread does the same to its side chats.
+The thread's details list its side chats. Select a closed one to reopen it; that closes the one
+that is open. Archiving or deleting a thread does the same to its side chats.
 
 Side chats notify you only when they need an approval or an answer.

@@ -1,26 +1,73 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  parseScopedThreadKey,
+  scopedThreadKey,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { createCodySideChatAtoms } from "@t3tools/client-runtime/state/cody-side-chats";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, OrchestrationV2Run, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2Run,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 import { create } from "zustand";
 
 import { toastManager } from "../components/ui/toast";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { newMessageId } from "../lib/utils";
-import { useRightPanelStore } from "../rightPanelStore";
+import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell, useServerConfigs, waitForThreadShell } from "../state/entities";
-import { environmentThreadShells, threadEnvironment } from "../state/threads";
+import {
+  environmentThreadDetails,
+  environmentThreadShells,
+  threadEnvironment,
+} from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 
 export const codySideChats = createCodySideChatAtoms({
   runtime: connectionAtomRuntime,
   environmentThreadsAtom: environmentThreadShells.environmentThreadsAtom,
 });
+
+const NO_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
+const NO_TURN_ITEMS_ATOM = Atom.make(NO_TURN_ITEMS).pipe(
+  Atom.withLabel("cody-side-chat-items:none"),
+);
+
+// An atom keeps the filtered list's identity until the thread's items change,
+// which the timeline's incremental derivation relies on.
+const ownTurnItemsAtomFamily = Atom.family((key: string) => {
+  const ref = parseScopedThreadKey(key);
+  return Atom.make((get) =>
+    ref === null
+      ? NO_TURN_ITEMS
+      : get(environmentThreadDetails.visibleTurnItemsAtom(ref)).filter(
+          (row) => row.visibility === "local",
+        ),
+  ).pipe(Atom.withLabel(`cody-side-chat-items:${key}`));
+});
+
+/**
+ * A side chat's own turn items. The history it copied from its parent is in
+ * the model's context but not repeated in the panel.
+ */
+export function useSideChatOwnTurnItems(
+  ref: ScopedThreadRef | null,
+): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
+  return useAtomValue(
+    ref === null ? NO_TURN_ITEMS_ATOM : ownTurnItemsAtomFamily(scopedThreadKey(ref)),
+  );
+}
 
 /** Only Cody servers have side chats; every entry point hides without this. */
 export function useSideChatsSupported(environmentId: EnvironmentId | null): boolean {
@@ -77,10 +124,14 @@ export function useOpenSideChat() {
     options?: {
       readonly draft?: string;
       readonly send?: string;
+      /** Closes the open side chat and starts one from the parent's latest response. */
       readonly fresh?: boolean;
+      /** A closed side chat of the parent to reopen in place of the open one. */
+      readonly reopen?: ThreadId;
     },
   ): Promise<ScopedThreadRef | null> => {
-    const existing = options?.fresh
+    const replacing = options?.fresh === true || options?.reopen !== undefined;
+    const existing = replacing
       ? undefined
       : appAtomRegistry.get(codySideChats.openSideChatsAtom(parent))[0];
     let sideChatRef =
@@ -88,7 +139,11 @@ export function useOpenSideChat() {
     if (sideChatRef === null) {
       const result = await open({
         environmentId: parent.environmentId,
-        input: { parentThreadId: parent.threadId },
+        input: {
+          parentThreadId: parent.threadId,
+          ...(options?.fresh === true ? { fresh: true } : {}),
+          ...(options?.reopen === undefined ? {} : { reopenThreadId: options.reopen }),
+        },
       });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
@@ -101,6 +156,8 @@ export function useOpenSideChat() {
         return null;
       }
       sideChatRef = scopeThreadRef(parent.environmentId, result.value.threadId);
+      // The server closed any other open side chat, which the archive now lists.
+      if (replacing) refreshArchivedThreadsForEnvironment(parent.environmentId);
       // The side chat reaches this client through the shell stream like any thread.
       if (!(await waitForThreadShell(sideChatRef))) {
         toastManager.add({
@@ -115,7 +172,13 @@ export function useOpenSideChat() {
     if (options?.draft !== undefined && options.draft.trim().length > 0) {
       useSideChatDraftStore.getState().appendDraft(sideChatRef.threadId, options.draft);
     }
-    useRightPanelStore.getState().openSideChat(parent, sideChatRef.threadId);
+    const panels = useRightPanelStore.getState();
+    for (const surface of selectThreadRightPanelState(panels.byThreadKey, parent).surfaces) {
+      if (surface.kind === "side-chat" && surface.resourceId !== sideChatRef.threadId) {
+        panels.closeSurface(parent, surface.id);
+      }
+    }
+    panels.openSideChat(parent, sideChatRef.threadId);
     const question = options?.send?.trim() ?? "";
     const sideChat = readThreadShell(sideChatRef);
     if (question.length > 0 && sideChat !== null) {

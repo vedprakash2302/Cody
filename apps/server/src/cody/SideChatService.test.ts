@@ -128,6 +128,9 @@ const makeHarness = (options: {
         case "thread.archive":
           update(command.threadId, { archivedAt: NOW });
           break;
+        case "thread.unarchive":
+          update(command.threadId, { archivedAt: null });
+          break;
         case "thread.delete":
           update(command.threadId, { deletedAt: NOW });
           break;
@@ -330,6 +333,52 @@ describe("SideChatService", () => {
         assert.equal(harness.shells.get(opened.threadId)?.title, "Main thread");
         const refused = yield* service.promote({ threadId: opened.threadId }).pipe(Effect.flip);
         assert.equal(refused.reason, "not-a-side-chat");
+
+        // A renamed side chat keeps its name, and the rename still tells clients.
+        const renamed = yield* service.open({ parentThreadId: MAIN });
+        harness.shells.set(renamed.threadId, {
+          ...harness.shells.get(renamed.threadId)!,
+          title: "Why the cache misses",
+        });
+        yield* service.promote({ threadId: renamed.threadId });
+        assert.deepInclude(harness.commands.at(-1), {
+          type: "thread.metadata.update",
+          threadId: renamed.threadId,
+          title: "Why the cache misses",
+        });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("keeps one open side chat when starting fresh or reopening a closed one", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ mainRuns: [stableRun] });
+      yield* Effect.gen(function* () {
+        const service = yield* SideChatService.SideChatService;
+        const used = (threadId: ThreadId) =>
+          harness.shells.set(threadId, {
+            ...harness.shells.get(threadId)!,
+            latestRunId: RunId.make(`run:${threadId}`),
+          });
+        const isOpen = (threadId: ThreadId) =>
+          harness.shells.get(threadId)?.archivedAt === null &&
+          harness.shells.get(threadId)?.deletedAt === null;
+
+        const first = yield* service.open({ parentThreadId: MAIN });
+        used(first.threadId);
+        const second = yield* service.open({ parentThreadId: MAIN, fresh: true });
+        used(second.threadId);
+        assert.isTrue(second.created);
+        assert.notEqual(second.threadId, first.threadId);
+        assert.isFalse(isOpen(first.threadId));
+
+        const reopened = yield* service.open({
+          parentThreadId: MAIN,
+          reopenThreadId: first.threadId,
+        });
+        assert.deepEqual(reopened, { threadId: first.threadId, created: false });
+        assert.isTrue(isOpen(first.threadId));
+        assert.isFalse(isOpen(second.threadId));
       }).pipe(Effect.provide(harness.layer));
     }),
   );
