@@ -1,4 +1,4 @@
-import { EnvironmentHttpCommonError } from "@t3tools/contracts";
+import { CODY_SIDE_CHAT_CLIENT_FEATURE, EnvironmentHttpCommonError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -34,15 +34,18 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
   >;
   readonly timeoutMs?: number;
 }) {
+  // Cody servers send side chats only to clients that ask; others ignore the query.
+  const endpoint = { query: { codyFeatures: CODY_SIDE_CHAT_CLIENT_FEATURE } };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "orchestration",
     method: "GET",
-    url: (urls) => urls.shellSnapshot(),
+    url: (urls) => urls.shellSnapshot(endpoint),
     timeoutMs: input.timeoutMs ?? DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client
         .shellSnapshot({
+          ...endpoint,
           headers: withOrchestrationProtocolHeader(headers),
           responseMode: "response-only",
         })

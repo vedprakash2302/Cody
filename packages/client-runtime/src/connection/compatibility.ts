@@ -1,4 +1,6 @@
 import {
+  CODY_CLIENT_FEATURES_PARAM,
+  CODY_SIDE_CHAT_CLIENT_FEATURE,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
   type ExecutionEnvironmentDescriptor,
@@ -37,5 +39,7 @@ function canSelfUpdate(descriptor: ExecutionEnvironmentDescriptor): boolean {
 export function appendOrchestrationProtocol(socketUrl: string): string {
   const url = new URL(socketUrl);
   url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
+  // Cody servers send side chats only to clients that ask; others ignore the param.
+  url.searchParams.set(CODY_CLIENT_FEATURES_PARAM, CODY_SIDE_CHAT_CLIENT_FEATURE);
   return url.toString();
 }
