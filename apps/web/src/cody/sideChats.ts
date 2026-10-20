@@ -107,7 +107,7 @@ export const useSideChatDraftStore = create<{
   readonly models: Readonly<Record<string, ModelSelection>>;
   /** The parent run whose "main has moved on" notice was dismissed. */
   readonly dismissedMovedOn: Readonly<Record<string, string>>;
-  /** Keyed by `sideChatQuestionKey`. */
+  /** Keyed by `sideChatRequestKey`. */
   readonly questions: Readonly<Record<string, SideChatQuestionDraft>>;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
   readonly appendDraft: (sideChatThreadId: string, text: string) => void;
@@ -151,7 +151,7 @@ export const useSideChatDraftStore = create<{
     }),
 }));
 
-export const sideChatQuestionKey = (sideChatThreadId: string, requestId: string) =>
+export const sideChatRequestKey = (sideChatThreadId: string, requestId: string) =>
   `${sideChatThreadId}:${requestId}`;
 
 const failureMessage = (error: unknown, fallback: string) =>

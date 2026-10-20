@@ -26,11 +26,15 @@ import {
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
-import { sideChatQuestionKey, useSideChatDraftStore } from "./sideChats";
+import { sideChatRequestKey, useSideChatDraftStore } from "./sideChats";
 
 type DraftAnswers = Record<string, PendingUserInputDraftAnswer>;
 
 const NO_ANSWERS: DraftAnswers = {};
+
+// Outside React state so a second Enter before the next render, or after the
+// panel remounts, can't answer the same request twice.
+const respondingKeys = new Set<string>();
 
 const reportFailure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
   if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
@@ -70,7 +74,7 @@ export function useSideChatRequests(
   const questionKey =
     activeUserInput === null
       ? null
-      : sideChatQuestionKey(sideRef.threadId, activeUserInput.requestId);
+      : sideChatRequestKey(sideRef.threadId, activeUserInput.requestId);
   const stored = useSideChatDraftStore((state) =>
     questionKey === null ? undefined : state.questions[questionKey],
   );
@@ -87,11 +91,15 @@ export function useSideChatRequests(
       )
     : null;
 
-  const withResponding = async <A>(requestId: RuntimeRequestId, run: () => Promise<A>) => {
+  const withResponding = async (requestId: RuntimeRequestId, run: () => Promise<void>) => {
+    const key = sideChatRequestKey(sideRef.threadId, requestId);
+    if (respondingKeys.has(key)) return;
+    respondingKeys.add(key);
     setRespondingRequestIds((ids) => [...ids, requestId]);
     try {
-      return await run();
+      await run();
     } finally {
+      respondingKeys.delete(key);
       setRespondingRequestIds((ids) => ids.filter((id) => id !== requestId));
     }
   };
@@ -121,7 +129,7 @@ export function useSideChatRequests(
   const forgetAnswers = (requestId: RuntimeRequestId) =>
     useSideChatDraftStore
       .getState()
-      .updateQuestion(sideChatQuestionKey(sideRef.threadId, requestId), () => null);
+      .updateQuestion(sideChatRequestKey(sideRef.threadId, requestId), () => null);
 
   return {
     pendingApprovals,
@@ -140,7 +148,6 @@ export function useSideChatRequests(
           input: { threadId: sideRef.threadId, requestId, decision },
         });
         if (result._tag === "Failure") reportFailure("Couldn't answer the request", result);
-        return result;
       }),
     toggleOption: (questionId: string, optionValue: string) => {
       const question = activeUserInput?.questions.find((entry) => entry.id === questionId);
