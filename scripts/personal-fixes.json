@@ -78,5 +78,10 @@
   "apps/mobile/src/features/threads/new-task-context-presentation.test.ts",
   "apps/mobile/src/lib/projectThreadStartTurn.test.ts",
   "apps/web/src/components/settings/scheduledTasksSettings.logic.test.ts",
-  "packages/client-runtime/src/scheduledTaskThreads.test.ts"
+  "packages/client-runtime/src/scheduledTaskThreads.test.ts",
+  "apps/server/src/cody/SideChatService.test.ts",
+  "apps/server/src/cody/SideChatStore.test.ts",
+  "apps/server/src/cody/sideChatVisibility.test.ts",
+  "packages/client-runtime/src/state/codySideChats.test.ts",
+  "packages/client-runtime/src/connection/resolver.test.ts"
 ]

@@ -324,6 +324,7 @@ export function SideChatPanel(props: {
               }}
               onManualNavigation={() => setLiveFollow(false)}
               hideEmptyPlaceholder
+              emptyPlaceholderInset={0}
             />
           )}
         </div>
