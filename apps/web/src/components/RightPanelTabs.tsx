@@ -3,7 +3,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { readThreadShell, useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
 import { SideChatTabStatusDot } from "../cody/SideChatTabStatusDot";
-import { mergeBackRunIdOf, type SideChatAction } from "../cody/sideChats";
+import type { SideChatAction } from "../cody/sideChats";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
@@ -1179,7 +1179,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         {
           id: "side-chat:bring-back",
           label: "Bring back to main",
-          disabled: mergeBackRunIdOf(readThreadShell(sideChatRef)) === null,
+          disabled: readThreadShell(sideChatRef)?.latestRun == null,
         },
         { id: "side-chat:keep", label: "Keep as thread" },
         { id: "side-chat:fresh", label: "Start fresh from main" },

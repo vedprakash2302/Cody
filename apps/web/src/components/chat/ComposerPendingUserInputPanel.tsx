@@ -23,6 +23,11 @@ interface PendingUserInputPanelProps {
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  /**
+   * Number keys answer only from inside the element carrying this value as
+   * `data-composer-shortcut-scope`. Without it, only from outside every scope.
+   */
+  shortcutScope?: string;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -36,6 +41,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   onToggleOption,
   onAdvance,
   onDismiss,
+  shortcutScope,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -54,6 +60,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
       onDismiss={onDismiss}
+      shortcutScope={shortcutScope ?? null}
     />
   );
 });
@@ -69,6 +76,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onToggleOption,
   onAdvance,
   onDismiss,
+  shortcutScope,
 }: {
   prompt: PendingUserInput;
   cwd: string | undefined;
@@ -80,6 +88,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  shortcutScope: string | null;
 }) {
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
@@ -160,6 +169,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       ) {
         return;
       }
+      const targetScope =
+        target instanceof Element
+          ? (target
+              .closest("[data-composer-shortcut-scope]")
+              ?.getAttribute("data-composer-shortcut-scope") ?? null)
+          : null;
+      if (targetScope !== shortcutScope) return;
       const digit = Number.parseInt(event.key, 10);
       if (Number.isNaN(digit) || digit < 1 || digit > 9) return;
       const optionIndex = digit - 1;
@@ -171,7 +187,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, isCollapsed, responseDisabled]);
+  }, [activeQuestion, isCollapsed, responseDisabled, shortcutScope]);
 
   if (!activeQuestion) {
     return null;

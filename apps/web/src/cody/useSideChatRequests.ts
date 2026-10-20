@@ -26,8 +26,11 @@ import {
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { sideChatQuestionKey, useSideChatDraftStore } from "./sideChats";
 
 type DraftAnswers = Record<string, PendingUserInputDraftAnswer>;
+
+const NO_ANSWERS: DraftAnswers = {};
 
 const reportFailure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
   if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
@@ -41,8 +44,8 @@ const reportFailure = (title: string, result: AtomCommandResult<unknown, unknown
 
 /**
  * A side chat's pending approvals and questions, answered the way the main
- * composer answers them. Drafts live here rather than in the composer draft
- * store, which belongs to the routed thread.
+ * composer answers them. Answers live in the side chat's store rather than the
+ * composer draft store, which belongs to the routed thread.
  */
 export function useSideChatRequests(
   sideRef: ScopedThreadRef,
@@ -58,27 +61,29 @@ export function useSideChatRequests(
     reportFailure: false,
   });
   const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
-  const [draftsByRequestId, setDraftsByRequestId] = useState<Record<string, DraftAnswers>>({});
-  const [questionIndexByRequestId, setQuestionIndexByRequestId] = useState<Record<string, number>>(
-    {},
-  );
 
   const requests = projection === null ? null : derivePendingThreadRequests(projection);
   const pendingApprovals = derivePendingApprovals(requests?.approvals ?? []);
   const pendingUserInputs = derivePendingUserInputs(requests?.userInputs ?? []);
   const activeApproval = pendingApprovals[0] ?? null;
   const activeUserInput = activeApproval === null ? (pendingUserInputs[0] ?? null) : null;
-  const activeDrafts: DraftAnswers = activeUserInput
-    ? seedUserInputDraftAnswers(
-        activeUserInput.questions,
-        draftsByRequestId[activeUserInput.requestId] ?? {},
-      )
-    : {};
+  const questionKey =
+    activeUserInput === null
+      ? null
+      : sideChatQuestionKey(sideRef.threadId, activeUserInput.requestId);
+  const stored = useSideChatDraftStore((state) =>
+    questionKey === null ? undefined : state.questions[questionKey],
+  );
+  const seed = (answers: Readonly<DraftAnswers> | undefined): DraftAnswers =>
+    activeUserInput === null
+      ? NO_ANSWERS
+      : seedUserInputDraftAnswers(activeUserInput.questions, answers ?? NO_ANSWERS);
+  const activeDrafts = seed(stored?.answers);
   const progress = activeUserInput
     ? derivePendingUserInputProgress(
         activeUserInput.questions,
         activeDrafts,
-        questionIndexByRequestId[activeUserInput.requestId] ?? 0,
+        stored?.questionIndex ?? 0,
       )
     : null;
 
@@ -95,23 +100,28 @@ export function useSideChatRequests(
     questionId: string,
     change: (draft: PendingUserInputDraftAnswer | undefined) => PendingUserInputDraftAnswer,
   ) => {
-    if (activeUserInput === null) return;
-    setDraftsByRequestId((current) => ({
-      ...current,
-      [activeUserInput.requestId]: {
-        ...activeDrafts,
-        [questionId]: change(activeDrafts[questionId]),
-      },
+    if (questionKey === null) return;
+    useSideChatDraftStore.getState().updateQuestion(questionKey, (current) => {
+      const answers = seed(current?.answers);
+      return {
+        questionIndex: current?.questionIndex ?? 0,
+        answers: { ...answers, [questionId]: change(answers[questionId]) },
+      };
+    });
+  };
+
+  const setQuestionIndex = (questionIndex: number) => {
+    if (questionKey === null) return;
+    useSideChatDraftStore.getState().updateQuestion(questionKey, (current) => ({
+      answers: current?.answers ?? {},
+      questionIndex,
     }));
   };
 
-  const setQuestionIndex = (index: number) => {
-    if (activeUserInput === null) return;
-    setQuestionIndexByRequestId((current) => ({
-      ...current,
-      [activeUserInput.requestId]: index,
-    }));
-  };
+  const forgetAnswers = (requestId: RuntimeRequestId) =>
+    useSideChatDraftStore
+      .getState()
+      .updateQuestion(sideChatQuestionKey(sideRef.threadId, requestId), () => null);
 
   return {
     pendingApprovals,
@@ -170,6 +180,7 @@ export function useSideChatRequests(
           input: { threadId: sideRef.threadId, requestId, answers },
         });
         if (result._tag === "Failure") reportFailure("Couldn't send your answer", result);
+        else forgetAnswers(requestId);
       });
     },
     dismiss: (requestId: RuntimeRequestId) => {
@@ -179,6 +190,7 @@ export function useSideChatRequests(
           input: { threadId: sideRef.threadId, requestId },
         });
         if (result._tag === "Failure") reportFailure("Couldn't dismiss the question", result);
+        else forgetAnswers(requestId);
       });
     },
   };

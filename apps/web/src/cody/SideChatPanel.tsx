@@ -15,6 +15,7 @@ import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
+import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   AuthOrchestrationOperateScope,
   ThreadId,
@@ -63,12 +64,7 @@ import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { SideChatComposer } from "./SideChatComposer";
-import {
-  mergeBackRunIdOf,
-  useSideChatActions,
-  useSideChatDraftStore,
-  useSideChatOwnTurnItems,
-} from "./sideChats";
+import { useSideChatActions, useSideChatDraftStore, useSideChatOwnTurnItems } from "./sideChats";
 import { useSideChatRequests } from "./useSideChatRequests";
 
 const NO_MESSAGES: never[] = [];
@@ -229,7 +225,11 @@ export function SideChatPanel(props: {
   return (
     <FileMetadataThreadProvider threadRef={sideRef} cwd={cwd} checkpoints={projection?.checkpoints}>
       {props.visible ? <ThreadVisitWatermark threadRef={sideRef} /> : null}
-      <div className="flex h-full min-h-0 flex-col" data-cody-side-chat>
+      <div
+        className="flex h-full min-h-0 flex-col"
+        data-cody-side-chat
+        data-composer-shortcut-scope={threadKey}
+      >
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b ps-3 pe-1.5 text-muted-foreground text-xs">
           <GitBranchIcon className="size-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1 truncate">
@@ -249,7 +249,11 @@ export function SideChatPanel(props: {
             </MenuTrigger>
             <MenuPopup align="end" className="min-w-56">
               <MenuItem
-                disabled={!canOperate || mergeBackRunIdOf(shell) === null}
+                disabled={
+                  !canOperate ||
+                  projection === null ||
+                  resolveLatestMergeBackRun(projection) === null
+                }
                 onClick={() => void runAction("bring-back", sideRef)}
               >
                 <CornerUpLeftIcon className="size-3.5" />

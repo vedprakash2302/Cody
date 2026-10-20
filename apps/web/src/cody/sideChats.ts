@@ -11,12 +11,14 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import type {
   EnvironmentId,
   ModelSelection,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2Run,
-  RunId,
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2ThreadShell,
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
@@ -28,15 +30,22 @@ import { toastManager } from "../components/ui/toast";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
 import { newMessageId } from "../lib/utils";
+import type { PendingUserInputDraftAnswer } from "../pendingUserInput";
 import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { readThreadShell, useServerConfigs, waitForThreadShell } from "../state/entities";
+import {
+  readThreadShell,
+  useServerConfigs,
+  useThreadProjection,
+  waitForThreadShell,
+} from "../state/entities";
 import {
   environmentThreadDetails,
   environmentThreadShells,
   threadEnvironment,
 } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { waitForAtomValue } from "../state/waitForAtomValue";
 import { buildThreadRouteParams } from "../threadRoutes";
 
 export const codySideChats = createCodySideChatAtoms({
@@ -48,6 +57,8 @@ const NO_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
 const NO_TURN_ITEMS_ATOM = Atom.make(NO_TURN_ITEMS).pipe(
   Atom.withLabel("cody-side-chat-items:none"),
 );
+const NO_SIDE_CHATS: ReadonlyArray<OrchestrationV2ThreadShell> = [];
+const NO_SIDE_CHATS_ATOM = Atom.make(NO_SIDE_CHATS).pipe(Atom.withLabel("cody-side-chats:none"));
 
 // An atom keeps the filtered list's identity until the thread's items change,
 // which the timeline's incremental derivation relies on.
@@ -83,21 +94,34 @@ export function useSideChatsSupported(environmentId: EnvironmentId | null): bool
   );
 }
 
-/** Unsent side chat text, kept while the panel shows another tab. */
+/** A side chat question's answers so far, and which of its questions is showing. */
+export interface SideChatQuestionDraft {
+  readonly answers: Readonly<Record<string, PendingUserInputDraftAnswer>>;
+  readonly questionIndex: number;
+}
+
+/** Unsent side chat text and answers, kept while the panel shows another tab. */
 export const useSideChatDraftStore = create<{
   readonly drafts: Readonly<Record<string, string>>;
   /** A model picked in the side chat that its next message switches to. */
   readonly models: Readonly<Record<string, ModelSelection>>;
   /** The parent run whose "main has moved on" notice was dismissed. */
   readonly dismissedMovedOn: Readonly<Record<string, string>>;
+  /** Keyed by `sideChatQuestionKey`. */
+  readonly questions: Readonly<Record<string, SideChatQuestionDraft>>;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
   readonly appendDraft: (sideChatThreadId: string, text: string) => void;
   readonly setModel: (sideChatThreadId: string, model: ModelSelection | null) => void;
   readonly dismissMovedOn: (sideChatThreadId: string, parentRunId: string) => void;
+  readonly updateQuestion: (
+    key: string,
+    change: (current: SideChatQuestionDraft | undefined) => SideChatQuestionDraft | null,
+  ) => void;
 }>((set) => ({
   drafts: {},
   models: {},
   dismissedMovedOn: {},
+  questions: {},
   setDraft: (sideChatThreadId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [sideChatThreadId]: text } })),
   appendDraft: (sideChatThreadId, text) =>
@@ -119,7 +143,16 @@ export const useSideChatDraftStore = create<{
     set((state) => ({
       dismissedMovedOn: { ...state.dismissedMovedOn, [sideChatThreadId]: parentRunId },
     })),
+  updateQuestion: (key, change) =>
+    set((state) => {
+      const { [key]: current, ...rest } = state.questions;
+      const next = change(current);
+      return { questions: next === null ? rest : { ...rest, [key]: next } };
+    }),
 }));
+
+export const sideChatQuestionKey = (sideChatThreadId: string, requestId: string) =>
+  `${sideChatThreadId}:${requestId}`;
 
 const failureMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.length > 0 ? error.message : fallback;
@@ -248,15 +281,23 @@ export function useSideChatEntry(input: {
     thread !== null &&
     thread.source.codySideChat !== true &&
     thread.lineage.relationshipToParent !== "subagent";
+  const ref = enabled && thread !== null ? scopeThreadRef(thread.environmentId, thread.id) : null;
+  // Callers outside the thread view pass no runs; the view has them loaded already.
+  const loadedRuns = useThreadProjection(input.runs === undefined ? ref : null)?.projection.runs;
+  const runs = input.runs ?? loadedRuns;
+  const hasOpenSideChat =
+    useAtomValue(ref === null ? NO_SIDE_CHATS_ATOM : codySideChats.openSideChatsAtom(ref)).length >
+    0;
   const hasFinishedResponse =
-    input.runs === undefined
+    runs === undefined
       ? thread?.latestRun?.status === "completed"
-      : input.runs.some((run) => run.status === "completed" && run.checkpointId !== null);
+      : runs.some((run) => run.status === "completed" && run.checkpointId !== null);
+  const available = enabled && (hasOpenSideChat || hasFinishedResponse);
   return {
     /** Whether to show side chat entry points at all. */
     enabled,
-    available: enabled && hasFinishedResponse,
-    disabledReason: hasFinishedResponse
+    available,
+    disabledReason: available
       ? undefined
       : "Side chats are available after the first response finishes.",
     open: (options?: Parameters<typeof openSideChat>[1]) =>
@@ -269,14 +310,21 @@ export function useSideChatEntry(input: {
 
 export type SideChatAction = "bring-back" | "keep" | "fresh" | "full-view";
 
-const MERGE_BACK_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "waiting"]);
-
-/** The run "Bring back to main" summarizes, or null while the side chat has none finished. */
-export function mergeBackRunIdOf(
-  sideChat: Pick<EnvironmentThreadShell, "latestRun"> | null,
-): RunId | null {
-  const run = sideChat?.latestRun;
-  return run != null && MERGE_BACK_RUN_STATUSES.has(run.status) ? run.runId : null;
+/** The side chat's runs, loading them for a moment if its panel isn't showing. */
+async function loadThreadProjection(
+  ref: ScopedThreadRef,
+): Promise<OrchestrationV2ThreadProjection | null> {
+  const loaded: { projection: OrchestrationV2ThreadProjection | null } = { projection: null };
+  await waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentThreadDetails.threadAtom(ref),
+    predicate: (thread) => {
+      loaded.projection = thread?.projection ?? null;
+      return thread !== null;
+    },
+    timeoutMs: 5_000,
+  });
+  return loaded.projection;
 }
 
 /**
@@ -305,14 +353,31 @@ export function useSideChatActions() {
       parentThreadId === null ? null : scopeThreadRef(sideChatRef.environmentId, parentThreadId);
     switch (action) {
       case "bring-back": {
-        const runId = mergeBackRunIdOf(sideChat);
-        if (runId === null || parentRef === null) return;
+        if (parentRef === null) return;
+        const projection = await loadThreadProjection(sideChatRef);
+        if (projection === null) {
+          toastManager.add({
+            type: "error",
+            title: "Couldn't bring it back to main",
+            description: "The side chat didn't load. Try again in a moment.",
+          });
+          return;
+        }
+        const run = resolveLatestMergeBackRun(projection);
+        if (run === null) {
+          toastManager.add({
+            type: "info",
+            title: "Nothing to bring back yet",
+            description: "Wait until the side chat finishes a response.",
+          });
+          return;
+        }
         const result = await mergeBack({
           environmentId: sideChatRef.environmentId,
           input: {
             sourceThreadId: sideChatRef.threadId,
             targetThreadId: parentRef.threadId,
-            runId,
+            runId: run.id,
           },
         });
         if (result._tag === "Failure") return fail("Couldn't bring it back to main", result);
