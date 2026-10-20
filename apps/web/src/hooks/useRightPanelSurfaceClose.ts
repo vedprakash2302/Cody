@@ -1,9 +1,15 @@
 import {
+  AuthOrchestrationOperateScope,
   AuthPreviewOperateScope,
   AuthTerminalOperateScope,
+  ThreadId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import { codySideChats } from "../cody/sideChats";
+import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import { agentControlledBrowserCloseConfirmation } from "../components/ChatView.logic";
 import { closePreviewSession } from "../components/preview/closePreviewSession";
 import { useThreadTerminalActions } from "../components/terminal/useThreadTerminalActions";
@@ -33,6 +39,7 @@ export function useRightPanelSurfaceClose(input: {
 }) {
   const { threadRef, terminalLabelsById } = input;
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
+  const closeSideChat = useAtomCommand(codySideChats.close, "side chat close");
   const canOperatePreview = useEnvironmentScope(
     threadRef?.environmentId ?? null,
     AuthPreviewOperateScope,
@@ -64,6 +71,20 @@ export function useRightPanelSurfaceClose(input: {
         storeCloseTerminal(ref, terminalId);
         terminalActions.closeTerminalSession(terminalId);
       }
+    }
+    // Closing a side chat's tab closes the side chat: archived, or deleted when
+    // nothing was asked yet. Hiding the panel keeps it running. A tab saved
+    // while this environment ran a Cody server only leaves the panel.
+    if (
+      surface.kind === "side-chat" &&
+      readEnvironmentScope(ref.environmentId, AuthOrchestrationOperateScope) &&
+      appAtomRegistry.get(environmentServerConfigsAtom).get(ref.environmentId)?.environment
+        .capabilities.codySideChat === true
+    ) {
+      void closeSideChat({
+        environmentId: ref.environmentId,
+        input: { threadId: ThreadId.make(surface.resourceId) },
+      }).then(() => refreshArchivedThreadsForEnvironment(ref.environmentId));
     }
   };
   const closeAfterAgentBrowserConfirmation = (

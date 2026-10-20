@@ -3389,10 +3389,17 @@ export function ArchivedThreadsPanel() {
       }),
     );
     const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-      snapshot.threads.map((thread) => ({
-        ...presentThreadShell(environmentId, thread),
-        environmentLabel: environmentLabels.get(environmentId) ?? environmentId,
-      })),
+      // Closed Cody side chats reopen from their thread's details, not the archive.
+      snapshot.threads.flatMap((thread) =>
+        thread.codySideChat === true
+          ? []
+          : [
+              {
+                ...presentThreadShell(environmentId, thread),
+                environmentLabel: environmentLabels.get(environmentId) ?? environmentId,
+              },
+            ],
+      ),
     );
     const hasMultipleEnvironments =
       new Set(

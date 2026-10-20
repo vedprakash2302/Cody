@@ -155,6 +155,10 @@
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
     },
+    "./state/cody-side-chats": {
+      "types": "./src/state/codySideChats.ts",
+      "default": "./src/state/codySideChats.ts"
+    },
     "./state/entities": {
       "types": "./src/state/entities.ts",
       "default": "./src/state/entities.ts"

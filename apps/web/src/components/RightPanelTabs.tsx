@@ -1,6 +1,9 @@
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import { pullRequestHostOf, type SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { readThreadShell, useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import { SideChatTabStatusDot } from "../cody/SideChatTabStatusDot";
+import type { SideChatAction } from "../cody/sideChats";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
@@ -12,6 +15,7 @@ import type {
   ProjectId,
   PullRequestState,
   ResolvedKeybindingsConfig,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -33,6 +37,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  MessagesSquare,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -144,6 +149,11 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  /** Cody: present only where side chats are supported. */
+  onAddSideChat?: () => void;
+  sideChatAvailable?: boolean;
+  sideChatDisabledReason?: string;
+  onSideChatAction?: (action: SideChatAction, sideChatRef: ScopedThreadRef) => void;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -198,10 +208,30 @@ const SURFACE_UNAVAILABLE_HINTS = {
   device: "Available from a thread.",
 } as const;
 
+/** Cody: the side chat entry, listed only where the server supports side chats. */
+function sideChatSurfaceActions(props: {
+  readonly onAddSideChat?: (() => void) | undefined;
+  readonly sideChatAvailable?: boolean | undefined;
+  readonly sideChatDisabledReason?: string | undefined;
+}) {
+  if (props.onAddSideChat === undefined) return [];
+  return [
+    {
+      label: "Side chat",
+      icon: MessagesSquare,
+      shortcut: "S",
+      available: props.sideChatAvailable === true,
+      disabledReason: props.sideChatDisabledReason ?? "Side chats aren't available here.",
+      onClick: props.onAddSideChat,
+    },
+  ];
+}
+
 type TabContextMenuAction =
   | "rename"
   | "copy-path"
   | "toggle-mute"
+  | `side-chat:${SideChatAction}`
   | "close"
   | "close-others"
   | "close-to-right"
@@ -324,6 +354,9 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  onAddSideChat?: () => void;
+  sideChatAvailable?: boolean;
+  sideChatDisabledReason?: string;
 }) {
   const [highlight, setHighlight] = useState(-1);
 
@@ -385,6 +418,7 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
     },
+    ...sideChatSurfaceActions(props),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -567,6 +601,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
+    case "side-chat":
+      return "Side chat";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -657,6 +693,8 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
+    case "side-chat":
+      return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -861,6 +899,12 @@ function RightPanelTab(
           <span
             className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
             aria-hidden
+          />
+        ) : null}
+        {surface.kind === "side-chat" && props.environmentId !== null ? (
+          <SideChatTabStatusDot
+            environmentId={props.environmentId}
+            sideChatThreadId={surface.resourceId}
           />
         ) : null}
       </PanelTabCloseButton>
@@ -1086,6 +1130,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
     },
+    ...sideChatSurfaceActions(props),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1125,8 +1170,29 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }),
       });
     }
+    const sideChatRef =
+      surface.kind === "side-chat" &&
+      props.environmentId !== null &&
+      props.onSideChatAction !== undefined
+        ? scopeThreadRef(props.environmentId, ThreadId.make(surface.resourceId))
+        : null;
+    const runSideChatAction = (action: SideChatAction) => {
+      if (sideChatRef !== null) props.onSideChatAction?.(action, sideChatRef);
+    };
+    if (sideChatRef !== null) {
+      items.push(
+        {
+          id: "side-chat:bring-back",
+          label: "Bring back to main",
+          disabled: readThreadShell(sideChatRef)?.latestRun == null,
+        },
+        { id: "side-chat:keep", label: "Keep as thread" },
+        { id: "side-chat:fresh", label: "Start fresh from main" },
+        { id: "side-chat:full-view", label: "Open in full view" },
+      );
+    }
     items.push(
-      { id: "close", label: "Close" },
+      { id: "close", label: "Close", separatorBefore: sideChatRef !== null },
       {
         id: "close-others",
         label: "Close others",
@@ -1164,6 +1230,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       }
+      case "side-chat:bring-back":
+        runSideChatAction("bring-back");
+        break;
+      case "side-chat:keep":
+        runSideChatAction("keep");
+        break;
+      case "side-chat:fresh":
+        runSideChatAction("fresh");
+        break;
+      case "side-chat:full-view":
+        runSideChatAction("full-view");
+        break;
       case "close":
         props.onCloseSurface(surface);
         break;
@@ -1466,6 +1544,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             deviceAvailable={props.deviceAvailable}
+            {...(props.onAddSideChat === undefined
+              ? {}
+              : {
+                  onAddSideChat: props.onAddSideChat,
+                  sideChatAvailable: props.sideChatAvailable ?? false,
+                  ...(props.sideChatDisabledReason === undefined
+                    ? {}
+                    : { sideChatDisabledReason: props.sideChatDisabledReason }),
+                })}
           />
         ) : (
           props.children
