@@ -25,7 +25,6 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { WINDOWS_SSO_HELPER_ENV } from "@t3tools/shared/windowsSso";
 import * as TestClock from "effect/testing/TestClock";
 import type { BrowserContext, Page } from "playwright-core";
