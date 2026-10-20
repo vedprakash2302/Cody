@@ -1,7 +1,6 @@
 import { MAC_PERMISSION_SETTINGS_URLS } from "../permissions/MacPermission.ts";
 import {
   REMOTE_CAPABLE_EDITOR_IDS,
-  REMOTE_OPEN_USER_PATTERN,
   remoteSchemeForEditor,
   type SystemSettingsPane,
 } from "@t3tools/contracts";
@@ -23,27 +22,15 @@ const REMOTE_EDITOR_PROTOCOLS = new Set(
   }),
 );
 
-// Zed's `[user@]host` sits in the first path segment, so it needs its own
-// userinfo check: at most a login that passes REMOTE_OPEN_USER_PATTERN, the
-// same `user@host` form vscode-remote authorities already take. Never a
-// password or port.
-const ZED_SSH_PATHNAME = /^\/(?:([^/@:]+)@)?[^/@:]+\/.*$/;
-
-const isZedSshPathname = (pathname: string) => {
-  const match = ZED_SSH_PATHNAME.exec(pathname);
-  if (match === null) {
-    return false;
-  }
-  const user = match[1];
-  return user === undefined || REMOTE_OPEN_USER_PATTERN.test(user);
-};
+// Zed embeds [user@]host in the path; reject passwords and ports there.
+const ZED_SSH_PATHNAME = /^\/(?:[^/@:]+@)?[^/@:]+\/.*$/;
 
 const isRemoteEditorUrl = (url: URL) =>
   REMOTE_EDITOR_PROTOCOLS.has(url.protocol) &&
   url.username.length === 0 &&
   url.password.length === 0 &&
   (url.protocol === "zed:"
-    ? url.host === "ssh" && isZedSshPathname(url.pathname)
+    ? url.host === "ssh" && ZED_SSH_PATHNAME.test(url.pathname)
     : url.protocol === "jetbrains:"
       ? url.host === "gateway" &&
         url.pathname === "/ssh/environment" &&

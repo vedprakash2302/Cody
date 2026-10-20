@@ -19,6 +19,16 @@ export const Hostname = Context.Reference<string>("@t3tools/shared/HostProcess/H
   defaultValue: () => NodeOS.hostname(),
 });
 
+export const Username = Context.Reference<string | null>("@t3tools/shared/HostProcess/Username", {
+  defaultValue: () => {
+    try {
+      return NodeOS.userInfo().username.trim() || null;
+    } catch {
+      return null;
+    }
+  },
+});
+
 export const HomeDirectory = Context.Reference<string>(
   "@t3tools/shared/HostProcess/HomeDirectory",
   {
@@ -98,23 +108,5 @@ export const Addresses = Context.Reference<Effect.Effect<ReadonlySet<string>>>(
 export const UserId = Context.Reference<number | undefined>("@t3tools/shared/HostProcess/UserId", {
   defaultValue: () => process.getuid?.(),
 });
-
-/**
- * The account this process runs as. Undefined when the OS has no name for it:
- * `os.userInfo()` throws for a uid without a passwd entry, as in some
- * containers.
- */
-export const Username = Context.Reference<string | undefined>(
-  "@t3tools/shared/HostProcess/Username",
-  {
-    defaultValue: () => {
-      try {
-        return NodeOS.userInfo().username;
-      } catch {
-        return undefined;
-      }
-    },
-  },
-);
 
 export const isWindows = Effect.map(Platform, (platform) => platform === "win32");

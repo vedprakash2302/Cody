@@ -1,3 +1,5 @@
+import * as NodeSqlite from "node:sqlite";
+
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -33,7 +35,15 @@ const CopilotAuth = Schema.Struct({
 const decodeAuthFile = Schema.decodeEffect(Schema.fromJsonString(AuthFile));
 const decodeApiAuth = Schema.decodeUnknownOption(ApiAuth);
 const decodeCopilotAuth = Schema.decodeUnknownOption(CopilotAuth);
-
+// OpenCode 2's database tags a stored key "key"; auth.json tags it "api".
+const StoredKey = Schema.Struct({
+  type: Schema.Literal("key"),
+  key: Schema.String,
+  metadata: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ server: Schema.optionalKey(Schema.Unknown) })),
+  ),
+});
+const decodeStoredKey = Schema.decodeOption(Schema.fromJsonString(StoredKey));
 const UsageWindow = Schema.Struct({
   percent: Schema.Finite,
   resetsAt: Schema.DateTimeUtcFromString,
@@ -41,6 +51,36 @@ const UsageWindow = Schema.Struct({
 const UsageResponse = Schema.Struct({
   usage: Schema.Struct({ rolling: UsageWindow, weekly: UsageWindow, monthly: UsageWindow }),
 });
+
+// Select before decoding so an OAuth or self-hosted connection cannot fall
+// through to another stored account. NULL-active rows predate the selection flag.
+const readConsoleApiKey = (databasePath: string) =>
+  Effect.try(() => {
+    const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+    try {
+      database.exec("PRAGMA busy_timeout = 100");
+      const row = database
+        .prepare(
+          `SELECT value FROM credential
+           WHERE integration_id = 'opencode' AND active IS NOT 0
+           ORDER BY active DESC, time_created DESC, id DESC LIMIT 1`,
+        )
+        .get();
+      const stored =
+        typeof row?.value === "string"
+          ? Option.getOrUndefined(decodeStoredKey(row.value))
+          : undefined;
+      const server = stored?.metadata?.server;
+      if (typeof server === "string") {
+        const url = new URL(server);
+        if (`${url.origin}${url.pathname.replace(/\/+$/, "")}` !== "https://opencode.ai/console")
+          return undefined;
+      }
+      return stored?.key.trim();
+    } finally {
+      database.close();
+    }
+  }).pipe(Effect.orElseSucceed(() => undefined));
 
 // Every field is optional in GitHub's own client types, so one odd snapshot
 // is skipped rather than failing the whole response.
@@ -71,21 +111,34 @@ function copilotQuotaLabel(
   return tokenBasedBilling ? "Copilot · AI credits" : "Copilot · Premium requests";
 }
 
-type ProbeResult = ReadonlyArray<ServerProviderUsageWindow> | "unsupported" | "probeFailed";
+type GoProbeResult =
+  | { readonly windows: ReadonlyArray<ServerProviderUsageWindow>; readonly apiKey: string }
+  | "unsupported";
 
-const readGoWindows = Effect.fn("readGoWindows")(function* (apiKey: string) {
+const readGoWindows = Effect.fn("readGoWindows")(function* (keys: {
+  readonly consoleKey: string | undefined;
+  readonly goKey: string | undefined;
+}) {
+  let apiKey = keys.consoleKey || keys.goKey;
+  if (!apiKey) return "unsupported" as const;
   const client = yield* HttpClient.HttpClient;
-  const response = yield* client.execute(
-    HttpClientRequest.get("https://opencode.ai/zen/go/v1/usage").pipe(
-      HttpClientRequest.bearerToken(apiKey),
-    ),
-  );
+  const readUsage = (key: string) =>
+    client.execute(
+      HttpClientRequest.get("https://opencode.ai/zen/go/v1/usage").pipe(
+        HttpClientRequest.bearerToken(key),
+      ),
+    );
+  let response = yield* readUsage(apiKey);
+  if ((response.status === 401 || response.status === 403) && keys.goKey && keys.goKey !== apiKey) {
+    apiKey = keys.goKey;
+    response = yield* readUsage(apiKey);
+  }
   // A valid Zen key can exist without a Go subscription.
   if (response.status === 403) return "unsupported" as const;
   const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(UsageResponse)),
   );
-  return [
+  const windows: ReadonlyArray<ServerProviderUsageWindow> = [
     {
       id: "go_rolling",
       kind: "session",
@@ -109,7 +162,8 @@ const readGoWindows = Effect.fn("readGoWindows")(function* (apiKey: string) {
       usedPercent: clampPercent(body.usage.monthly.percent),
       resetsAt: DateTime.formatIso(body.usage.monthly.resetsAt),
     },
-  ] satisfies ReadonlyArray<ServerProviderUsageWindow>;
+  ];
+  return { windows, apiKey } satisfies GoProbeResult;
 });
 
 /**
@@ -181,7 +235,7 @@ const credentialFingerprint = Effect.fn("credentialFingerprint")(function* (inpu
     .pipe(Effect.map(Hex.encode), Effect.orDie);
 });
 
-const guardProbe = <E, R>(probe: Effect.Effect<ProbeResult, E, R>) =>
+const guardProbe = <A, E, R>(probe: Effect.Effect<A, E, R>) =>
   probe.pipe(
     Effect.timeout("5 seconds"),
     Effect.orElseSucceed(() => "probeFailed" as const),
@@ -222,37 +276,46 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
         }),
       ));
     const auth = yield* decodeAuthFile(contents);
-    const goAuth = decodeApiAuth(auth["opencode-go"]);
+    const apiAuth = decodeApiAuth(auth["opencode-go"]);
     // OpenCode overlays stored API credentials after environment credentials.
-    const goKey = (Option.isSome(goAuth) ? goAuth.value.key : env.OPENCODE_API_KEY)?.trim();
+    const goKey = (Option.isSome(apiAuth) ? apiAuth.value.key : env.OPENCODE_API_KEY)?.trim();
+    // Console supplies Go credentials in OpenCode 2. Inline auth explicitly
+    // overrides local credentials, including the Console connection.
+    const databaseFile = env.OPENCODE_DB ?? "opencode.db";
+    const consoleKey =
+      env.OPENCODE_AUTH_CONTENT || databaseFile === ":memory:"
+        ? undefined
+        : yield* readConsoleApiKey(path.resolve(dataHome, "opencode", databaseFile));
     const copilotAuth = decodeCopilotAuth(auth["github-copilot"]);
 
     const probes = yield* Effect.all(
       {
-        "OpenCode Go": goKey
-          ? guardProbe(readGoWindows(goKey))
-          : Effect.succeed("unsupported" as const),
+        "OpenCode Go": guardProbe(readGoWindows({ consoleKey, goKey })),
         "GitHub Copilot": Option.isSome(copilotAuth)
           ? guardProbe(readCopilotWindows(copilotAuth.value))
           : Effect.succeed("unsupported" as const),
       },
       { concurrency: "unbounded" },
     );
-    const results: ReadonlyArray<readonly [string, ProbeResult]> = Object.entries(probes);
-    const windows = results.flatMap(([, result]) => (typeof result === "string" ? [] : result));
+    const go = probes["OpenCode Go"];
+    const copilot = probes["GitHub Copilot"];
+    const windows = [
+      ...(typeof go === "string" ? [] : go.windows),
+      ...(typeof copilot === "string" ? [] : copilot),
+    ];
     if (windows.length > 0) {
       return {
         ...makeUsageLimits({ checkedAt, windows }),
         credentialFingerprint: yield* credentialFingerprint({
-          goKey: typeof probes["OpenCode Go"] === "string" ? undefined : goKey,
-          copilot:
-            typeof probes["GitHub Copilot"] === "string"
-              ? undefined
-              : Option.getOrUndefined(copilotAuth),
+          goKey: typeof go === "string" ? undefined : go.apiKey,
+          copilot: typeof copilot === "string" ? undefined : Option.getOrUndefined(copilotAuth),
         }),
       };
     }
-    const failed = results.filter(([, result]) => result === "probeFailed").map(([name]) => name);
+    const failed = [
+      ...(go === "probeFailed" ? ["OpenCode Go"] : []),
+      ...(copilot === "probeFailed" ? ["GitHub Copilot"] : []),
+    ];
     return failed.length > 0
       ? makeUnavailableUsageLimits({
           checkedAt,

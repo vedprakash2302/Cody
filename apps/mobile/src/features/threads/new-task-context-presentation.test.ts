@@ -103,7 +103,7 @@ describe("resolveNewTaskBranchLabel", () => {
   );
   it.each([
     ["refs/remotes/t3/main", "From t3/main"],
-    ["refs/heads/t3/main", "From origin/t3/main"],
+    ["refs/heads/t3/main", "From t3/main (remote)"],
   ])(
     "labels namespaced base %s without relying on the current query results",
     (branchName, label) => {
@@ -149,7 +149,7 @@ describe("resolveNewTaskBranchLabel", () => {
     ).toBe("From main");
   });
 
-  it("labels a remote worktree base with From origin", () => {
+  it("labels a remote worktree base with a remote marker", () => {
     expect(
       resolveNewTaskBranchLabel({
         branchName: "main",
@@ -157,7 +157,7 @@ describe("resolveNewTaskBranchLabel", () => {
         startFromOrigin: true,
         workspaceMode: "worktree",
       }),
-    ).toBe("From origin/main");
+    ).toBe("From main (remote)");
   });
 
   it("prompts when no branch is available", () => {
@@ -181,7 +181,7 @@ describe("resolveNewTaskBranchLabel", () => {
           startFromOrigin: true,
           workspaceMode: "worktree",
         }),
-      ).toBe(isRemote === false ? "From origin/t3/main" : "From t3/main");
+      ).toBe(isRemote === true ? "From t3/main" : "From t3/main (remote)");
     },
   );
 });

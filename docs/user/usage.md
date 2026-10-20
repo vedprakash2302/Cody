@@ -112,13 +112,14 @@ closes when you dismiss it or send your next message. It uses the same snapshot 
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
 OpenCode reports limits for the accounts it is signed in to when it runs locally in the
-environment. OpenCode Go shows its session, weekly, and monthly allowance. Go limits need an
-OpenCode Go API key. A Console sign-in alone does not report them. Add your Go API key as
+environment. T3 cannot report limits for external OpenCode servers because their credentials
+belong to the remote server. OpenCode Go shows its session, weekly, and monthly allowance. Go
+limits need an OpenCode Go API key, or an OpenCode Console connected in OpenCode with an API key.
+A Console browser sign-in alone does not report them. You can also add your Go API key as
 `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then refresh provider
 status. GitHub Copilot, signed in through `opencode auth login`, shows its monthly AI credits, or
 premium requests on plans that still count them. Quotas your plan marks unlimited are left out.
-T3 cannot report limits for external OpenCode servers because their credentials belong to the
-remote server. Cursor reports
+Cursor reports
 its monthly allowance, including separate Auto and API usage, using the CLI login or
 `CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
 usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure

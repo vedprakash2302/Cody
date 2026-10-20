@@ -6,7 +6,11 @@ import type {
   WorktreeSubmodules,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { sanitizeNewRefName, worktreeBaseLabel } from "@t3tools/shared/git";
+import {
+  isTemporaryWorktreeBranch,
+  sanitizeNewRefName,
+  worktreeBaseLabel,
+} from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
@@ -55,8 +59,9 @@ export function resolveEnvironmentOptionLabel(input: {
 export function shouldShowEnvironmentIndicator(input: {
   activeEnvironment: Pick<EnvironmentOption, "isPrimary"> | null;
   canPickEnvironment: boolean;
+  serverUpdateAvailable?: boolean;
 }): boolean {
-  if (input.canPickEnvironment) return true;
+  if (input.canPickEnvironment || input.serverUpdateAvailable) return true;
   return input.activeEnvironment !== null && !input.activeEnvironment.isPrimary;
 }
 
@@ -67,10 +72,13 @@ export function shouldShowComposerContextStrip(input: {
   isGitRepo: boolean;
   showEnvironmentIndicator: boolean;
   hostsRestingComposerControls: boolean;
+  serverUpdateAvailable?: boolean;
 }): boolean {
   return (
     input.hasActiveProject &&
-    (input.isDraftHeroState || input.persistInActiveThreads) &&
+    (input.isDraftHeroState ||
+      input.persistInActiveThreads ||
+      input.serverUpdateAvailable === true) &&
     (input.isGitRepo || input.showEnvironmentIndicator || input.hostsRestingComposerControls)
   );
 }
@@ -222,8 +230,10 @@ export function resolveBranchTriggerLabel(input: {
       : resolvedActiveBranch.startsWith("refs/heads/")
         ? false
         : resolvedActiveBranchIsRemote;
-    const baseRef = startFromOrigin && isRemote === false ? `origin/${branchLabel}` : branchLabel;
-    return `From ${baseRef}`;
+    // Only the server can determine a local branch's configured remote.
+    return startFromOrigin && isRemote === false
+      ? `From ${branchLabel} (remote)`
+      : `From ${branchLabel}`;
   }
   return resolvedActiveBranch;
 }
@@ -235,20 +245,35 @@ export function resolveBranchToolbarPrBranch(input: {
   return input.activeThreadBranch === input.resolvedActiveBranch ? input.activeThreadBranch : null;
 }
 
-export function resolveLocalCheckoutBranchMismatch(input: {
+export function resolveCheckoutBranchMismatch(input: {
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
-}): { threadBranch: string; currentBranch: string } | null {
+}) {
   const { effectiveEnvMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
-  if (effectiveEnvMode !== "local" || activeWorktreePath !== null) {
+  const isLocalCheckout = effectiveEnvMode === "local" && activeWorktreePath === null;
+  const isEstablishedWorktree = effectiveEnvMode === "worktree" && activeWorktreePath !== null;
+  if (!isLocalCheckout && !isEstablishedWorktree) {
     return null;
   }
   if (!activeThreadBranch || !currentGitBranch || activeThreadBranch === currentGitBranch) {
     return null;
   }
-  return { threadBranch: activeThreadBranch, currentBranch: currentGitBranch };
+  // Cached status can predate the automatic rename of a temporary worktree branch.
+  if (
+    isEstablishedWorktree &&
+    !isTemporaryWorktreeBranch(activeThreadBranch) &&
+    isTemporaryWorktreeBranch(currentGitBranch)
+  ) {
+    return null;
+  }
+  return {
+    threadBranch: activeThreadBranch,
+    currentBranch: currentGitBranch,
+    // Restoring a worktree checkout could switch the branch for sibling threads.
+    canRestoreThreadBranch: isLocalCheckout,
+  };
 }
 
 export function resolveBranchSelectionTarget(input: {

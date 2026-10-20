@@ -86,9 +86,10 @@ export function resolveNewTaskBranchLabel(input: {
     : input.branchName.startsWith("refs/heads/")
       ? false
       : input.branchIsRemote;
-  const baseRef =
-    input.startFromOrigin && isRemote === false ? `origin/${branchLabel}` : branchLabel;
-  return `From ${baseRef}${input.ambiguousName ? (isRemote ? " · remote" : " · local") : ""}`;
+  // Only the server can determine a local branch's configured remote.
+  const baseLabel =
+    input.startFromOrigin && isRemote !== true ? `${branchLabel} (remote)` : branchLabel;
+  return `From ${baseLabel}${input.ambiguousName ? (isRemote ? " · remote" : " · local") : ""}`;
 }
 
 export function shouldCheckoutNewTaskBranch(input: {

@@ -1,5 +1,4 @@
 [
-  "apps/server/src/git/remoteUrls.test.ts",
   "apps/server/src/project/RepositoryIdentityResolver.test.ts",
   "apps/server/src/vcs/GitVcsDriver.test.ts",
   "apps/server/src/vcs/GitVcsDriver.summary.test.ts",

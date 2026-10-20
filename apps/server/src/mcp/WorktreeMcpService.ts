@@ -209,14 +209,19 @@ const make = Effect.gen(function* () {
 
     const startFromOrigin = input.startFromOrigin ?? (yield* readDefaultStartFromOrigin);
 
-    const preparedBase = yield* gitWorkflow
-      .prepareWorktreeBase({
-        cwd: projectCwd,
-        refName: baseRef,
-        startFromOrigin,
-      })
-      .pipe(asOperationFailed(`Unable to prepare worktree base '${baseRef}'`));
-    const worktreeBaseRef = preparedBase.refName;
+    let worktreeBaseRef = baseRef;
+    let baseRefName = baseRef;
+    let startedFromOrigin = false;
+    if (startFromOrigin) {
+      const resolvedRemoteBase = yield* gitWorkflow
+        .fetchWorktreeBaseCommit({ cwd: projectCwd, refName: baseRef })
+        .pipe(asOperationFailed(`Unable to fetch the remote base of '${baseRef}'`));
+      if (resolvedRemoteBase !== null) {
+        worktreeBaseRef = resolvedRemoteBase.commitSha;
+        baseRefName = `refs/remotes/${resolvedRemoteBase.remoteRefName}`;
+        startedFromOrigin = true;
+      }
+    }
 
     const ids = yield* handoffIds(scope);
 
@@ -236,7 +241,7 @@ const make = Effect.gen(function* () {
               cwd: projectCwd,
               refName: worktreeBaseRef,
               newRefName: input.branch,
-              baseRefName: baseRef,
+              baseRefName,
               path: null,
             })
             .pipe(asOperationFailed("Unable to create the worktree")),
@@ -379,7 +384,7 @@ const make = Effect.gen(function* () {
           worktreePath,
           branch: worktree.worktree.refName,
           baseRef,
-          startedFromOrigin: startFromOrigin,
+          startedFromOrigin,
           setupScript,
           continuation,
           note:

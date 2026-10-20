@@ -239,6 +239,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["wide full width column layout messages composer monitor"],
   },
   {
+    id: "math-rendering",
+    title: "Render math",
+    to: "/settings/appearance",
+    searchTerms: ["latex tex katex equations formulas markdown"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",
@@ -329,6 +335,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar inactivity days no activity automatically"],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
+  },
+  {
+    id: "compact-idle-threads",
+    title: "Compact idle Claude threads (beta)",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["context compaction idle cache tokens usage summary beta experimental"],
   },
   {
     id: "auto-settle-merged-threads",
@@ -467,10 +480,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "start-from-origin",
-    title: "Refresh remote base",
+    title: "Start from remote",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["start from origin new worktrees latest matching remote branch local fetch"],
+    searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
     id: "add-project-starts-in",

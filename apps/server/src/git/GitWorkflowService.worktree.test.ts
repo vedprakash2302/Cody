@@ -54,7 +54,11 @@ const fixture = Effect.gen(function* () {
   return { cwd, root, remote, fork, initial, latest, git, driver };
 });
 
-it.layer(TestLayer)("worktree base preparation", (it) => {
+// Cody's worktree pickers store full refs (`refs/remotes/t3/main`,
+// `refs/heads/feature`). Upstream's base fetch must treat them like the short
+// names its own pickers send, and keep a selected remote ref distinct from a
+// local branch with the same short name.
+it.layer(TestLayer)("worktree base fetch with full refs", (it) => {
   it.effect.each(["t3/main", "refs/remotes/t3/main"])(
     "creates a worktree at the fresh upstream commit for %s without fetching the fork",
     (refName) =>
@@ -63,17 +67,13 @@ it.layer(TestLayer)("worktree base preparation", (it) => {
         const workflow = yield* GitWorkflowService.GitWorkflowService;
         // An unavailable fork must not prevent fetching the selected upstream.
         yield* git(cwd, ["remote", "set-url", "origin", `${root}/missing`]);
-        const base = yield* workflow.prepareWorktreeBase({ cwd, refName, startFromOrigin: true });
-        assert.deepEqual(base, {
-          refName: latest,
-          fetchStatus: "done",
-          detail: `t3/main at ${latest.slice(0, 7)}`,
-        });
+        const base = yield* workflow.fetchWorktreeBaseCommit({ cwd, refName });
+        assert.deepEqual(base, { commitSha: latest, remoteRefName: "t3/main" });
         yield* driver.createWorktree({
           cwd,
-          refName: base.refName,
+          refName: base!.commitSha,
           newRefName: "test/fresh",
-          baseRefName: refName,
+          baseRefName: `refs/remotes/${base!.remoteRefName}`,
           path: `${root}/worktree`,
         });
         assert.equal(yield* git(`${root}/worktree`, ["rev-parse", "HEAD"]), latest);
@@ -82,76 +82,23 @@ it.layer(TestLayer)("worktree base preparation", (it) => {
       }),
   );
 
-  it.effect("uses a cached remote ref without fetching when refresh is off", () =>
-    Effect.gen(function* () {
-      const { cwd, initial, git } = yield* fixture;
-      const workflow = yield* GitWorkflowService.GitWorkflowService;
-      const base = yield* workflow.prepareWorktreeBase({
-        cwd,
-        refName: "t3/main",
-        startFromOrigin: false,
-      });
-      assert.equal(base.fetchStatus, "skipped");
-      assert.equal(yield* git(cwd, ["rev-parse", base.refName]), initial);
-    }),
-  );
-
-  it.effect.each(["deleted", "unreachable"])(
-    "rejects an explicit remote base that is %s despite its cached commit",
-    (reason) =>
-      Effect.gen(function* () {
-        const { cwd, root, remote, initial, git } = yield* fixture;
-        const workflow = yield* GitWorkflowService.GitWorkflowService;
-        if (reason === "deleted") {
-          yield* git(remote, ["--git-dir", remote, "update-ref", "-d", "refs/heads/main"]);
-        } else {
-          yield* git(cwd, ["remote", "set-url", "t3", `${root}/missing`]);
-        }
-        const error = yield* workflow
-          .prepareWorktreeBase({
-            cwd,
-            refName: "t3/main",
-            startFromOrigin: true,
-          })
-          .pipe(Effect.flip);
-        assert.equal(error._tag, "GitCommandError");
-        assert.equal(yield* git(cwd, ["rev-parse", "t3/main"]), initial);
-      }),
-  );
-
-  it.effect.each(["feature/topic", "t3/main", "origin/topic"])(
-    "preserves local branch semantics for %s",
-    (refName) =>
-      Effect.gen(function* () {
-        const { cwd, fork, initial, latest, git } = yield* fixture;
-        const workflow = yield* GitWorkflowService.GitWorkflowService;
-        yield* git(cwd, ["branch", refName, initial]);
-        yield* git(cwd, ["push", "origin", `${initial}:refs/heads/${refName}`]);
-        yield* git(cwd, ["push", fork, `${latest}:refs/heads/${refName}`]);
-        yield* git(cwd, ["push", "origin", `${initial}:refs/heads/topic`]);
-        const base = yield* workflow.prepareWorktreeBase({ cwd, refName, startFromOrigin: true });
-        assert.equal(base.refName, latest);
-        assert.equal(base.detail, `origin/${refName} at ${latest.slice(0, 7)}`);
-        assert.equal(yield* git(cwd, ["rev-parse", `refs/heads/${refName}`]), initial);
-      }),
-  );
-
   it.effect.each([true, false])(
-    "preserves a selected remote namespace with refresh %s",
+    "keeps a selected remote ref apart from a same-named local branch with refresh %s",
     (refresh) =>
       Effect.gen(function* () {
         const { cwd, root, initial, latest, git, driver } = yield* fixture;
         const workflow = yield* GitWorkflowService.GitWorkflowService;
+        // A local branch named like the remote ref, pointing elsewhere.
         yield* git(cwd, ["branch", "t3/main", latest]);
+        yield* git(cwd, ["update-ref", "refs/heads/t3/main", initial]);
         const selection = worktreeBaseRef({ name: "t3/main", isRemote: true });
-        const base = yield* workflow.prepareWorktreeBase({
-          cwd,
-          refName: selection,
-          startFromOrigin: refresh,
-        });
+        const base = refresh
+          ? yield* workflow.fetchWorktreeBaseCommit({ cwd, refName: selection })
+          : null;
+        if (refresh) assert.equal(base?.commitSha, latest);
         yield* driver.createWorktree({
           cwd,
-          refName: base.refName,
+          refName: base?.commitSha ?? selection,
           baseRefName: selection,
           newRefName: "test/collision",
           path: `${root}/collision`,
@@ -164,37 +111,32 @@ it.layer(TestLayer)("worktree base preparation", (it) => {
       }),
   );
 
+  it.effect("fetches a full local ref's branch from origin like its short name", () =>
+    Effect.gen(function* () {
+      const { cwd, fork, initial, latest, git } = yield* fixture;
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      yield* git(cwd, ["branch", "feature/topic", initial]);
+      yield* git(cwd, ["push", fork, `${latest}:refs/heads/feature/topic`]);
+      const base = yield* workflow.fetchWorktreeBaseCommit({
+        cwd,
+        refName: worktreeBaseRef({ name: "feature/topic", isRemote: false }),
+      });
+      assert.deepEqual(base, { commitSha: latest, remoteRefName: "origin/feature/topic" });
+      assert.equal(yield* git(cwd, ["rev-parse", "refs/heads/feature/topic"]), initial);
+    }),
+  );
+
   it.effect("matches configured remote names and preserves branch slashes", () =>
     Effect.gen(function* () {
       const { cwd, remote, latest, git } = yield* fixture;
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       yield* git(cwd, ["remote", "add", "t3-team", remote]);
       yield* git(cwd, ["push", remote, `${latest}:refs/heads/feature/topic`]);
-      const base = yield* workflow.prepareWorktreeBase({
+      const base = yield* workflow.fetchWorktreeBaseCommit({
         cwd,
-        refName: "t3-team/feature/topic",
-        startFromOrigin: true,
+        refName: "refs/remotes/t3-team/feature/topic",
       });
-      assert.equal(base.refName, latest);
-      assert.equal(base.detail, `t3-team/feature/topic at ${latest.slice(0, 7)}`);
+      assert.deepEqual(base, { commitSha: latest, remoteRefName: "t3-team/feature/topic" });
     }),
-  );
-
-  it.effect.each(["missing remote", "local-only branch"])(
-    "retains the local-base fallback for %s",
-    (reason) =>
-      Effect.gen(function* () {
-        const { cwd, git } = yield* fixture;
-        const workflow = yield* GitWorkflowService.GitWorkflowService;
-        yield* git(cwd, ["branch", "local-only"]);
-        if (reason === "missing remote") yield* git(cwd, ["remote", "remove", "origin"]);
-        const base = yield* workflow.prepareWorktreeBase({
-          cwd,
-          refName: "local-only",
-          startFromOrigin: true,
-        });
-        assert.equal(base.refName, "local-only");
-        assert.equal(base.fetchStatus, reason === "missing remote" ? "skipped" : "warning");
-      }),
   );
 });

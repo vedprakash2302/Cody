@@ -1,16 +1,13 @@
-import { type RemoteOpenTarget, RemoteOpenUser } from "@t3tools/contracts";
+import { type RemoteOpenTarget } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import { readTailscaleSshEnabled, readTailscaleStatus } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 const SSH_PORT = 22;
-
-const isRemoteOpenUser = Schema.is(RemoteOpenUser);
 
 export class RemoteOpenTargets extends Context.Service<
   RemoteOpenTargets,
@@ -31,6 +28,7 @@ export const make = Effect.gen(function* () {
       net.hasListenerOnHost(SSH_PORT, "::1"),
       (ipv4, ipv6) => ipv4 || ipv6,
     );
+    const username = yield* HostProcess.Username;
 
     const magicDnsName = yield* readTailscaleStatus.pipe(
       Effect.map((status) => status.magicDnsName),
@@ -50,21 +48,21 @@ export const make = Effect.gen(function* () {
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         ))
       ) {
-        // Tailscale SSH signs in as the user the editor names, and editors
-        // default to the viewing machine's username. Naming this process's
-        // account opens the project as the user T3 Code runs as.
-        const user = yield* HostProcess.Username;
-        targets.push(
-          user !== undefined && isRemoteOpenUser(user)
-            ? { kind: "tailscale-ssh", host: magicDnsName, user }
-            : { kind: "tailscale-ssh", host: magicDnsName },
-        );
+        targets.push({
+          kind: "tailscale",
+          host: magicDnsName,
+          ...(username === null ? {} : { username }),
+        });
       }
       return targets;
     }
 
     if (magicDnsName !== null) {
-      targets.push({ kind: "tailscale", host: magicDnsName });
+      targets.push({
+        kind: "tailscale",
+        host: magicDnsName,
+        ...(username === null ? {} : { username }),
+      });
     }
 
     // os.hostname() may already be an FQDN (macOS often reports
@@ -72,7 +70,11 @@ export const make = Effect.gen(function* () {
     const hostname = yield* HostProcess.Hostname;
     const shortHostname = hostname.split(".")[0]?.trim();
     if (shortHostname !== undefined && shortHostname.length > 0) {
-      targets.push({ kind: "mdns", host: `${shortHostname}.local` });
+      targets.push({
+        kind: "mdns",
+        host: `${shortHostname}.local`,
+        ...(username === null ? {} : { username }),
+      });
     }
 
     return targets;
