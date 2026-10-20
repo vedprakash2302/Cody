@@ -113,6 +113,22 @@ After reconciliation:
 3. Commit the checked merge and any necessary cleanup, then push only to the fork's `personal/main`. Do not force-push.
 4. Report to Ved in plain language, keeping the report in the thread or the owning issue rather than a committed checklist. Cover the patches first: which capabilities now come from upstream, which were rebuilt on upstream's new code and how you confirmed they still work, which patches remain, and anything he must test by hand. Then explain every upstream change since the last Cody release, including commits the daily workflow merged unreviewed. Group them by what he will notice. For each one, say what used to happen and what happens now, which machine needs the update (the server that runs threads, the app he looks at, or both), and anything that breaks until a later fix or needs him to act. Read the upstream PR description when a title is unclear. Skip internal refactors, tests, and CI. End with the upstream commit incorporated and the checks run.
 
+### Sync working notes
+
+These come from earlier syncs. Each run starts in a fresh thread, so anything learned during a sync that the next one needs belongs here.
+
+- On Devbox, the active `gh` account cannot reach Cody. Run `export GH_TOKEN="$(gh auth token --user vedprakash2302)"` and use `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch|push ...`. `gh pr view` can hang; read a PR with `timeout 100 gh api repos/pingdotgg/t3code/pulls/<n> -q .body`.
+- Find the overlap before merging. List files changed on both sides since the merge base (`git diff --name-only $(git merge-base HEAD t3/main) <side>`, then `comm -12`), and for each upstream commit print which of those files it touches. That list drives the capability review.
+- Resolve conflicts with `node scripts/resolve-conflict-hunks.mjs <file> <side>[,<side>...]`, one choice per hunk (`ours`, `theirs`, `both`, `theirs+ours`). Edit by hand when neither side is right. When a patch is superseded, take upstream's hunks, delete the patch's non-conflicting leftovers, and confirm `git diff t3/main -- <file>` is empty or intentional.
+- Check that Cody's changes survived. For each overlapping file, compare the lines Cody added (`git diff <merge-base> HEAD -- <file>`, `+` lines) with the lines still differing from upstream after resolution (`git diff --cached t3/main -- <file>`). Every missing line must be a deliberate supersession.
+- Frequent conflicts: `ChatView.tsx`, `BranchPicker.tsx`, `BranchToolbar.logic.ts`, `ScheduledTasksSettings.tsx`, `ConnectionsSettings(.logic).ts`, `ServerBrowser.ts` and its test, `GitVcsDriverCore.ts`, mobile `new-task-flow-provider.tsx` and `new-task-context-presentation.ts`, `desktopUpdate.logic.ts`, `usageLimits.ts` in provider-opencode, and `scripts/build-desktop-artifact.ts`.
+- Upstream tests that hard-code T3 branding need Cody's values: scheme `cody`, Linux desktop id `com.vedpandey.cody.desktop`, name `Cody`, userData `cody-v2`/`cody-dev`, manifest name "Cody". Cody user-facing strings, including new macOS permission prompts, say Cody.
+- Muse replay fixtures (`apps/server/src/orchestration-v2/testkit/fixtures/*/muse_transcript.ndjson`) contain the injected instructions. Keep Cody's `<final_answer>` block right after `</runtime_info>` in every `turn/start` frame when upstream rewrites the surrounding text.
+- Desktop startup tests mock `DesktopUpdates.subscribe`. Cody's auto-install listener subscribes during startup, so a mock that never returns hangs the test.
+- Tests are not typechecked. After an upstream rename, a fork test can pass on `undefined === undefined`. Run `npx tsc --noEmit` per package and read failing assertions instead of loosening them.
+- Install with `CI=true vp install --frozen-lockfile`. If Electron tests report "Electron failed to install correctly", run `(cd node_modules/.pnpm/electron@*/node_modules/electron && node install.js)`.
+- Mobile code uses the React Compiler. Re-express Cody logic without `useMemo` or `useCallback`.
+
 If resolving the merge would require uncertain product decisions, or a capability can only be confirmed by hand, leave `personal/main` unchanged. Push the checked merge to a new `sync/<date>` branch instead of discarding it, and explain the conflict and the decision or test needed.
 
 ## Build and install separately
