@@ -63,6 +63,7 @@
   "apps/web/src/components/desktopUpdate.logic.test.ts",
   "packages/client-runtime/src/work-log/turnAnswer.test.ts",
   "apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+  "apps/web/src/components/chat/timelineMinimapItems.test.ts",
   "apps/mobile/src/lib/threadActivity.test.ts",
   "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts",
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts",

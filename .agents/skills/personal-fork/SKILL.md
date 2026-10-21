@@ -128,6 +128,9 @@ These come from earlier syncs. Each run starts in a fresh thread, so anything le
 - Tests are not typechecked. After an upstream rename, a fork test can pass on `undefined === undefined`. Run `npx tsc --noEmit` per package and read failing assertions instead of loosening them.
 - Install with `CI=true vp install --frozen-lockfile`. If Electron tests report "Electron failed to install correctly", run `(cd node_modules/.pnpm/electron@*/node_modules/electron && node install.js)`.
 - Mobile code uses the React Compiler. Re-express Cody logic without `useMemo` or `useCallback`.
+- Upstream prunes tests in bulk (#22557 and its second passes). When it deletes a test Cody only rebranded, drop Cody's copy. Keep fork-only tests, and keep a rebranded test only when it is the last check of a Cody identity value. Pruning also removes the imports and helpers those tests used. The seven typechecked packages report the gaps, but `scripts/`, `source-control-*`, and `.mjs` tests only fail at run time with `ReferenceError`, so run the personal checks before trusting a merge.
+- Upstream packages Windows on Linux runners (#22584). Cody keeps Windows runners in `personal-build.yml` because the work-account sign-in helper needs MSVC, and `build-windows-sso.mjs` fails packaging on any other host. `release-desktop.yml` builds the resource monitor with plain cargo on a Windows host instead of cargo-xwin.
+- Agent shells export `T3CODE_TELEMETRY_ENABLED`, which breaks the WSLENV test in `DesktopBackendConfiguration.test.ts`. Run the personal checks with `env -u T3CODE_TELEMETRY_ENABLED`. Playwright has no Chromium for this WSL host's Ubuntu, so web browser tests only run in CI.
 
 If resolving the merge would require uncertain product decisions, or a capability can only be confirmed by hand, leave `personal/main` unchanged. Push the checked merge to a new `sync/<date>` branch instead of discarding it, and explain the conflict and the decision or test needed.
 

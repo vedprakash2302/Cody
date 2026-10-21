@@ -108,4 +108,8 @@ if (process.platform === "win32") {
   } finally {
     NodeFS.rmSync(temp, { recursive: true, force: true });
   }
+} else if (process.argv.includes("--output")) {
+  // Upstream packages Windows on Linux, where MSVC is missing. A package built
+  // there would ship without work-account sign-in, so packaging fails instead.
+  throw new Error("The Windows SSO helper needs MSVC: package Windows Cody on a Windows host.");
 }

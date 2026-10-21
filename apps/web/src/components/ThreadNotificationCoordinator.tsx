@@ -155,7 +155,8 @@ function EnvironmentNotifications({
         attention && attention !== prior.attention
           ? "input"
           : // A Cody side chat's answers show in its panel; only its approvals notify.
-            completion !== null &&
+            !rawThread.latestRunStopRequested &&
+              completion !== null &&
               rawThread.codySideChat !== true &&
               (prior.completion === null || completion > prior.completion)
             ? "completion"
