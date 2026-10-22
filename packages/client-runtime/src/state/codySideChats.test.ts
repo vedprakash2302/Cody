@@ -57,6 +57,9 @@ describe("Cody side chats in client state", () => {
     expect(registry.get(threads.navigationThreadShellsAtom).map((thread) => thread.id)).toEqual([
       main.id,
     ]);
+    expect(registry.get(threads.quietThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      main.id,
+    ]);
     expect(
       registry.get(threads.threadShellAtom({ environmentId, threadId: ThreadId.make("side") }))
         ?.source.codySideChat,

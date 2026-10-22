@@ -10,7 +10,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { GitBranchIcon, ShieldIcon } from "lucide-react";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 
-import { ComposerFooterModeControls } from "../components/chat/ChatComposer";
+import { ComposerFooterModeControls } from "../components/chat/ComposerFooterControls";
 import { ComposerBanner } from "../components/chat/ComposerBanner";
 import { ComposerPendingApprovalActions } from "../components/chat/ComposerPendingApprovalActions";
 import { ComposerPendingApprovalPanel } from "../components/chat/ComposerPendingApprovalPanel";

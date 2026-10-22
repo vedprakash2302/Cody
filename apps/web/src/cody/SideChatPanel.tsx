@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { ThreadVisitWatermark } from "../components/ChatView";
+import { ThreadVisitWatermark } from "../components/chat/ThreadVisitWatermark";
 import { MessagesTimeline } from "../components/chat/MessagesTimeline";
 import { Button } from "../components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../components/ui/menu";
