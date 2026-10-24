@@ -290,7 +290,15 @@ export function SideChatPanel(props: {
               isWorking={isWorking}
               runlessWorkActive={runlessWorkStartedAt !== null}
               activeTurnInProgress={isWorking || !isLatestRunSettled(latestRun, runtime)}
-              awaitingUser={requests.activeApproval !== null || requests.activeUserInput !== null}
+              awaitingUser={
+                requests.activeApproval !== null
+                  ? "approval"
+                  : requests.activeUserInput !== null
+                    ? "input"
+                    : null
+              }
+              // Announcements carry no thread name; the main thread's timeline speaks for the view.
+              announceTurnStatus={false}
               activeTurnStartedAt={
                 deriveActiveWorkStartedAt(activityRun, runtime, null) ?? runlessWorkStartedAt
               }
