@@ -32,11 +32,7 @@ import {
   resolveDesktopUpdateButtonAction,
 } from "../desktopUpdate.logic";
 
-/**
- * Operating terminals without being able to list them leaves a client
- * allocating a fresh shell for every script run it cannot see, so the pairing
- * form keeps `terminal:read` alongside `terminal:operate`.
- */
+/** Keep terminal:read with terminal:operate to avoid creating unseen shells on every script run. */
 export function togglePairingScopeSelection(
   current: ReadonlyArray<AuthGrantScope>,
   scope: AuthGrantScope,
@@ -63,11 +59,7 @@ export function canRevokeOtherClients(
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
 
-/**
- * A QR code encoding a loopback URL makes the scanning device dial itself, so
- * loopback endpoints stay copyable from the endpoint menu but are never
- * offered as QR targets.
- */
+/** Never offer loopback URLs as QR targets; scanning devices would connect to themselves. */
 export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
   return endpoint.status !== "unavailable" && endpoint.reachability !== "loopback";
 }
@@ -80,10 +72,8 @@ const SERVER_TAILNET_ENDPOINT_PROVIDER: AdvertisedEndpointProvider = {
 };
 
 /**
- * Adds the tailnet addresses the backend reports listening on to the desktop's
- * own list. The desktop only sees its own machine's network, which misses a
- * WSL backend: that binds every interface inside the distro, and a distro
- * running Tailscale is its own tailnet node. HTTPS names are left to the
+ * Adds the backend's tailnet addresses to the desktop's list. The desktop sees only its own network,
+ * which misses a WSL backend running Tailscale as its own tailnet node. HTTPS names stay with the
  * desktop's Tailscale Serve row.
  */
 export function withServerTailnetEndpoints(
@@ -118,12 +108,8 @@ export function withServerTailnetEndpoints(
   return added.length === 0 ? endpoints : [...endpoints, ...added];
 }
 
-/**
- * Copy for the Tailscale HTTPS row when no Tailscale endpoint is advertised.
- * The desktop skips the Tailscale probe until Network access or Tailscale
- * Serve is on (it can trigger a macOS privacy prompt), so a missing endpoint
- * then means "not checked", not "not running".
- */
+/** Desktop skips Tailscale probing until network/Serve is enabled to avoid macOS prompts; absence then
+ * means unchecked. */
 export function missingTailscaleEndpointDescription(
   state: Pick<DesktopServerExposureState, "mode" | "tailscaleServeEnabled"> | null,
 ): string {
@@ -141,12 +127,8 @@ export function isWslSettingsRowVisible(input: {
 }
 
 /**
- * Passive label for this machine's Version row once client and server versions
- * match. The desktop bundles its server, so a pending app update is the only
- * way it falls behind. Pending states follow the sidebar update control's
- * action, including retryable failures, so the two never disagree; the sidebar
- * is where to act. A recheck keeps a downloaded update while `checking`, so it
- * keeps its label too. `state` is null outside the desktop app.
+ * Once client/server versions match, this passive Version label follows the sidebar update action,
+ * including retryable failures. Rechecks retain downloaded-update labels; `state` is null outside desktop.
  */
 export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
   if (!state) return "Up to date";
@@ -174,10 +156,7 @@ export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null)
 
 export type QrEndpointOption = {
   readonly id: string;
-  /**
-   * Stable per endpoint *type* (endpointDefaultPreferenceKey). Multiple
-   * endpoints can share one, so it is only used to match the saved default.
-   */
+  /** Stable per endpoint type, not unique; used only to match the saved default. */
   readonly preferenceKey: string;
   readonly qrShareable: boolean;
 };
@@ -206,9 +185,7 @@ export async function applyWslEnableSelection(input: {
 }): Promise<DesktopWslState> {
   const { bridge, mode, nextDistro, persistedDistro } = input;
 
-  // Stage every preference before enabling. The desktop only relaunches for
-  // mode/distro changes while WSL is active, so the final enable observes the
-  // complete selection and is the only call that may relaunch.
+  // Stage preferences before enabling; only the final call should relaunch WSL with the complete selection.
   await bridge.setWslOnly(mode === "wsl-only");
   if (persistedDistro !== nextDistro) {
     await bridge.setWslDistro(nextDistro);

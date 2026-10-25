@@ -1,18 +1,14 @@
 const PULL_REQUEST_LINKING_INSTRUCTIONS = `<pull_request_linking>
-When the t3-code MCP server exposes link_pull_request, you must use it to register every pull request you create or work on for this thread. Call link_pull_request with the full PR URL immediately after creating a PR or starting work on an existing PR. For a stack, call it for every layer, not just the current branch or the top PR. This applies when creating or updating PRs through gh, gh stack, another CLI, or the host API: those operations do not register the PRs with this thread. Linking an already-linked PR is safe. Before finishing PR work, call list_thread_pull_requests and link any PR from your work that is missing. Do not link unrelated PRs mentioned only as background. If a linking call fails, report that failure instead of claiming the PR is linked. As a delegated child task, do not watch or poll PRs; return PR URLs, head SHA, and pending review/check state to your parent. Otherwise, when asked to monitor, watch, or babysit a PR and watch_pull_request is available, call it and end your turn: T3 Code wakes you when checks finish, someone else comments, or the branch conflicts, so do not poll or run your own watcher. When monitoring is done and you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.
+When the t3-code MCP server exposes link_pull_request, you must use it to register every pull request you create or work on for this thread. Call link_pull_request with the full PR URL immediately after creating a PR or starting work on an existing PR. For a stack, call it for every layer, not just the current branch or the top PR. This applies when creating or updating PRs through your host's CLI (including its stack commands) or its API: those operations do not register the PRs with this thread. Linking an already-linked PR is safe. Before finishing PR work, call list_thread_pull_requests and link any PR from your work that is missing. Do not link unrelated PRs mentioned only as background. If a linking call fails, report that failure instead of claiming the PR is linked. As a delegated child task, do not watch or poll PRs; return PR URLs, head SHA, and pending review/check state to your parent. Otherwise, when asked to monitor, watch, or babysit a PR and watch_pull_request is available, call it and end your turn: T3 Code wakes you when checks finish, someone else comments, or the branch conflicts, so do not poll or run your own watcher. When monitoring is done and you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.
 </pull_request_linking>`;
 
-// T3 Code collapses a finished turn's earlier messages and keeps its last one
-// visible, so an answer followed by a separate status line ("I've closed the
-// browser.") ends up hidden. Every client, including installed mobile apps the
-// server cannot update, benefits when the answer comes last.
+// T3 Code collapses a finished turn's earlier messages and keeps its last one visible, so the answer
+// must come last. This reaches installed mobile apps the server cannot update.
 const FINAL_ANSWER_INSTRUCTIONS = `<final_answer>
 T3 Code keeps the last message of a finished turn visible and may collapse earlier ones. Complete any required cleanup and final tool calls before writing your final answer, and keep resources running when the user needs them. Do not append a separate status-only message after the answer; mention cleanup inside the answer if it matters.
 </final_answer>`;
 
-/**
- * Shared runtime context; omit model and effort when the harness manages them dynamically.
- */
+/** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
   readonly model?: string | undefined;

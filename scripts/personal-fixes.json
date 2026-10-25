@@ -85,5 +85,6 @@
   "apps/server/src/cody/sideChatVisibility.test.ts",
   "packages/client-runtime/src/state/codySideChats.test.ts",
   "packages/client-runtime/src/connection/resolver.test.ts",
-  "apps/web/src/cody/sideChatCommand.test.ts"
+  "apps/web/src/cody/sideChatCommand.test.ts",
+  "apps/web/src/cody/sideChatNotifications.test.ts"
 ]

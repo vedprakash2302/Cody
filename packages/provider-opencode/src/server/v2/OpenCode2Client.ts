@@ -50,10 +50,7 @@ export type OpenCode2StreamEvent =
   | OpenCode2UnreadableTerminal
   | OpenCode2UnreadableStart;
 
-/**
- * `events` succeeds once the server accepted the subscription: the stream is
- * volatile, so callers subscribe before they start work whose events they need.
- */
+/** events resolves on subscription acceptance; subscribe before work because the stream is volatile. */
 export interface OpenCode2Api {
   readonly client: OpenCodeClient;
   readonly events: Effect.Effect<
@@ -75,10 +72,7 @@ export class OpenCode2Client extends Context.Service<
   }
 >()("@t3tools/provider-opencode/server/v2/OpenCode2Client") {}
 
-/**
- * OpenCode writes a `: heartbeat` comment every 10 to 15 seconds, so this long
- * without a single byte means the server is stuck, not idle.
- */
+// Heartbeats arrive every 10-15 seconds; longer silence means stuck, not idle.
 const SILENT_STREAM_TIMEOUT = "45 seconds";
 
 const decodeEvent = Schema.decodeUnknownResult(Schema.fromJsonString(OpenCodeEvent));
@@ -142,10 +136,7 @@ const readEvents = HttpClient.get("/api/event", {
   ),
 );
 
-/**
- * OpenCode decodes Basic credentials as UTF-8. `HttpClientRequest.basicAuth`
- * encodes them as Latin-1 (`btoa`), which gets non-ASCII passwords rejected.
- */
+// OpenCode requires UTF-8 Basic credentials; HttpClientRequest.basicAuth uses Latin-1.
 const basicAuthorization = (password: string | Redacted.Redacted) => {
   const plain = Redacted.isRedacted(password) ? Redacted.value(password) : password;
   return `Basic ${Buffer.from(`${OPENCODE_USERNAME}:${plain}`, "utf8").toString("base64")}`;
@@ -176,13 +167,9 @@ const fillCompactionRecent = (message: unknown) =>
     : message;
 
 /**
- * OpenCode 2.1 dropped a compaction's `recent`, while the bundled 2.0.28 schema
- * still requires it on running and completed compactions. Servers that migrated
- * a pre-2.1 compaction keep its value under `metadata.recent`; native 2.1
- * compactions carry `metadata.keepID` or no metadata at all. T3 never reads the
- * field, so filling the gap keeps history pages from either server decodable
- * while every other field, including a present but invalid `recent`, still
- * fails validation downstream as before.
+ * OpenCode 2.1 dropped a compaction's `recent`, which the bundled 2.0.28 schema requires. Migrated
+ * compactions keep it under `metadata.recent`; native 2.1 ones have none. T3 never reads it, so
+ * filling the gap keeps history pages decodable while every other field still validates downstream.
  */
 const fillCompactionRecents = HttpClient.transformResponse(
   Effect.fnUntraced(function* (
@@ -211,7 +198,7 @@ const fillCompactionRecents = HttpClient.transformResponse(
   }),
 );
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   return OpenCode2Client.of({
@@ -238,11 +225,7 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(OpenCode2Client, make);
 
-/**
- * The first request carries the caller's input (including `order`); later
- * requests send only the cursor, because OpenCode rejects a cursor combined
- * with `order`.
- */
+/** Send input only initially; cursor pages must omit order or OpenCode rejects them. */
 export const paginate = <Input extends { readonly cursor?: unknown }, Item, E, R>(
   input: Input,
   list: (

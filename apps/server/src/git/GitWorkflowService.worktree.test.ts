@@ -107,7 +107,7 @@ it.layer(TestLayer)("worktree base fetch with full refs", (it) => {
           yield* git(`${root}/collision`, ["rev-parse", "HEAD"]),
           refresh ? latest : initial,
         );
-        assert.equal(yield* git(cwd, ["config", "branch.test/collision.gh-merge-base"]), "main");
+        assert.equal(yield* git(cwd, ["config", "branch.test/collision.t3-merge-base"]), "main");
       }),
   );
 

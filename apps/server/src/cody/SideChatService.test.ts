@@ -190,6 +190,7 @@ const makeHarness = (options: {
       getThreadEventSequence: unused,
       recoverDelegatedTask: unused,
       delegatedTaskResultPending: unused,
+      awaitBackgroundTasks: unused,
       streamStoredEvents: Stream.empty,
       streamStoredEventsFrom: () => Stream.empty,
     });

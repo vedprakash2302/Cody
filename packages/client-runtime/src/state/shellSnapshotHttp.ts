@@ -33,9 +33,15 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
     RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
   >;
   readonly timeoutMs?: number;
+  readonly omitIdleSubagents?: boolean;
 }) {
   // Cody servers send side chats only to clients that ask; others ignore the query.
-  const endpoint = { query: { codyFeatures: CODY_SIDE_CHAT_CLIENT_FEATURE } };
+  const endpoint = {
+    query: {
+      codyFeatures: CODY_SIDE_CHAT_CLIENT_FEATURE,
+      ...(input.omitIdleSubagents === true ? { omitIdleSubagents: "1" } : {}),
+    },
+  };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
     group: "orchestration",
@@ -47,6 +53,7 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
         .shellSnapshot({
           ...endpoint,
           headers: withOrchestrationProtocolHeader(headers),
+          ...endpoint,
           responseMode: "response-only",
         })
         .pipe(Effect.flatMap(decodeShellSnapshotResponse)),
@@ -83,6 +90,7 @@ export class ShellSnapshotLoader extends Context.Service<
   {
     readonly load: (
       prepared: PreparedConnection,
+      options?: { readonly omitIdleSubagents?: boolean },
     ) => Effect.Effect<Option.Option<DeferredShellSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/shellSnapshotHttp/ShellSnapshotLoader") {}
@@ -98,8 +106,13 @@ export const layer: Layer.Layer<ShellSnapshotLoader, never, HttpClient.HttpClien
       RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
     );
     return ShellSnapshotLoader.of({
-      load: (prepared: PreparedConnection) =>
-        fetchEnvironmentShellSnapshot({ prepared, signer, remoteAuthorization }).pipe(
+      load: (prepared, options) =>
+        fetchEnvironmentShellSnapshot({
+          prepared,
+          signer,
+          remoteAuthorization,
+          ...(options?.omitIdleSubagents === true ? { omitIdleSubagents: true } : {}),
+        }).pipe(
           Effect.map(Option.some<DeferredShellSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.catchCause((cause) =>

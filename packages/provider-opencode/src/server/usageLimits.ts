@@ -215,11 +215,9 @@ const readCopilotWindows = Effect.fn("readCopilotWindows")(function* (
 });
 
 /**
- * Identifies the credentials behind the reported windows. Neither usage
- * response has an account ID. An unkeyed hash matches across environments
- * without a shared secret. It permits offline guesses, but Go keys and GitHub
- * OAuth tokens are randomly generated. Go-only limits hash exactly as upstream
- * does, so they still pool with environments running upstream T3 Code.
+ * Identifies the credentials behind the windows; neither response has an account ID. Unkeyed hashes
+ * match across environments; random Go keys and GitHub OAuth tokens resist offline guessing. Go-only
+ * limits hash as upstream does, so they pool with environments running upstream T3 Code.
  */
 const credentialFingerprint = Effect.fn("credentialFingerprint")(function* (input: {
   readonly goKey: string | undefined;

@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -53,6 +54,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CODY_SIDE_CHAT_WS_METHODS.open]: AuthOrchestrationOperateScope,
   [CODY_SIDE_CHAT_WS_METHODS.close]: AuthOrchestrationOperateScope,
   [CODY_SIDE_CHAT_WS_METHODS.promote]: AuthOrchestrationOperateScope,
+  // A guest link hands thread access to someone outside, like a pairing link.
+  [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

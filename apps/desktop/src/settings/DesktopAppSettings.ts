@@ -39,8 +39,7 @@ export interface DesktopSettings {
   readonly autoInstallUpdates: boolean;
   readonly wslBackendEnabled: boolean;
   readonly wslDistro: string | null;
-  // Changing this requires a desktop restart because the pool's primary spec is
-  // chosen once at layer init.
+  // Requires restart because the pool chooses its primary spec at layer initialization.
   readonly wslOnly: boolean;
 }
 
@@ -483,7 +482,6 @@ const writeSettings = Effect.fn("desktop.settings.writeSettings")(function* (inp
 });
 
 /** @public */
-/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
