@@ -177,26 +177,23 @@ export interface DigestInput {
 }
 
 const DIGEST_MAX_CHARS = 48_000;
+const MIN_SECTION_LENGTH = 200;
 
 /**
- * The block sent ahead of a message that carries another conversation. When
- * it is too long, older turns give way first: their replies are shortened,
- * then dropped, then the turns themselves. The user's messages stay longest,
- * since they say what the conversation was after.
+ * The block sent ahead of a message that carries another conversation. Over
+ * the cap, older turns give way first: replies shortened, then dropped, then
+ * whole turns. Each turn renders once, so long conversations stay linear.
  */
 export function renderDigest(input: DigestInput): string {
   const escape = (text: string) => text.replace(new RegExp(`<(?=/?${input.tag}\\b)`, "gi"), "&lt;");
-  const turnText = (turn: DigestTurn, index: number, level: TurnLevel, cut?: number) => {
-    if (level === 3) return "";
+  const turnText = (turn: DigestTurn, index: number, level: Exclude<TurnLevel, 3>) => {
     const user = turn.user.map((text) =>
       level === 0 ? text : headAndTail(text, SHORT_USER_LENGTH),
     );
     const assistant =
       level === 2
         ? ["(Reply left out for space.)"]
-        : turn.assistant.map((text) =>
-            cut !== undefined ? headAndTail(text, cut) : level === 1 ? shortened(text) : text,
-          );
+        : turn.assistant.map((text) => (level === 1 ? shortened(text) : text));
     return [
       `[${input.turnLabel} ${index + 1}]`,
       ...user.map((text) => `User: ${escape(text)}`),
@@ -204,58 +201,67 @@ export function renderDigest(input: DigestInput): string {
       ...(turn.activity === null ? [] : [escape(turn.activity)]),
     ].join("\n");
   };
+  const versions = input.turns.map((turn, index) => {
+    const full = turnText(turn, index, 0);
+    return [full, turnText(turn, index, 1), turnText(turn, index, 2), ""] as const;
+  });
 
   const pointer = `For anything left out or shortened here, read the whole conversation with t3_thread_read (threadId "${input.sourceThreadId}").`;
-  const assemble = (levels: ReadonlyArray<TurnLevel>, cut?: number) => {
-    const dropped = levels.filter((level) => level === 3).length;
-    const trimmed = levels.filter((level) => level === 1 || level === 2).length;
-    const notes = [
+  const notes = (dropped: number, shortenedAny: boolean) =>
+    [
       dropped > 0
         ? `${dropped} earlier ${dropped === 1 ? "turn is" : "turns are"} left out.`
         : null,
-      trimmed > 0 || cut !== undefined
-        ? `Some replies are shortened, marked […] or left out.`
-        : null,
+      shortenedAny ? "Some replies are shortened, marked […] or left out." : null,
     ].filter((note) => note !== null);
-    const sections = input.turns
-      .map((turn, index) =>
-        turnText(turn, index, levels[index]!, index === input.turns.length - 1 ? cut : undefined),
-      )
-      .filter((section) => section.length > 0);
-    return [
+  const assemble = (sections: ReadonlyArray<string>, dropped: number, shortenedAny: boolean) =>
+    [
       `<${input.tag}>`,
       ...input.header,
-      ...notes,
+      ...notes(dropped, shortenedAny),
       pointer,
       "",
-      ...sections.flatMap((section) => [section, ""]),
+      ...sections.flatMap((section) => (section.length === 0 ? [] : [section, ""])),
       ...input.footer,
       `</${input.tag}>`,
     ].join("\n");
-  };
 
   const max = input.maxChars ?? DIGEST_MAX_CHARS;
   const levels: TurnLevel[] = input.turns.map(() => 0);
-  let text = assemble(levels);
+  const sectionLength = (index: number) => {
+    const length = versions[index]![levels[index]!].length;
+    return length === 0 ? 0 : length + 2;
+  };
+  const notesLength = (dropped: number, shortenedAny: boolean) =>
+    notes(dropped, shortenedAny).reduce((sum, note) => sum + note.length + 1, 0);
+  const base = assemble([], 0, false).length;
+  let sectionsLength = versions.reduce((sum, version) => sum + version[0].length + 2, 0);
+  let dropped = 0;
+  let shortenedCount = 0;
+  const total = () => base + notesLength(dropped, shortenedCount > 0) + sectionsLength;
+  const isShortened = (level: TurnLevel) => level === 1 || level === 2;
+  const setLevel = (index: number, level: TurnLevel) => {
+    const previous = levels[index]!;
+    sectionsLength -= sectionLength(index);
+    levels[index] = level;
+    sectionsLength += sectionLength(index);
+    shortenedCount += Number(isShortened(level)) - Number(isShortened(previous));
+    dropped += Number(level === 3) - Number(previous === 3);
+  };
   // Older turns step down one level at a time, oldest first; the newest stays whole.
+  const last = levels.length - 1;
   for (const level of [1, 2, 3] as const) {
-    for (let index = 0; index < levels.length - 1 && text.length > max; index += 1) {
-      levels[index] = level;
-      text = assemble(levels);
+    for (let index = 0; index < last && total() > max; index += 1) {
+      setLevel(index, level);
     }
   }
-  if (text.length <= max || levels.length === 0) return text;
-  const last = levels.length - 1;
-  levels[last] = 1;
-  text = assemble(levels);
-  if (text.length <= max) return text;
-  // The newest turn alone is too long: keep the start and end of its replies.
-  const longest = Math.max(0, ...input.turns[last]!.assistant.map((reply) => reply.length));
-  let cut = longest - (text.length - max);
-  do {
-    cut = Math.max(200, cut);
-    text = assemble(levels, cut);
-    cut = Math.floor(cut * 0.7);
-  } while (text.length > max && cut >= 200);
-  return text;
+  if (last >= 0 && total() > max) setLevel(last, 1);
+  const sections = versions.map((version, index) => version[levels[index]!]);
+  if (last >= 0 && total() > max) {
+    // The newest turn alone is too long: keep its start and its end.
+    const budget = max - (total() - sectionLength(last)) - 2;
+    sections[last] = budget < MIN_SECTION_LENGTH ? "" : headAndTail(sections[last]!, budget);
+    if (sections[last] === "") dropped += 1;
+  }
+  return assemble(sections, dropped, shortenedCount > 0);
 }

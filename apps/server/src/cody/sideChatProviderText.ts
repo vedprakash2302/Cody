@@ -1,7 +1,7 @@
 import type {
   OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
-  ThreadContextRecord,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   projectComposerContextForProvider,
@@ -83,18 +83,21 @@ export const sideChatProviderText = Effect.fn("SideChat.providerText")(function*
 });
 
 /**
- * The text a thread turn sends its provider when its message carries attached
- * side chats: each side chat's turns the thread hasn't seen, then the message.
+ * The text a thread message sends its provider when it carries attached side
+ * chats: each side chat's turns the thread hasn't received, then the message.
+ * `record` notes how far each side chat went, for the next attach to skip.
  */
-const attachedSideChatsProviderText = Effect.fn("SideChat.attachedProviderText")(function* (input: {
+const attachedSideChatsText = Effect.fn("SideChat.attachedText")(function* (input: {
   readonly projectionStore: ProjectionStoreV2Shape;
   readonly sideChats: SideChatMembershipShape;
-  readonly thread: Pick<OrchestrationV2AppThread, "id">;
+  readonly threadId: ThreadId;
   readonly message: Pick<OrchestrationV2ConversationMessage, "id" | "text" | "context">;
-  readonly records: ReadonlyArray<ThreadContextRecord>;
 }) {
-  const { projectionStore, sideChats, thread, message } = input;
-  const attachedIds = new Set(input.records.map((record) => record.contextId));
+  const { projectionStore, sideChats, message } = input;
+  if (sideChats.isSideChat(input.threadId)) return null;
+  const attached = attachedSideChatRecords(message, sideChats.isSideChat);
+  if (attached.length === 0) return null;
+  const attachedIds = new Set(attached.map((record) => record.contextId));
   const question = projectComposerContextForProvider({
     text: replaceComposerContextReferences(message.text, (occurrence) =>
       attachedIds.has(occurrence.contextId) ? "" : occurrence.source,
@@ -103,30 +106,34 @@ const attachedSideChatsProviderText = Effect.fn("SideChat.attachedProviderText")
       (candidate) => !attachedIds.has(candidate.contextId),
     ),
   }).trim();
-  const blocks = yield* Effect.forEach(input.records, (record) =>
-    Effect.gen(function* () {
-      const attachment = yield* sideChatAttachmentText({
-        projectionStore,
-        sideChatId: record.threadId,
-        threadId: thread.id,
-        messageId: message.id,
-        sent: sideChats.sentToThread(record.threadId),
-        withoutQuestion: question.length === 0,
-      });
-      if (attachment.coveredRunId !== null) {
-        // Without the record the next attach repeats this one, which is harmless.
-        yield* sideChats
-          .recordSentToThread(record.threadId, message.id, attachment.coveredRunId)
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Couldn't record an attached side chat.", cause),
-            ),
-          );
-      }
-      return attachment.text;
-    }),
+  const attachments = yield* Effect.forEach(attached, (record) =>
+    sideChatAttachmentText({
+      projectionStore,
+      sideChatId: record.threadId,
+      threadId: input.threadId,
+      messageId: message.id,
+      sent: sideChats.sentToThread(record.threadId),
+      withoutQuestion: question.length === 0,
+    }).pipe(Effect.map((attachment) => ({ ...attachment, sideChatId: record.threadId }))),
   );
-  return [...blocks, ...(question.length === 0 ? [] : [question])].join("\n\n");
+  const record = Effect.forEach(
+    attachments,
+    ({ sideChatId, coveredRunId }) =>
+      coveredRunId === null
+        ? Effect.void
+        : sideChats.recordSentToThread(sideChatId, message.id, coveredRunId),
+    { discard: true },
+  ).pipe(
+    // Without the record the next attach repeats this one, which is harmless.
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Couldn't record an attached side chat.", cause),
+    ),
+  );
+  const text = [
+    ...attachments.map((attachment) => attachment.text),
+    ...(question.length === 0 ? [] : [question]),
+  ].join("\n\n");
+  return { text, record };
 });
 
 /**
@@ -141,7 +148,17 @@ export const codyProviderText = Effect.fn("Cody.providerText")(function* (input:
   readonly message: Pick<OrchestrationV2ConversationMessage, "id" | "text" | "context">;
 }) {
   if (input.sideChats.isSideChat(input.thread.id)) return yield* sideChatProviderText(input);
-  const records = attachedSideChatRecords(input.message, input.sideChats.isSideChat);
-  if (records.length === 0) return null;
-  return yield* attachedSideChatsProviderText({ ...input, records });
+  const attached = yield* attachedSideChatsText({ ...input, threadId: input.thread.id });
+  if (attached === null) return null;
+  // Recorded now; it counts only once the provider takes the turn.
+  yield* attached.record;
+  return attached.text;
 });
+
+/**
+ * Cody's text for a message steered into a running thread turn, or null to
+ * leave upstream's. Run `record` once the steer lands: a steered message has
+ * no turn of its own to show it arrived. Side chat steers stay plain, since
+ * the side chat's rules and main's updates travel with queued sends.
+ */
+export const codySteerText = attachedSideChatsText;

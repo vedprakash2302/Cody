@@ -22,7 +22,7 @@ import type {
   ProjectionRecordFilter,
   ProjectionStoreV2Shape,
 } from "../orchestration-v2/ProjectionStore.ts";
-import { codyProviderText, sideChatProviderText } from "./sideChatProviderText.ts";
+import { codyProviderText, codySteerText, sideChatProviderText } from "./sideChatProviderText.ts";
 import { SIDE_CHAT_RULES } from "./sideChatRules.ts";
 
 const MAIN = ThreadId.make("provider-text-main");
@@ -112,6 +112,13 @@ const sideItems = [
   { type: "file_change", runId: RunId.make("side-run-2"), fileName: "src/retry.ts" },
 ] as unknown as ReadonlyArray<OrchestrationV2TurnItem>;
 
+/** Thread messages that carried the side chat: started, steered, and still queued. */
+const deliveries = [
+  message("main-message-2", "user", "x", mainRuns[1]!.id),
+  message("main-steered", "user", "x", mainRuns[2]!.id),
+  message("main-message-9", "user", "x", null),
+];
+
 const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
   ({
     getThreadRecords: (
@@ -121,11 +128,16 @@ const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
     ) =>
       Effect.succeed({
         thread: { id: threadId, title: threadId === MAIN ? "Fix login" : "Retry logic" },
-        messages: (threadId === MAIN ? mainMessages : sideMessages).filter(
-          (entry) =>
-            filter?.messageRunIds === undefined ||
-            (entry.runId !== null && filter.messageRunIds.includes(entry.runId)),
-        ),
+        messages:
+          filter?.messageIds !== undefined
+            ? (threadId === MAIN ? deliveries : []).filter((entry) =>
+                filter.messageIds!.includes(entry.id),
+              )
+            : (threadId === MAIN ? mainMessages : sideMessages).filter(
+                (entry) =>
+                  filter?.messageRunIds === undefined ||
+                  (entry.runId !== null && filter.messageRunIds.includes(entry.runId)),
+              ),
         turnItems: (threadId === MAIN ? [] : sideItems).filter(
           (item) =>
             filter?.turnItemRunIds === undefined || filter.turnItemRunIds.includes(item.runId),
@@ -307,6 +319,39 @@ describe("codyProviderText for a thread message", () => {
         message: message("main-message-5", "user", sideChatChip, null, attached),
       });
       assert.include(text, "is retry safe?");
+    }),
+  );
+
+  it.effect("counts a message steered into a running turn as received", () =>
+    Effect.gen(function* () {
+      const { sideChats } = makeSideChats({}, { "main-steered": RunId.make("side-run-2") });
+      const text = yield* codyProviderText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        thread: mainThread,
+        message: message("main-message-4", "user", `${sideChatChip} and?`, null, attached),
+      });
+      assert.include(text, "Nothing new was said there since you last saw it.");
+      assert.notInclude(text, "is retry safe?");
+    }),
+  );
+
+  it.effect("records a steered attachment only when asked to, after the steer lands", () =>
+    Effect.gen(function* () {
+      const { sideChats, recordedSent } = makeSideChats();
+      const steer = yield* codySteerText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        threadId: MAIN,
+        message: message("main-steered", "user", `${sideChatChip} and?`, null, attached),
+      });
+      assert.include(steer?.text, "[Side chat turn 2]\nUser: what about timeouts?");
+      assert.isTrue(steer?.text.endsWith("</side-chat-context>\n\nand?"));
+      assert.deepEqual(recordedSent, []);
+      yield* steer!.record;
+      assert.deepEqual(recordedSent, [
+        [SIDE_CHAT, MessageId.make("main-steered"), RunId.make("side-run-2")],
+      ]);
     }),
   );
 });

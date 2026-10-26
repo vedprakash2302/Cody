@@ -4,6 +4,8 @@ import type {
   OrchestrationMessageContext,
   OrchestrationV2Checkpoint,
   OrchestrationV2ConversationMessage,
+  OrchestrationV2ProviderTurn,
+  OrchestrationV2Run,
   OrchestrationV2TurnItem,
   RunId,
   ThreadContextRecord,
@@ -14,7 +16,7 @@ import * as Effect from "effect/Effect";
 
 import type { ProjectionStoreV2Shape } from "../orchestration-v2/ProjectionStore.ts";
 import { ACTIVITY_ITEM_TYPES, digestTurns, renderDigest } from "./conversationDigest.ts";
-import { sideChatMainRuns, sideChatSeenRunId } from "./sideChatMainUpdate.ts";
+import { sideChatMainRuns } from "./sideChatMainUpdate.ts";
 
 /** Side chats attached to a thread message: their chips that the text still links to. */
 export function attachedSideChatRecords(
@@ -33,11 +35,56 @@ export function attachedSideChatRecords(
   );
 }
 
+const STARTED_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+  "running",
+  "waiting",
+  "completed",
+]);
+
 /**
- * What a thread has seen of a side chat, read the same way as a side chat's
- * view of its parent but from the other side: nothing until a message carried
- * it, then the side chat's newest run that message covered.
+ * The newest side chat run the thread has received. A message that started
+ * its own run counts once its provider took the turn; one steered into a
+ * running turn is recorded only after the steer landed. Neither counts once
+ * the thread rolls its run back, which drops it from the provider's context.
  */
+export function sideChatSentThrough(input: {
+  readonly sent: Readonly<Record<MessageId, RunId>>;
+  readonly messages: ReadonlyArray<Pick<OrchestrationV2ConversationMessage, "id" | "runId">>;
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "id" | "status" | "userMessageId" | "activeAttemptId">
+  >;
+  readonly providerTurns: ReadonlyArray<
+    Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "nativeTurnRef">
+  >;
+  readonly sideChatRuns: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal">>;
+  /** The message being sent now, which can't count as received yet. */
+  readonly excludeMessageId?: MessageId | undefined;
+}): RunId | null {
+  const accepted = new Set(
+    input.providerTurns.flatMap((turn) =>
+      turn.nativeTurnRef !== null && turn.runAttemptId !== null ? [turn.runAttemptId] : [],
+    ),
+  );
+  const ordinals = new Map(input.sideChatRuns.map((run) => [run.id, run.ordinal]));
+  let newest: { readonly runId: RunId; readonly ordinal: number } | null = null;
+  for (const message of input.messages) {
+    const covered = input.sent[message.id];
+    if (covered === undefined || message.id === input.excludeMessageId) continue;
+    const run = input.runs.find((candidate) => candidate.id === message.runId);
+    if (run === undefined || run.status === "rolled_back") continue;
+    const received =
+      run.userMessageId !== message.id ||
+      STARTED_STATUSES.has(run.status) ||
+      (run.activeAttemptId !== null && accepted.has(run.activeAttemptId));
+    const ordinal = ordinals.get(covered);
+    if (received && ordinal !== undefined && (newest === null || ordinal > newest.ordinal)) {
+      newest = { runId: covered, ordinal };
+    }
+  }
+  return newest?.runId ?? null;
+}
+
+/** What a thread has received of a side chat, and what the side chat finished since. */
 export const readSideChatSentState = Effect.fn("SideChat.readSentState")(function* (input: {
   readonly projectionStore: ProjectionStoreV2Shape;
   readonly sideChatId: ThreadId;
@@ -46,13 +93,22 @@ export const readSideChatSentState = Effect.fn("SideChat.readSentState")(functio
   readonly excludeMessageId?: MessageId | undefined;
 }) {
   const { projectionStore } = input;
-  const thread = yield* projectionStore.getThreadRecords(input.threadId, ["runs", "providerTurns"]);
+  const messageIds = Object.keys(input.sent) as Array<MessageId>;
+  const thread =
+    messageIds.length === 0
+      ? { messages: [], runs: [], providerTurns: [] }
+      : yield* projectionStore.getThreadRecords(
+          input.threadId,
+          ["messages", "runs", "providerTurns"],
+          { messageIds },
+        );
   const sideChat = yield* projectionStore.getThreadRecords(input.sideChatId, ["runs"]);
-  const seenRunId = sideChatSeenRunId({
-    forkedFromRunId: null,
-    catchUps: input.sent,
-    sideChatRuns: thread.runs,
+  const seenRunId = sideChatSentThrough({
+    sent: input.sent,
+    messages: thread.messages,
+    runs: thread.runs,
     providerTurns: thread.providerTurns,
+    sideChatRuns: sideChat.runs,
     excludeMessageId: input.excludeMessageId,
   });
   return { title: sideChat.thread.title, ...sideChatMainRuns(seenRunId, sideChat.runs) };

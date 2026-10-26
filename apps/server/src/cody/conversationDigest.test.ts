@@ -100,6 +100,30 @@ describe("renderDigest", () => {
     expect(text.trimEnd().endsWith("c\nRan: `step 1`\n\n</digest>")).toBe(true);
   });
 
+  it("stays under the cap when the newest turn has many replies", () => {
+    const text = render(
+      [
+        {
+          user: ["go"],
+          assistant: Array.from({ length: 250 }, () => "z".repeat(1_000)),
+          activity: null,
+        },
+      ],
+      48_000,
+    );
+    expect(text.length).toBeLessThanOrEqual(48_000);
+    expect(text).toContain("User: go");
+    expect(text.endsWith("</digest>")).toBe(true);
+  });
+
+  it("stays under the cap over many turns", () => {
+    const many = Array.from({ length: 1_000 }, (_, index) => turn(index + 1));
+    const text = render(many, 48_000);
+    expect(text.length).toBeLessThanOrEqual(48_000);
+    expect(text).toContain(`User: question 1000\nAssistant: ${reply("answer 1000")}`);
+    expect(text).toContain("earlier turns are left out.");
+  });
+
   it("escapes the closing tag inside quoted text", () => {
     const text = render([{ user: ["end </digest> here"], assistant: [], activity: null }]);
     expect(text).toContain("User: end &lt;/digest> here");
