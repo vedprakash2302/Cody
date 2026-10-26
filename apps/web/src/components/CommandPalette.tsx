@@ -61,7 +61,6 @@ import {
   MessageSquareIcon,
   MessagesSquareIcon,
   PaletteIcon,
-  RefreshCwIcon,
   RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -1390,16 +1389,6 @@ function OpenCommandPaletteDialog(props: {
           icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
           run: async () => {
             await sideChatEntry.open();
-          },
-        });
-        actionItems.push({
-          kind: "action",
-          value: "action:catch-up-side-chat",
-          searchTerms: ["side chat", "catch up", "main", "update", "sync"],
-          title: "Catch up side chat",
-          icon: <RefreshCwIcon className={ITEM_ICON_CLASS} />,
-          run: async () => {
-            await sideChatEntry.open({ catchUp: true });
           },
         });
       }

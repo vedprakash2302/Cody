@@ -368,7 +368,7 @@ describe("SideChatService", () => {
     }),
   );
 
-  it.effect("starts side chats beside open ones and replaces only the one asked", () =>
+  it.effect("starts side chats beside open ones and reopens one without closing others", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ mainRuns: [stableRun] });
       yield* Effect.gen(function* () {
@@ -390,12 +390,7 @@ describe("SideChatService", () => {
         assert.notEqual(second.threadId, first.threadId);
         assert.isTrue(isOpen(first.threadId));
 
-        const third = yield* service.open({
-          parentThreadId: MAIN,
-          fresh: true,
-          replaceThreadId: first.threadId,
-        });
-        assert.isTrue(third.created);
+        yield* service.close({ threadId: first.threadId });
         assert.isFalse(isOpen(first.threadId));
         assert.isTrue(isOpen(second.threadId));
 
@@ -404,7 +399,7 @@ describe("SideChatService", () => {
           reopenThreadId: first.threadId,
         });
         assert.deepEqual(reopened, { threadId: first.threadId, created: false });
-        assert.isTrue([first, second, third].every(({ threadId }) => isOpen(threadId)));
+        assert.isTrue([first, second].every(({ threadId }) => isOpen(threadId)));
 
         harness.shells.set(second.threadId, {
           ...harness.shells.get(second.threadId)!,

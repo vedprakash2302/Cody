@@ -218,8 +218,6 @@ const make = Effect.gen(function* () {
       // Providers without a native fork only pass a truncated summary, which is
       // too thin to ask about the thread.
       if (!(yield* supportsNativeFork(parent))) return yield* fail("provider-unsupported");
-      const replaced = openSideChats.find((shell) => shell.id === input.replaceThreadId);
-      if (replaced !== undefined) yield* closeShell(replaced);
 
       const threadId = yield* ids.allocate
         .thread({ projectId: parent.projectId })

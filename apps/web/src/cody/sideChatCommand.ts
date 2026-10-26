@@ -1,5 +1,10 @@
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
-import { CODY_NEW_SIDE_CHAT_TITLE } from "@t3tools/contracts";
+import {
+  CODY_NEW_SIDE_CHAT_TITLE,
+  type MessageId,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
+} from "@t3tools/contracts";
 
 /**
  * Whether a first message names its thread. A side chat takes a name only
@@ -16,9 +21,49 @@ export function sideChatTitleSeed(title: string, text: string): { readonly title
   const seed = deriveThreadTitleSeed({
     text: text.replace(/^>[ \t]?/gmu, ""),
     attachments: [],
-    fallbackLabels: ["Catch up with main"],
+    fallbackLabels: ["Catch up with the thread"],
   });
   return seed.length === 0 ? {} : { titleSeed: seed };
+}
+
+/** A side chat message that carried the thread's update, keyed like a dismissal. */
+export interface SideChatSentUpdate {
+  readonly key: string;
+  readonly messageId: MessageId;
+}
+
+/**
+ * Whether a sent message still carries the thread's update. Matches the
+ * server, which counts it as seen once the provider takes the turn: a run that
+ * ends before that, or is rolled back, no longer carries it.
+ */
+export function sentUpdatePending(
+  sent: SideChatSentUpdate | undefined,
+  key: string,
+  projection: {
+    readonly runs: ReadonlyArray<
+      Pick<OrchestrationV2Run, "userMessageId" | "status" | "activeAttemptId">
+    >;
+    readonly providerTurns: ReadonlyArray<
+      Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "nativeTurnRef">
+    >;
+  },
+): boolean {
+  if (sent === undefined || sent.key !== key) return false;
+  const run = projection.runs.find((candidate) => candidate.userMessageId === sent.messageId);
+  if (run === undefined) return true;
+  switch (run.status) {
+    case "rolled_back":
+      return false;
+    case "failed":
+    case "cancelled":
+    case "interrupted":
+      return projection.providerTurns.some(
+        (turn) => turn.runAttemptId === run.activeAttemptId && turn.nativeTurnRef !== null,
+      );
+    default:
+      return true;
+  }
 }
 
 /**

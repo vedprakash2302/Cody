@@ -1174,21 +1174,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (sideChatRef !== null) {
       items.push(
         {
-          id: "side-chat:bring-back",
-          label: "Bring back to main",
+          id: "side-chat:merge-back",
+          label: "Merge back",
           disabled: readThreadShell(sideChatRef)?.latestRun == null,
         },
         { id: "side-chat:keep", label: "Keep as thread" },
-        { id: "side-chat:new", label: "New side chat" },
-        { id: "side-chat:fresh", label: "Start fresh from main" },
-        { id: "side-chat:full-view", label: "Open in full view" },
+        { id: "side-chat:delete", label: "Delete", destructive: true },
       );
     }
     items.push(
       { id: "close", label: "Close", separatorBefore: sideChatRef !== null },
-      ...(sideChatRef === null
-        ? []
-        : [{ id: "side-chat:delete" as const, label: "Delete side chat", destructive: true }]),
       {
         id: "close-others",
         label: "Close others",
@@ -1226,23 +1221,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       }
-      case "side-chat:bring-back":
-        runSideChatAction("bring-back");
+      case "side-chat:merge-back":
+        runSideChatAction("merge-back");
         break;
       case "side-chat:keep":
         runSideChatAction("keep");
         break;
-      case "side-chat:fresh":
-        runSideChatAction("fresh");
-        break;
-      case "side-chat:new":
-        runSideChatAction("new");
-        break;
       case "side-chat:delete":
         runSideChatAction("delete");
-        break;
-      case "side-chat:full-view":
-        runSideChatAction("full-view");
         break;
       case "close":
         props.onCloseSurface(surface);

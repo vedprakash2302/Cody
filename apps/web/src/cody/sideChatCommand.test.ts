@@ -1,8 +1,15 @@
+import {
+  MessageId,
+  type OrchestrationV2RunStatus,
+  ProviderDriverKind,
+  RunAttemptId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   appendSideChatQuote,
   namesThreadOnSend,
+  sentUpdatePending,
   sideChatQuestionForSend,
   sideChatTitleSeed,
 } from "./sideChatCommand";
@@ -20,7 +27,9 @@ describe("side chat names", () => {
     expect(sideChatTitleSeed("New side chat", "> flaky\n\nwhy?")).toEqual({
       titleSeed: "flaky why?",
     });
-    expect(sideChatTitleSeed("New side chat", "")).toEqual({ titleSeed: "Catch up with main" });
+    expect(sideChatTitleSeed("New side chat", "")).toEqual({
+      titleSeed: "Catch up with the thread",
+    });
     expect(sideChatTitleSeed("Retry logic", "why?")).toEqual({});
   });
 });
@@ -64,5 +73,45 @@ describe("sideChatQuestionForSend", () => {
     expect(sideChatQuestionForSend({ ...send, sideChatsEnabled: false })).toBeNull();
     expect(sideChatQuestionForSend({ ...send, directAnnotation: true })).toBeNull();
     expect(sideChatQuestionForSend({ ...send, hasNonPromptContent: true })).toBeNull();
+  });
+});
+
+describe("sentUpdatePending", () => {
+  const messageId = MessageId.make("message-1");
+  const sent = { key: "run-2", messageId };
+  const attemptId = RunAttemptId.make("attempt-1");
+  const projection = (status: OrchestrationV2RunStatus, accepted = false) => ({
+    runs: [{ userMessageId: messageId, status, activeAttemptId: attemptId }],
+    providerTurns: accepted
+      ? [
+          {
+            runAttemptId: attemptId,
+            nativeTurnRef: {
+              driver: ProviderDriverKind.make("codex"),
+              nativeId: "native-1",
+              strength: "strong" as const,
+            },
+          },
+        ]
+      : [],
+  });
+
+  it("keeps the update with a message the provider takes", () => {
+    expect(sentUpdatePending(sent, "run-2", { runs: [], providerTurns: [] })).toBe(true);
+    expect(sentUpdatePending(sent, "run-2", projection("queued"))).toBe(true);
+    expect(sentUpdatePending(sent, "run-2", projection("running"))).toBe(true);
+    expect(sentUpdatePending(sent, "run-2", projection("completed"))).toBe(true);
+    expect(sentUpdatePending(sent, "run-2", projection("failed", true))).toBe(true);
+  });
+
+  it("gives the update back when the run ends before the provider takes it", () => {
+    expect(sentUpdatePending(sent, "run-2", projection("failed"))).toBe(false);
+    expect(sentUpdatePending(sent, "run-2", projection("cancelled"))).toBe(false);
+    expect(sentUpdatePending(sent, "run-2", projection("rolled_back", true))).toBe(false);
+  });
+
+  it("lets a newer thread response attach again", () => {
+    expect(sentUpdatePending(sent, "run-3", projection("running"))).toBe(false);
+    expect(sentUpdatePending(undefined, "run-2", projection("running"))).toBe(false);
   });
 });

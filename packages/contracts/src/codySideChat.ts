@@ -40,8 +40,6 @@ export const CodySideChatOpenInput = Schema.Struct({
   creationSource: Schema.optionalKey(Schema.Literals(["web", "mobile"])),
   /** Start a new side chat from the parent's latest response, even when one is open. */
   fresh: Schema.optionalKey(Schema.Boolean),
-  /** With `fresh`, close this open side chat of the parent first. */
-  replaceThreadId: Schema.optionalKey(ThreadId),
   /** Reopen this closed side chat of the parent. */
   reopenThreadId: Schema.optionalKey(ThreadId),
 });

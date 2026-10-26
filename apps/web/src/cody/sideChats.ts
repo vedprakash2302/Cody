@@ -56,7 +56,7 @@ import { useEnvironmentQuerySelector } from "../state/query";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { appendSideChatQuote, sideChatTitleSeed } from "./sideChatCommand";
+import { appendSideChatQuote, sideChatTitleSeed, type SideChatSentUpdate } from "./sideChatCommand";
 import { messageRunId } from "./messageRunId";
 
 export const codySideChats = createCodySideChatAtoms({
@@ -129,14 +129,18 @@ export const useSideChatDraftStore = create<{
   readonly drafts: Readonly<Record<string, string>>;
   /** A model picked in the side chat that its next message switches to. */
   readonly models: Readonly<Record<string, ModelSelection>>;
-  /** The parent run whose "main has moved on" notice was dismissed. */
+  /**
+   * What the user left out or dismissed: the thread's update by its newest
+   * run, or the rollback notice by `went-back:<run>`. Either returns once the
+   * key changes.
+   */
   readonly dismissedMovedOn: Readonly<Record<string, string>>;
+  /** The message that last carried the thread's update. */
+  readonly sentUpdates: Readonly<Record<string, SideChatSentUpdate>>;
   /** Keyed by `sideChatRequestKey`. */
   readonly questions: Readonly<Record<string, SideChatQuestionDraft>>;
   /** The side chat whose composer takes focus when it next renders. */
   readonly focusRequest: string | null;
-  /** Side chats whose next message carries main's update. */
-  readonly mainUpdates: Readonly<Record<string, true>>;
   /** The side chat whose tab label should turn into a name field. */
   readonly renameRequest: string | null;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
@@ -144,10 +148,10 @@ export const useSideChatDraftStore = create<{
   readonly appendQuote: (sideChatThreadId: string, selection: string) => void;
   readonly clearFocusRequest: (sideChatThreadId: string) => void;
   readonly setRenameRequest: (sideChatThreadId: string | null) => void;
-  readonly setMainUpdate: (sideChatThreadId: string, attached: boolean) => void;
   readonly setModel: (sideChatThreadId: string, model: ModelSelection | null) => void;
-  /** Undefined shows the notice again. */
-  readonly dismissMovedOn: (sideChatThreadId: string, parentRunId: string | undefined) => void;
+  /** Undefined brings the update or notice back. */
+  readonly dismissMovedOn: (sideChatThreadId: string, key: string | undefined) => void;
+  readonly setSentUpdate: (sideChatThreadId: string, sent: SideChatSentUpdate | null) => void;
   readonly updateQuestion: (
     key: string,
     change: (current: SideChatQuestionDraft | undefined) => SideChatQuestionDraft | null,
@@ -156,9 +160,9 @@ export const useSideChatDraftStore = create<{
   drafts: {},
   models: {},
   dismissedMovedOn: {},
+  sentUpdates: {},
   questions: {},
   focusRequest: null,
-  mainUpdates: {},
   renameRequest: null,
   setDraft: (sideChatThreadId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [sideChatThreadId]: text } })),
@@ -183,25 +187,20 @@ export const useSideChatDraftStore = create<{
   clearFocusRequest: (sideChatThreadId) =>
     set((state) => (state.focusRequest === sideChatThreadId ? { focusRequest: null } : state)),
   setRenameRequest: (sideChatThreadId) => set({ renameRequest: sideChatThreadId }),
-  setMainUpdate: (sideChatThreadId, attached) =>
-    set((state) => {
-      const { [sideChatThreadId]: _previous, ...rest } = state.mainUpdates;
-      return attached
-        ? { mainUpdates: { ...rest, [sideChatThreadId]: true }, focusRequest: sideChatThreadId }
-        : { mainUpdates: rest };
-    }),
   setModel: (sideChatThreadId, model) =>
     set((state) => {
       const { [sideChatThreadId]: _previous, ...rest } = state.models;
       return { models: model === null ? rest : { ...rest, [sideChatThreadId]: model } };
     }),
-  dismissMovedOn: (sideChatThreadId, parentRunId) =>
+  dismissMovedOn: (sideChatThreadId, key) =>
     set((state) => {
       const { [sideChatThreadId]: _previous, ...rest } = state.dismissedMovedOn;
-      return {
-        dismissedMovedOn:
-          parentRunId === undefined ? rest : { ...rest, [sideChatThreadId]: parentRunId },
-      };
+      return { dismissedMovedOn: key === undefined ? rest : { ...rest, [sideChatThreadId]: key } };
+    }),
+  setSentUpdate: (sideChatThreadId, sent) =>
+    set((state) => {
+      const { [sideChatThreadId]: _previous, ...rest } = state.sentUpdates;
+      return { sentUpdates: sent === null ? rest : { ...rest, [sideChatThreadId]: sent } };
     }),
   updateQuestion: (key, change) =>
     set((state) => {
@@ -239,15 +238,11 @@ export function useOpenSideChat() {
     options?: {
       /** Selected text to quote into the composer, which then takes focus. */
       readonly quote?: string;
-      /** The main message the quote came from; one the side chat hasn't seen brings main's update. */
+      /** The thread message the quote came from; one the side chat hasn't seen brings back the thread's update. */
       readonly quoteMessageId?: MessageId;
       readonly send?: string;
-      /** Attaches main's update to the side chat's composer. */
-      readonly catchUp?: boolean;
       /** Starts a new side chat from the parent's latest response. */
       readonly fresh?: boolean;
-      /** With `fresh`, closes this side chat and puts the new one in its tab. */
-      readonly replace?: ThreadId;
       /** A closed side chat of the parent to reopen. */
       readonly reopen?: ThreadId;
     },
@@ -262,9 +257,6 @@ export function useOpenSideChat() {
         input: {
           parentThreadId: parent.threadId,
           ...(options?.fresh === true ? { fresh: true } : {}),
-          ...(options?.fresh === true && options.replace !== undefined
-            ? { replaceThreadId: options.replace }
-            : {}),
           ...(options?.reopen === undefined ? {} : { reopenThreadId: options.reopen }),
         },
       });
@@ -279,10 +271,8 @@ export function useOpenSideChat() {
         return null;
       }
       sideChatRef = scopeThreadRef(parent.environmentId, result.value.threadId);
-      // A replaced side chat joins the archive's list, and a reopened one leaves it.
-      if (options?.replace !== undefined || options?.reopen !== undefined) {
-        refreshArchivedThreadsForEnvironment(parent.environmentId);
-      }
+      // A reopened side chat leaves the archive's list.
+      if (options?.reopen !== undefined) refreshArchivedThreadsForEnvironment(parent.environmentId);
       // The side chat reaches this client through the shell stream like any thread.
       if (!(await waitForThreadShell(sideChatRef))) {
         toastManager.add({
@@ -295,27 +285,15 @@ export function useOpenSideChat() {
       }
     }
     if (options?.quote !== undefined && options.quote.trim().length > 0) {
-      // Decided before the quote shows, so the question can't go without main's update.
+      // Decided before the quote shows, so the question can't go without the thread's update.
       const unseen =
         options.quoteMessageId !== undefined &&
         (await isUnseenByMain(parent, sideChatRef, options.quoteMessageId));
       const drafts = useSideChatDraftStore.getState();
       drafts.appendQuote(sideChatRef.threadId, options.quote);
-      if (unseen) drafts.setMainUpdate(sideChatRef.threadId, true);
+      if (unseen) drafts.dismissMovedOn(sideChatRef.threadId, undefined);
     }
-    if (options?.catchUp === true) void attachMainUpdate(sideChatRef);
-    const panels = useRightPanelStore.getState();
-    const replacedIndex =
-      options?.replace === undefined
-        ? -1
-        : selectThreadRightPanelState(panels.byThreadKey, parent).surfaces.findIndex(
-            (surface) => surface.id === sideChatSurfaceId(options.replace!),
-          );
-    panels.openSideChat(parent, sideChatRef.threadId);
-    if (replacedIndex >= 0) {
-      panels.closeSurface(parent, sideChatSurfaceId(options!.replace!));
-      panels.moveSurface(parent, sideChatSurfaceId(sideChatRef.threadId), replacedIndex);
-    }
+    useRightPanelStore.getState().openSideChat(parent, sideChatRef.threadId);
     const question = options?.send?.trim() ?? "";
     const sideChat = readThreadShell(sideChatRef);
     if (question.length > 0 && sideChat !== null) {
@@ -402,14 +380,7 @@ export function useSideChatEntry(input: {
   };
 }
 
-export type SideChatAction =
-  | "bring-back"
-  | "keep"
-  | "fresh"
-  | "new"
-  | "rename"
-  | "delete"
-  | "full-view";
+export type SideChatAction = "merge-back" | "keep" | "new" | "rename" | "delete" | "full-view";
 
 /** What the side chat has seen of main, and what main finished since. */
 export function useSideChatMainView(sideChatRef: ScopedThreadRef | null) {
@@ -434,33 +405,7 @@ async function loadSideChatMainView(sideChatRef: ScopedThreadRef) {
   return loaded.view;
 }
 
-/** Attaches main's update, or says why there's nothing to catch up on. */
-async function attachMainUpdate(sideChatRef: ScopedThreadRef) {
-  const view = await loadSideChatMainView(sideChatRef);
-  if (view === null) {
-    toastManager.add({
-      type: "error",
-      title: "Couldn't check main for new responses",
-      description: "Try again in a moment.",
-    });
-    return;
-  }
-  if (view.wentBack) {
-    toastManager.add({
-      type: "info",
-      title: "Main went back to an earlier response",
-      description: "Start a fresh side chat to follow main from there.",
-    });
-    return;
-  }
-  if (view.newRunIds.length === 0) {
-    toastManager.add({ type: "info", title: "The side chat is up to date with main" });
-    return;
-  }
-  useSideChatDraftStore.getState().setMainUpdate(sideChatRef.threadId, true);
-}
-
-/** Whether a main response is one the side chat hasn't seen yet. */
+/** Whether a thread response is one the side chat hasn't seen yet. */
 async function isUnseenByMain(
   parent: ScopedThreadRef,
   sideChatRef: ScopedThreadRef,
@@ -594,13 +539,13 @@ export function useSideChatActions() {
     const parentRef =
       parentThreadId === null ? null : scopeThreadRef(sideChatRef.environmentId, parentThreadId);
     switch (action) {
-      case "bring-back": {
+      case "merge-back": {
         if (parentRef === null) return;
         const projection = await loadThreadProjection(sideChatRef);
         if (projection === null) {
           toastManager.add({
             type: "error",
-            title: "Couldn't bring it back to main",
+            title: "Couldn't merge back",
             description: "The side chat didn't load. Try again in a moment.",
           });
           return;
@@ -609,7 +554,7 @@ export function useSideChatActions() {
         if (run === null) {
           toastManager.add({
             type: "info",
-            title: "Nothing to bring back yet",
+            title: "Nothing to merge back yet",
             description: "Wait until the side chat finishes a response.",
           });
           return;
@@ -622,11 +567,11 @@ export function useSideChatActions() {
             runId: run.id,
           },
         });
-        if (result._tag === "Failure") return fail("Couldn't bring it back to main", result);
+        if (result._tag === "Failure") return fail("Couldn't merge back", result);
         toastManager.add({
           type: "success",
-          title: "Brought back to main",
-          description: "Main gets a summary of this side chat with your next message.",
+          title: "Merged back",
+          description: "The thread gets a summary of this side chat with your next message.",
         });
         return;
       }
@@ -649,11 +594,6 @@ export function useSideChatActions() {
         });
         return;
       }
-      case "fresh":
-        if (parentRef !== null) {
-          await openSideChat(parentRef, { fresh: true, replace: sideChatRef.threadId });
-        }
-        return;
       case "new":
         if (parentRef !== null) await openSideChat(parentRef, { fresh: true });
         return;
