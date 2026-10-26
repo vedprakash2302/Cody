@@ -889,6 +889,8 @@ it.effect(
           ),
           Effect.provideService(SideChatStore.SideChatMembership, {
             isSideChat: (threadId) => threadId === sideChat,
+            catchUps: () => ({}),
+            recordCatchUp: () => Effect.void,
           }),
         );
         yield* server.write(0, {

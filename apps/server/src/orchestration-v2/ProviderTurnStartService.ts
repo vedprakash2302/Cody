@@ -31,7 +31,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as SideChatStore from "../cody/SideChatStore.ts";
-import { withSideChatRules } from "../cody/sideChatRules.ts";
+import { sideChatProviderText } from "../cody/sideChatProviderText.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
@@ -946,6 +946,19 @@ export const layer: Layer.Layer<
         status: "running",
         startedAt: now,
       };
+      // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
+      const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
+      const goalCommand = goalDriver && parseGoalCommand(message) !== null;
+      // Before the run shows as running, so a client refreshing on that sees the catch-up.
+      const sideChatText =
+        sideChats.isSideChat(projection.thread.id) && !goalCommand
+          ? yield* sideChatProviderText({
+              projectionStore,
+              sideChats,
+              thread: projection.thread,
+              message,
+            })
+          : null;
       const events: Array<OrchestrationV2DomainEvent> = [
         {
           id: yield* idAllocator.allocate.event({
@@ -1038,17 +1051,12 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
-      const composedText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
-      // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
-      const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
-      const goalCommand = goalDriver && parseGoalCommand(message) !== null;
       const userText =
-        sideChats.isSideChat(projection.thread.id) && !goalCommand
-          ? withSideChatRules(composedText)
-          : composedText;
+        sideChatText ??
+        projectComposerContextForProvider({
+          text: message.text,
+          records: message.context?.records ?? [],
+        });
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,

@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 
 import { EnvironmentAuthorizationError } from "./auth.ts";
-import { ThreadId } from "./baseSchemas.ts";
+import { NonNegativeInt, RunId, ThreadId } from "./baseSchemas.ts";
 
 /**
  * Cody's side chats: a fork of a thread that opens beside it instead of in the
@@ -13,6 +13,7 @@ export const CODY_SIDE_CHAT_WS_METHODS = {
   open: "cody.sideChat.open",
   close: "cody.sideChat.close",
   promote: "cody.sideChat.promote",
+  mainView: "cody.sideChat.mainView",
 } as const;
 
 /**
@@ -31,19 +32,22 @@ export function readCodyClientFeatures(value: string | null | undefined): {
   return { sideChats: features.includes(CODY_SIDE_CHAT_CLIENT_FEATURE) };
 }
 
+/** A side chat's title until its first message names it. */
+export const CODY_NEW_SIDE_CHAT_TITLE = "New side chat";
+
 export const CodySideChatOpenInput = Schema.Struct({
   parentThreadId: ThreadId,
   creationSource: Schema.optionalKey(Schema.Literals(["web", "mobile"])),
-  /** Close the parent's open side chat and start a new one from its latest response. */
+  /** Start a new side chat from the parent's latest response, even when one is open. */
   fresh: Schema.optionalKey(Schema.Boolean),
-  /** Reopen this closed side chat of the parent, closing any other open one. */
+  /** Reopen this closed side chat of the parent. */
   reopenThreadId: Schema.optionalKey(ThreadId),
 });
 export type CodySideChatOpenInput = typeof CodySideChatOpenInput.Type;
 
 export const CodySideChatOpenResult = Schema.Struct({
   threadId: ThreadId,
-  /** False when the parent already had an open side chat, which is returned instead. */
+  /** False when an open side chat of the parent was returned instead. */
   created: Schema.Boolean,
 });
 export type CodySideChatOpenResult = typeof CodySideChatOpenResult.Type;
@@ -57,6 +61,20 @@ export const CodySideChatCloseResult = Schema.Struct({
 });
 export type CodySideChatCloseResult = typeof CodySideChatCloseResult.Type;
 
+/** What a side chat has seen of its parent, and what the parent finished since. */
+export const CodySideChatMainView = Schema.Struct({
+  /** The newest parent run the side chat has seen, through its fork or a catch-up. */
+  seenRunId: Schema.NullOr(RunId),
+  /** The start of the parent's answer in that run. */
+  seenExcerpt: Schema.NullOr(Schema.String),
+  /** The parent's finished runs since then, oldest first. */
+  newRunIds: Schema.Array(RunId),
+  filesChanged: NonNegativeInt,
+  /** The parent rolled back the run the side chat last saw. */
+  wentBack: Schema.Boolean,
+});
+export type CodySideChatMainView = typeof CodySideChatMainView.Type;
+
 export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
   "CodySideChatError",
   {
@@ -69,6 +87,7 @@ export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
       "provider-unsupported",
       "store-failed",
       "dispatch-failed",
+      "read-failed",
     ]),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -89,6 +108,8 @@ export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
         return "Failed to save the side chat list.";
       case "dispatch-failed":
         return "Failed to update the side chat.";
+      case "read-failed":
+        return "Failed to read the side chat.";
     }
   }
 }
@@ -102,6 +123,12 @@ export const CodySideChatOpenRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.open, {
 export const CodySideChatCloseRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.close, {
   payload: CodySideChatThreadInput,
   success: CodySideChatCloseResult,
+  error: Schema.Union([CodySideChatError, EnvironmentAuthorizationError]),
+});
+
+export const CodySideChatMainViewRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.mainView, {
+  payload: CodySideChatThreadInput,
+  success: CodySideChatMainView,
   error: Schema.Union([CodySideChatError, EnvironmentAuthorizationError]),
 });
 

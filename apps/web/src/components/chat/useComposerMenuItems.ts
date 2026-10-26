@@ -217,7 +217,7 @@ export function useComposerMenuItems({
                 type: "slash-command",
                 command: "side",
                 label: "/side",
-                description: "Ask about this thread in a side chat",
+                description: "Ask about this thread in a new side chat",
               },
             ] as const)
           : []),

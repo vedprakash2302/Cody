@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { MessageId, RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -10,6 +10,8 @@ import * as ServerConfig from "../config.ts";
 import * as SideChatStore from "./SideChatStore.ts";
 
 const SIDE_CHAT = ThreadId.make("side-chat-store-thread");
+const MESSAGE = MessageId.make("side-chat-store-message");
+const MAIN_RUN = RunId.make("side-chat-store-main-run");
 
 const storeAt = (baseDir: string) =>
   Layer.merge(
@@ -18,7 +20,7 @@ const storeAt = (baseDir: string) =>
   ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
 describe("SideChatStore", () => {
-  it.effect("keeps side chats across a restart and forgets removed ones", () =>
+  it.effect("keeps side chats and their catch-ups across a restart, forgetting removed ones", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "cody-side-chat-store-" });
@@ -26,22 +28,28 @@ describe("SideChatStore", () => {
       yield* Effect.gen(function* () {
         const store = yield* SideChatStore.SideChatStore;
         yield* store.add(SIDE_CHAT);
+        yield* store.recordCatchUp(SIDE_CHAT, MESSAGE, MAIN_RUN);
         assert.isTrue((yield* SideChatStore.SideChatMembership).isSideChat(SIDE_CHAT));
       }).pipe(Effect.provide(storeAt(baseDir)));
 
       const afterRestart = yield* Effect.gen(function* () {
         const store = yield* SideChatStore.SideChatStore;
         const listed = store.has(SIDE_CHAT);
+        const catchUps = store.catchUps(SIDE_CHAT);
         yield* store.remove(SIDE_CHAT);
-        return listed;
+        return { listed, catchUps };
       }).pipe(Effect.provide(storeAt(baseDir)));
-      assert.isTrue(afterRestart);
+      assert.isTrue(afterRestart.listed);
+      assert.deepEqual(afterRestart.catchUps, { [MESSAGE]: MAIN_RUN });
 
       const afterRemoval = yield* SideChatStore.SideChatStore.pipe(
-        Effect.map((store) => store.has(SIDE_CHAT)),
+        Effect.map((store) => ({
+          listed: store.has(SIDE_CHAT),
+          catchUps: store.catchUps(SIDE_CHAT),
+        })),
         Effect.provide(storeAt(baseDir)),
       );
-      assert.isFalse(afterRemoval);
+      assert.deepEqual(afterRemoval, { listed: false, catchUps: {} });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

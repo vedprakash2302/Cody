@@ -222,6 +222,7 @@ const RPC_AGGREGATES = {
   [CODY_SIDE_CHAT_WS_METHODS.open]: "codySideChat",
   [CODY_SIDE_CHAT_WS_METHODS.close]: "codySideChat",
   [CODY_SIDE_CHAT_WS_METHODS.promote]: "codySideChat",
+  [CODY_SIDE_CHAT_WS_METHODS.mainView]: "codySideChat",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

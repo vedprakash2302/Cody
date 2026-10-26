@@ -132,6 +132,8 @@ export function useSideChatRequests(
       .updateQuestion(sideChatRequestKey(sideRef.threadId, requestId), () => null);
 
   return {
+    /** Whether the requests below are known; before that, none show as pending. */
+    loaded: requests !== null,
     pendingApprovals,
     pendingUserInputs,
     activeApproval,

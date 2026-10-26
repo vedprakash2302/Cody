@@ -1376,16 +1376,28 @@ function OpenCommandPaletteDialog(props: {
     if (sideChatEntry.enabled) {
       actionItems.push({
         kind: "action",
-        value: "action:open-side-chat",
-        searchTerms: ["side chat", "side", "btw", "ask", "question"],
-        title: "Open side chat",
-        disabled: !sideChatEntry.available,
+        value: "action:new-side-chat",
+        searchTerms: ["side chat", "side", "btw", "ask", "question", "new"],
+        title: "New side chat",
+        disabled: !sideChatEntry.canStartNew,
         icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
         shortcutCommand: "thread.sideChat",
         run: async () => {
-          await sideChatEntry.open();
+          await sideChatEntry.startNew();
         },
       });
+      if (sideChatEntry.hasOpenSideChat) {
+        actionItems.push({
+          kind: "action",
+          value: "action:open-side-chat",
+          searchTerms: ["side chat", "side", "btw", "ask", "question"],
+          title: "Open side chat",
+          icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
+          run: async () => {
+            await sideChatEntry.open();
+          },
+        });
+      }
     }
   }
 

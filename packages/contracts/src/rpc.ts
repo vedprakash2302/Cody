@@ -30,6 +30,7 @@ import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodySideChatCloseRpc,
+  CodySideChatMainViewRpc,
   CodySideChatOpenRpc,
   CodySideChatPromoteRpc,
 } from "./codySideChat.ts";
@@ -2126,4 +2127,5 @@ export const WsRpcGroup = RpcGroup.make(
   CodySideChatOpenRpc,
   CodySideChatCloseRpc,
   CodySideChatPromoteRpc,
+  CodySideChatMainViewRpc,
 ).middleware(RpcScopeAuthorization);

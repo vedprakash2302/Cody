@@ -83,9 +83,12 @@
   "apps/server/src/cody/SideChatService.test.ts",
   "apps/server/src/cody/SideChatStore.test.ts",
   "apps/server/src/cody/sideChatVisibility.test.ts",
+  "apps/server/src/cody/sideChatMainUpdate.test.ts",
+  "apps/server/src/cody/sideChatProviderText.test.ts",
   "apps/server/src/ws.test.ts",
   "packages/client-runtime/src/state/codySideChats.test.ts",
   "packages/client-runtime/src/connection/resolver.test.ts",
   "apps/web/src/cody/sideChatCommand.test.ts",
-  "apps/web/src/cody/sideChatNotifications.test.ts"
+  "apps/web/src/cody/sideChatNotifications.test.ts",
+  "apps/web/src/cody/messageRunId.test.ts"
 ]

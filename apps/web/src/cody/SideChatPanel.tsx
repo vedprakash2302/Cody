@@ -4,7 +4,6 @@ import {
   scopeThreadRef,
   scopeProjectRef,
 } from "@t3tools/client-runtime/environment";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -19,27 +18,26 @@ import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-
 import {
   AuthOrchestrationOperateScope,
   ThreadId,
-  type OrchestrationV2ConversationMessage,
   type RunId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowUpRightIcon,
-  CornerUpLeftIcon,
   GitBranchIcon,
-  Maximize2Icon,
   MoreHorizontalIcon,
-  RotateCcwIcon,
-  XIcon,
+  PencilIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { ThreadVisitWatermark } from "../components/chat/ThreadVisitWatermark";
 import { MessagesTimeline } from "../components/chat/MessagesTimeline";
+import { PullRequestGlyph } from "../components/pullRequest/pullRequestIcons";
 import { Button } from "../components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../components/ui/menu";
 import { toastManager } from "../components/ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useEnvironmentSettings } from "../hooks/useSettings";
@@ -63,38 +61,29 @@ import { useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { SideChatComposer } from "./SideChatComposer";
-import { useSideChatActions, useSideChatDraftStore, useSideChatOwnTurnItems } from "./sideChats";
+import {
+  SideChatComposer,
+  type SideChatMainUpdate,
+  type SideChatWentBack,
+} from "./SideChatComposer";
+import { sentUpdatePending } from "./sideChatCommand";
+import {
+  useSideChatActions,
+  useSideChatDraftStore,
+  useSideChatMainView,
+  useSideChatOwnTurnItems,
+} from "./sideChats";
 import { useSideChatRequests } from "./useSideChatRequests";
 
 const NO_MESSAGES: never[] = [];
 const noop = () => {};
-const EXCERPT_LENGTH = 80;
-
-/** Main's answer at the fork point, as one plain line. */
-function forkPointExcerpt(
-  messages: ReadonlyArray<OrchestrationV2ConversationMessage> | undefined,
-  runId: RunId | null,
-): string | null {
-  if (messages === undefined || runId === null) return null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant" || message.runId !== runId) continue;
-    const line = message.text
-      .replace(/[`*_#>]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (line.length === 0) return null;
-    return line.length > EXCERPT_LENGTH ? `${line.slice(0, EXCERPT_LENGTH).trimEnd()}…` : line;
-  }
-  return null;
-}
-
 /**
  * A side chat of `parentRef`, beside it in the right panel. It shows only the
  * side chat's own messages: the history it copied from the parent is in the
  * model's context, not repeated here.
  */
+const NO_RUNS = { runs: [], providerTurns: [] };
+
 export function SideChatPanel(props: {
   readonly parentRef: ScopedThreadRef;
   readonly sideChatThreadId: string;
@@ -114,12 +103,8 @@ export function SideChatPanel(props: {
     shellExists: shell !== null,
     waitForShell: true,
   });
-  const parentDetailRef = resolveThreadDetailRef(parentRef, {
-    shellExists: parentShell !== null,
-    waitForShell: true,
-  });
   const projection = useThreadProjection(detailRef)?.projection ?? null;
-  const parentProjection = useThreadProjection(parentDetailRef)?.projection ?? null;
+  const mainView = useSideChatMainView(shell?.source.codySideChat === true ? sideRef : null);
   const turnDiffSummaries = useThreadCheckpointSummaries(detailRef);
   const ownItems = useSideChatOwnTurnItems(detailRef);
   const timelineEntries = useIncrementalTimelineEntries(threadKey, {
@@ -135,7 +120,15 @@ export function SideChatPanel(props: {
   const { resolvedTheme } = useTheme();
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const listRef = useRef<LegendListRef | null>(null);
+  // A menu returns focus to its trigger on close, which would end the tab rename it started.
+  const renamePicked = useRef(false);
+  const keepFocus = () => {
+    const picked = renamePicked.current;
+    renamePicked.current = false;
+    return !picked;
+  };
   const [liveFollow, setLiveFollow] = useState(true);
+  const sentUpdate = useSideChatDraftStore((state) => state.sentUpdates[props.sideChatThreadId]);
   const dismissedMovedOn = useSideChatDraftStore(
     (state) => state.dismissedMovedOn[props.sideChatThreadId],
   );
@@ -211,16 +204,34 @@ export function SideChatPanel(props: {
     );
   }
 
-  const forkedFromRunId = shell.forkedFrom?.type === "run" ? shell.forkedFrom.runId : null;
-  const excerpt = forkPointExcerpt(parentProjection?.messages, forkedFromRunId);
-  const parentWorking = parentShell !== null && threadRuntimeIsActive(parentShell.runtime);
-  const parentLatestRunId =
-    parentShell?.latestRun?.completedAt != null ? parentShell.latestRun.runId : null;
-  const parentMovedOn =
-    !parentWorking &&
-    parentLatestRunId !== null &&
-    parentLatestRunId !== forkedFromRunId &&
-    dismissedMovedOn !== parentLatestRunId;
+  const excerpt = mainView?.seenExcerpt ?? null;
+  const latestNewRunId = mainView?.newRunIds.at(-1) ?? null;
+  // Keyed by the thread's newest response, so a left-out update returns with the next one.
+  const mainUpdate: SideChatMainUpdate | null =
+    mainView === null ||
+    mainView.wentBack ||
+    latestNewRunId === null ||
+    dismissedMovedOn === latestNewRunId ||
+    sentUpdatePending(sentUpdate, latestNewRunId, projection ?? NO_RUNS)
+      ? null
+      : {
+          key: latestNewRunId,
+          responses: mainView.newRunIds.length,
+          files: mainView.filesChanged,
+        };
+  // A rollback has its own key: it can undo the very response a catch-up covered.
+  const wentBackKey =
+    mainView?.wentBack && mainView.seenRunId !== null ? `went-back:${mainView.seenRunId}` : null;
+  const wentBack: SideChatWentBack | null =
+    wentBackKey === null || dismissedMovedOn === wentBackKey
+      ? null
+      : {
+          onNewSideChat: () => void runAction("new", sideRef),
+          onDismiss: () =>
+            useSideChatDraftStore.getState().dismissMovedOn(props.sideChatThreadId, wentBackKey),
+        };
+  const canMergeBack =
+    canOperate && projection !== null && resolveLatestMergeBackRun(projection) !== null;
 
   return (
     <FileMetadataThreadProvider threadRef={sideRef} cwd={cwd} checkpoints={projection?.checkpoints}>
@@ -230,51 +241,75 @@ export function SideChatPanel(props: {
         data-cody-side-chat
         data-composer-shortcut-scope={threadKey}
       >
-        <div className="flex h-8 shrink-0 items-center gap-1.5 border-b ps-3 pe-1.5 text-muted-foreground text-xs">
-          <GitBranchIcon className="size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 flex-1 truncate">
-            {excerpt === null ? (
-              "Sees main up to its last finished response"
-            ) : (
-              <>
-                Sees main up to <span className="text-foreground/80">“{excerpt}”</span>
-              </>
-            )}
-          </span>
+        <div className="flex h-8 shrink-0 items-center gap-1 border-b ps-3 pe-1.5 text-muted-foreground text-xs">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <GitBranchIcon className="size-3.5 shrink-0" aria-hidden />
+                  <span className="min-w-0 truncate">
+                    {excerpt === null ? (
+                      "Up to the thread's last finished response"
+                    ) : (
+                      <>
+                        Up to <span className="text-foreground/80">“{excerpt}”</span>
+                      </>
+                    )}
+                  </span>
+                </span>
+              }
+            />
+            <TooltipPopup>This side chat knows the thread up to this response.</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Merge back to the thread"
+                  disabled={!canMergeBack}
+                  onClick={() => void runAction("merge-back", sideRef)}
+                />
+              }
+            >
+              <PullRequestGlyph.merged className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {canMergeBack
+                ? "Merge this side chat back into the thread"
+                : "Merge back after the side chat finishes a response"}
+            </TooltipPopup>
+          </Tooltip>
           <Menu>
             <MenuTrigger
               render={<Button size="icon-xs" variant="ghost" aria-label="Side chat actions" />}
             >
               <MoreHorizontalIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup align="end" className="min-w-56">
+            <MenuPopup align="end" className="min-w-44" finalFocus={keepFocus}>
               <MenuItem
-                disabled={
-                  !canOperate ||
-                  projection === null ||
-                  resolveLatestMergeBackRun(projection) === null
-                }
-                onClick={() => void runAction("bring-back", sideRef)}
+                disabled={!canOperate}
+                onClick={() => {
+                  renamePicked.current = true;
+                  void runAction("rename", sideRef);
+                }}
               >
-                <CornerUpLeftIcon className="size-3.5" />
-                Bring back to main
+                <PencilIcon className="size-3.5" />
+                Rename
               </MenuItem>
               <MenuItem disabled={!canOperate} onClick={() => void runAction("keep", sideRef)}>
                 <ArrowUpRightIcon className="size-3.5" />
                 Keep as thread
               </MenuItem>
-              <MenuItem disabled={!canOperate} onClick={() => void runAction("fresh", sideRef)}>
-                <RotateCcwIcon className="size-3.5" />
-                Start fresh from main
-              </MenuItem>
-              <MenuItem onClick={() => void runAction("full-view", sideRef)}>
-                <Maximize2Icon className="size-3.5" />
-                Open in full view
-              </MenuItem>
               <MenuSeparator />
-              <MenuItem onClick={props.onClose}>
-                <XIcon className="size-3.5" />
-                Close side chat
+              <MenuItem
+                variant="destructive"
+                disabled={!canOperate}
+                onClick={() => void runAction("delete", sideRef)}
+              >
+                <Trash2Icon className="size-3.5" />
+                Delete
               </MenuItem>
             </MenuPopup>
           </Menu>
@@ -283,7 +318,7 @@ export function SideChatPanel(props: {
         <div className="relative flex min-h-0 flex-1 flex-col">
           {ownItems.length === 0 ? (
             <div className="flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
-              Ask about this thread while main keeps working.
+              Ask about this thread while it keeps working.
             </div>
           ) : (
             <MessagesTimeline
@@ -346,17 +381,8 @@ export function SideChatPanel(props: {
             isWorking={isWorking}
             canInterrupt={canInterrupt}
             cwd={cwd}
-            movedOnNotice={
-              parentMovedOn && parentLatestRunId !== null
-                ? {
-                    onStartFresh: () => void runAction("fresh", sideRef),
-                    onDismiss: () =>
-                      useSideChatDraftStore
-                        .getState()
-                        .dismissMovedOn(props.sideChatThreadId, parentLatestRunId),
-                  }
-                : null
-            }
+            mainUpdate={mainUpdate}
+            wentBack={wentBack}
           />
         </div>
       </div>

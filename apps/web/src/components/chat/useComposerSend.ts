@@ -58,6 +58,7 @@ import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
 } from "../../composer-logic";
+import { namesThreadOnSend } from "../../cody/sideChatCommand";
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { type ChatMessage } from "../../types";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -1284,7 +1285,7 @@ export function useComposerSend(input: ComposerSendInput) {
             }),
           },
           modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
+          ...(namesThreadOnSend(activeThread) ? { titleSeed: title } : {}),
           runtimeMode,
           interactionMode: sendInteractionMode,
           dispatchMode: turnDispatchMode,
