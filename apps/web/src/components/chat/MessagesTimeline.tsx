@@ -192,6 +192,7 @@ interface MessagesTimelineProps {
   /** Cody: quotes selected assistant text into the thread's side chat. */
   onAskInSideChat?: ((text: string, messageId: MessageId) => void) | undefined;
   askInSideChatDisabledReason?: string | undefined;
+  citeLabel?: string | undefined;
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnInProgress: boolean;
@@ -300,6 +301,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onCiteAssistantText,
   onAskInSideChat,
   askInSideChatDisabledReason,
+  citeLabel,
   isWorking,
   runlessWorkActive = false,
   activeTurnInProgress,
@@ -1257,6 +1259,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 onCite={onCiteAssistantText}
                 onAskInSideChat={onAskInSideChat}
                 askInSideChatDisabledReason={askInSideChatDisabledReason}
+                citeLabel={citeLabel}
               />
             ) : null}
             <LegendList<MessagesTimelineRow>

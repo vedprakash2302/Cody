@@ -13,9 +13,9 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { selectEnvironmentQueryData } from "@t3tools/client-runtime/state/runtime";
-import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { ThreadId } from "@t3tools/contracts";
 import type {
+  AssistantCitation,
   CodySideChatMainView,
   EnvironmentId,
   MessageId,
@@ -32,9 +32,13 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { create } from "zustand";
 
 import { toastManager } from "../components/ui/toast";
+import { formatAssistantCitationForComposer } from "../composer-logic";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { getClientSettings } from "../hooks/useSettings";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
+import { threadContextRecord } from "../lib/composerContextRecords";
+import { dispatchSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { newMessageId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import type { PendingUserInputDraftAnswer } from "../pendingUserInput";
@@ -380,7 +384,7 @@ export function useSideChatEntry(input: {
   };
 }
 
-export type SideChatAction = "merge-back" | "keep" | "new" | "rename" | "delete" | "full-view";
+export type SideChatAction = "attach" | "keep" | "new" | "rename" | "delete" | "full-view";
 
 /** What the side chat has seen of main, and what main finished since. */
 export function useSideChatMainView(sideChatRef: ScopedThreadRef | null) {
@@ -388,6 +392,27 @@ export function useSideChatMainView(sideChatRef: ScopedThreadRef | null) {
     sideChatRef === null ? null : codySideChats.mainViewAtom(sideChatRef),
     selectEnvironmentQueryData,
   );
+}
+
+/**
+ * Whether the side chat has finished responses its thread hasn't been sent.
+ * An older server doesn't say, so any finished response counts.
+ */
+export function sideChatHasUnsent(
+  view: CodySideChatMainView | null,
+  shell: Pick<EnvironmentThreadShell, "latestRun"> | null,
+): boolean {
+  return view?.unsentToThread === undefined
+    ? shell?.latestRun?.status === "completed"
+    : view.unsentToThread > 0;
+}
+
+/** `sideChatHasUnsent` for code outside React, such as a context menu. */
+export function readSideChatHasUnsent(sideChatRef: ScopedThreadRef): boolean {
+  const view = selectEnvironmentQueryData(
+    appAtomRegistry.get(codySideChats.mainViewAtom(sideChatRef)),
+  );
+  return sideChatHasUnsent(view, readThreadShell(sideChatRef));
 }
 
 async function loadSideChatMainView(sideChatRef: ScopedThreadRef) {
@@ -513,13 +538,25 @@ export function useDeleteSideChats() {
   };
 }
 
+/** Quotes selected side chat text into its thread's composer. */
+export function citeInThread(threadRef: ScopedThreadRef, citation: AssistantCitation): boolean {
+  const store = useComposerDraftStore.getState();
+  const prompt = store.getComposerDraft(threadRef)?.prompt ?? "";
+  const separator = prompt.length === 0 || /\s$/.test(prompt) ? "" : " ";
+  store.setPrompt(
+    threadRef,
+    `${prompt}${separator}${formatAssistantCitationForComposer(citation)}`,
+  );
+  dispatchSnapShotComposerFocus();
+  return true;
+}
+
 /**
  * The side chat actions the tab's context menu and the panel's menu share.
  * Closing is the panel's own close, which archives the side chat.
  */
 export function useSideChatActions() {
   const navigate = useNavigate();
-  const mergeBack = useOrchestrationCommand(threadEnvironment.mergeBack, { reportFailure: false });
   const promote = useOrchestrationCommand(codySideChats.promote, { reportFailure: false });
   const openSideChat = useOpenSideChat();
   const deleteSideChats = useDeleteSideChats();
@@ -539,40 +576,16 @@ export function useSideChatActions() {
     const parentRef =
       parentThreadId === null ? null : scopeThreadRef(sideChatRef.environmentId, parentThreadId);
     switch (action) {
-      case "merge-back": {
-        if (parentRef === null) return;
-        const projection = await loadThreadProjection(sideChatRef);
-        if (projection === null) {
-          toastManager.add({
-            type: "error",
-            title: "Couldn't merge back",
-            description: "The side chat didn't load. Try again in a moment.",
-          });
-          return;
-        }
-        const run = resolveLatestMergeBackRun(projection);
-        if (run === null) {
-          toastManager.add({
-            type: "info",
-            title: "Nothing to merge back yet",
-            description: "Wait until the side chat finishes a response.",
-          });
-          return;
-        }
-        const result = await mergeBack({
-          environmentId: sideChatRef.environmentId,
-          input: {
-            sourceThreadId: sideChatRef.threadId,
-            targetThreadId: parentRef.threadId,
-            runId: run.id,
-          },
-        });
-        if (result._tag === "Failure") return fail("Couldn't merge back", result);
-        toastManager.add({
-          type: "success",
-          title: "Merged back",
-          description: "The thread gets a summary of this side chat with your next message.",
-        });
+      case "attach": {
+        if (parentRef === null || sideChat === null) return;
+        const unsent = selectEnvironmentQueryData(
+          appAtomRegistry.get(codySideChats.mainViewAtom(sideChatRef)),
+        )?.unsentToThread;
+        const label = unsent ? `${sideChat.title} · ${unsent} new` : sideChat.title;
+        useComposerDraftStore
+          .getState()
+          .addThreadContexts(parentRef, [threadContextRecord(sideChatRef, label)]);
+        dispatchSnapShotComposerFocus();
         return;
       }
       case "keep": {

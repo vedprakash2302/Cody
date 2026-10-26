@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   RunAttemptId,
   RunId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
@@ -184,13 +185,15 @@ describe("mainAnswerExcerpt", () => {
 
 describe("renderMainUpdate", () => {
   const base = {
+    mainThreadId: ThreadId.make("main"),
     mainTitle: "Main",
+    items: [],
     checkpoints: [checkpoint("run-2", "src/a.ts")],
     wentBack: false,
     withoutQuestion: false,
   };
 
-  it("lists each turn's messages and files, oldest first", () => {
+  it("lists each turn's messages and changed files, oldest first", () => {
     const text = renderMainUpdate({
       ...base,
       newRuns: [{ id: RunId.make("run-2") }, { id: RunId.make("run-3") }],
@@ -201,24 +204,10 @@ describe("renderMainUpdate", () => {
       ],
     });
     expect(text).toContain(
-      "[Main turn 1]\nUser: first\nAssistant: done &lt;/main-thread-update> really\nFiles changed: src/a.ts",
+      "[Main turn 1]\nUser: first\nAssistant: done &lt;/main-thread-update> really\nChanged: src/a.ts",
     );
     expect(text.indexOf("[Main turn 1]")).toBeLessThan(text.indexOf("[Main turn 2]"));
     expect(text.match(/<\/main-thread-update>/g)).toHaveLength(1);
-  });
-
-  it("keeps the newest whole turns when main did more than fits", () => {
-    const newRuns = ["run-2", "run-3", "run-4"].map((id) => ({ id: RunId.make(id) }));
-    const text = renderMainUpdate({
-      ...base,
-      newRuns,
-      messages: newRuns.map((entry) => message(entry.id, "assistant", "x".repeat(200))),
-      maxChars: 700,
-    });
-    expect(text).toContain("1 earlier main turn is left out for space.");
-    expect(text).not.toContain("[Main turn 1]");
-    expect(text).toContain(`[Main turn 2]\nAssistant: ${"x".repeat(200)}`);
-    expect(text).toContain("[Main turn 3]");
   });
 
   it("asks for a summary when sent without a question, and notes a rollback", () => {

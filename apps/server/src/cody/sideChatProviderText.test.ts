@@ -5,6 +5,7 @@ import {
   type OrchestrationV2Checkpoint,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2Run,
+  type OrchestrationV2TurnItem,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -21,7 +22,7 @@ import type {
   ProjectionRecordFilter,
   ProjectionStoreV2Shape,
 } from "../orchestration-v2/ProjectionStore.ts";
-import { sideChatProviderText } from "./sideChatProviderText.ts";
+import { codyProviderText, sideChatProviderText } from "./sideChatProviderText.ts";
 import { SIDE_CHAT_RULES } from "./sideChatRules.ts";
 
 const MAIN = ThreadId.make("provider-text-main");
@@ -46,6 +47,8 @@ const mainRun = (ordinal: number, status: OrchestrationV2Run["status"]) =>
     ordinal,
     status,
     completedAt: status === "running" ? null : at(ordinal * 10 + 5),
+    userMessageId: MessageId.make(`main-message-${ordinal}`),
+    activeAttemptId: RunAttemptId.make(`main-attempt-${ordinal}`),
   }) as OrchestrationV2Run;
 
 const message = (
@@ -85,11 +88,29 @@ const checkpoints = [
 
 const sideRun = (ordinal: number, status: OrchestrationV2Run["status"]) =>
   ({
+    id: RunId.make(`side-run-${ordinal}`),
     ordinal,
     status,
+    completedAt: status === "running" ? null : at(ordinal * 10 + 5),
     userMessageId: MessageId.make(`s${ordinal}`),
     activeAttemptId: RunAttemptId.make(`side-attempt-${ordinal}`),
   }) as OrchestrationV2Run;
+
+const sideMessages = [
+  message("sm1", "user", "is retry safe?", RunId.make("side-run-1")),
+  message("sm2", "assistant", "Yes, the call is idempotent.", RunId.make("side-run-1")),
+  message("sm3", "user", "what about timeouts?", RunId.make("side-run-2")),
+  message("sm4", "assistant", "Raise them to 30s.", RunId.make("side-run-2")),
+];
+const sideItems = [
+  {
+    type: "command_execution",
+    runId: RunId.make("side-run-2"),
+    input: "rg timeout src",
+    output: "SECRET OUTPUT",
+  },
+  { type: "file_change", runId: RunId.make("side-run-2"), fileName: "src/retry.ts" },
+] as unknown as ReadonlyArray<OrchestrationV2TurnItem>;
 
 const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
   ({
@@ -99,11 +120,15 @@ const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
       filter?: ProjectionRecordFilter,
     ) =>
       Effect.succeed({
-        thread: { id: threadId, title: threadId === MAIN ? "Fix login" : "Side chat" },
-        messages: (threadId === MAIN ? mainMessages : []).filter(
+        thread: { id: threadId, title: threadId === MAIN ? "Fix login" : "Retry logic" },
+        messages: (threadId === MAIN ? mainMessages : sideMessages).filter(
           (entry) =>
             filter?.messageRunIds === undefined ||
             (entry.runId !== null && filter.messageRunIds.includes(entry.runId)),
+        ),
+        turnItems: (threadId === MAIN ? [] : sideItems).filter(
+          (item) =>
+            filter?.turnItemRunIds === undefined || filter.turnItemRunIds.includes(item.runId),
         ),
         runs: threadId === MAIN ? mainRuns : sideChatRuns,
         providerTurns: [],
@@ -111,15 +136,23 @@ const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
       }),
   }) as unknown as ProjectionStoreV2Shape;
 
-const makeSideChats = (catchUps: Record<string, RunId> = {}) => {
+const makeSideChats = (
+  catchUps: Record<string, RunId> = {},
+  sentToThread: Record<string, RunId> = {},
+) => {
   const recorded: Array<[MessageId, RunId]> = [];
+  const recordedSent: Array<[ThreadId, MessageId, RunId]> = [];
   return {
     recorded,
+    recordedSent,
     sideChats: {
-      isSideChat: () => true,
+      isSideChat: (threadId: ThreadId) => threadId === SIDE_CHAT,
       catchUps: () => catchUps as Record<MessageId, RunId>,
       recordCatchUp: (_threadId: ThreadId, messageId: MessageId, runId: RunId) =>
         Effect.sync(() => void recorded.push([messageId, runId])),
+      sentToThread: () => sentToThread as Record<MessageId, RunId>,
+      recordSentToThread: (sideChatId: ThreadId, messageId: MessageId, runId: RunId) =>
+        Effect.sync(() => void recordedSent.push([sideChatId, messageId, runId])),
     },
   };
 };
@@ -155,7 +188,7 @@ describe("sideChatProviderText", () => {
         message: message("s1", "user", `${chip} is the fix safe?`, null, withChip),
       });
       assert.include(text, "[Main turn 1]\nUser: add tests\nAssistant: Added tests.");
-      assert.include(text, "Files changed: src/login.ts");
+      assert.include(text, "Changed: src/login.ts");
       assert.notInclude(text, "User: start");
       assert.notInclude(text, "t3-context:");
       assert.isTrue(text.endsWith("</main-thread-update>\n\nis the fix safe?"));
@@ -189,6 +222,91 @@ describe("sideChatProviderText", () => {
       });
       assert.include(text, "User: add tests");
       assert.include(text, "User: fix the bug");
+    }),
+  );
+});
+
+describe("codyProviderText for a thread message", () => {
+  const sideChatRecord: ThreadContextRecord = {
+    version: 1,
+    kind: "thread",
+    contextId: toKindScopedComposerContextId("thread", SIDE_CHAT),
+    label: "Retry logic",
+    environmentId: EnvironmentId.make("env"),
+    threadId: SIDE_CHAT,
+    title: "Retry logic",
+  };
+  const sideChatChip = formatComposerContextReference(sideChatRecord);
+  const attached = { version: 1 as const, records: [sideChatRecord] };
+  const mainThread = {
+    id: MAIN,
+    lineage: { parentThreadId: null },
+    forkedFrom: null,
+  } as unknown as Parameters<typeof codyProviderText>[0]["thread"];
+  const sideChatRuns = [sideRun(1, "completed"), sideRun(2, "completed")];
+
+  it.effect("leaves a message without an attached side chat to upstream", () =>
+    Effect.gen(function* () {
+      const { sideChats } = makeSideChats();
+      const unlinked = yield* codyProviderText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        thread: mainThread,
+        message: message("main-message-4", "user", "ship it", null, attached),
+      });
+      assert.isNull(unlinked);
+    }),
+  );
+
+  it.effect("puts the side chat's turns ahead of the message, without command output", () =>
+    Effect.gen(function* () {
+      const { sideChats, recordedSent } = makeSideChats();
+      const text = yield* codyProviderText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        thread: mainThread,
+        message: message("main-message-4", "user", `${sideChatChip} ship it`, null, attached),
+      });
+      assert.include(text, 'The user attached their side chat "Retry logic"');
+      assert.include(
+        text,
+        "[Side chat turn 1]\nUser: is retry safe?\nAssistant: Yes, the call is idempotent.",
+      );
+      assert.include(text, "Ran: `rg timeout src` · Changed: src/retry.ts");
+      assert.notInclude(text, "SECRET OUTPUT");
+      assert.include(text, `t3_thread_read (threadId "${SIDE_CHAT}")`);
+      assert.isTrue(text?.endsWith("</side-chat-context>\n\nship it"));
+      assert.deepEqual(recordedSent, [
+        [SIDE_CHAT, MessageId.make("main-message-4"), RunId.make("side-run-2")],
+      ]);
+    }),
+  );
+
+  it.effect("sends only what the side chat said since the thread last received it", () =>
+    Effect.gen(function* () {
+      const { sideChats } = makeSideChats({}, { "main-message-2": RunId.make("side-run-1") });
+      const text = yield* codyProviderText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        thread: mainThread,
+        message: message("main-message-4", "user", sideChatChip, null, attached),
+      });
+      assert.notInclude(text, "is retry safe?");
+      assert.include(text, "[Side chat turn 1]\nUser: what about timeouts?");
+      assert.include(text, "Briefly say what from the side chat matters for this thread.");
+    }),
+  );
+
+  it.effect("resends turns whose thread message was never delivered", () =>
+    Effect.gen(function* () {
+      const { sideChats } = makeSideChats({}, { "main-message-9": RunId.make("side-run-2") });
+      const text = yield* codyProviderText({
+        projectionStore: makeStore(sideChatRuns),
+        sideChats,
+        thread: mainThread,
+        message: message("main-message-5", "user", sideChatChip, null, attached),
+      });
+      assert.include(text, "is retry safe?");
     }),
   );
 });

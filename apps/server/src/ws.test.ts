@@ -891,6 +891,8 @@ it.effect(
             isSideChat: (threadId) => threadId === sideChat,
             catchUps: () => ({}),
             recordCatchUp: () => Effect.void,
+            sentToThread: () => ({}),
+            recordSentToThread: () => Effect.void,
           }),
         );
         yield* server.write(0, {

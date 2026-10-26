@@ -2,9 +2,14 @@ import { ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { readThreadShell, useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
 import { SideChatTabStatusDot } from "../cody/SideChatTabStatusDot";
-import { type SideChatAction, useSideChatDraftStore, useSideChatTabTitle } from "../cody/sideChats";
+import {
+  readSideChatHasUnsent,
+  type SideChatAction,
+  useSideChatDraftStore,
+  useSideChatTabTitle,
+} from "../cody/sideChats";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
@@ -1172,9 +1177,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (sideChatRef !== null) {
       items.push(
         {
-          id: "side-chat:merge-back",
-          label: "Merge back",
-          disabled: readThreadShell(sideChatRef)?.latestRun == null,
+          id: "side-chat:attach",
+          label: "Attach to thread",
+          disabled: !readSideChatHasUnsent(sideChatRef),
         },
         { id: "side-chat:keep", label: "Keep as thread" },
         { id: "side-chat:delete", label: "Delete", destructive: true },
@@ -1219,8 +1224,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       }
-      case "side-chat:merge-back":
-        runSideChatAction("merge-back");
+      case "side-chat:attach":
+        runSideChatAction("attach");
         break;
       case "side-chat:keep":
         runSideChatAction("keep");
