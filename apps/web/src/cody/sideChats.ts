@@ -47,6 +47,7 @@ import {
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { appendSideChatQuote } from "./sideChatCommand";
 
 export const codySideChats = createCodySideChatAtoms({
   runtime: connectionAtomRuntime,
@@ -109,8 +110,12 @@ export const useSideChatDraftStore = create<{
   readonly dismissedMovedOn: Readonly<Record<string, string>>;
   /** Keyed by `sideChatRequestKey`. */
   readonly questions: Readonly<Record<string, SideChatQuestionDraft>>;
+  /** The side chat whose composer takes focus when it next renders. */
+  readonly focusRequest: string | null;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
   readonly appendDraft: (sideChatThreadId: string, text: string) => void;
+  readonly appendQuote: (sideChatThreadId: string, selection: string) => void;
+  readonly clearFocusRequest: (sideChatThreadId: string) => void;
   readonly setModel: (sideChatThreadId: string, model: ModelSelection | null) => void;
   readonly dismissMovedOn: (sideChatThreadId: string, parentRunId: string) => void;
   readonly updateQuestion: (
@@ -122,6 +127,7 @@ export const useSideChatDraftStore = create<{
   models: {},
   dismissedMovedOn: {},
   questions: {},
+  focusRequest: null,
   setDraft: (sideChatThreadId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [sideChatThreadId]: text } })),
   appendDraft: (sideChatThreadId, text) =>
@@ -134,6 +140,16 @@ export const useSideChatDraftStore = create<{
         },
       };
     }),
+  appendQuote: (sideChatThreadId, selection) =>
+    set((state) => ({
+      drafts: {
+        ...state.drafts,
+        [sideChatThreadId]: appendSideChatQuote(state.drafts[sideChatThreadId] ?? "", selection),
+      },
+      focusRequest: sideChatThreadId,
+    })),
+  clearFocusRequest: (sideChatThreadId) =>
+    set((state) => (state.focusRequest === sideChatThreadId ? { focusRequest: null } : state)),
   setModel: (sideChatThreadId, model) =>
     set((state) => {
       const { [sideChatThreadId]: _previous, ...rest } = state.models;
@@ -168,7 +184,8 @@ export function useOpenSideChat() {
   return async (
     parent: ScopedThreadRef,
     options?: {
-      readonly draft?: string;
+      /** Selected text to quote into the composer, which then takes focus. */
+      readonly quote?: string;
       readonly send?: string;
       /** Closes the open side chat and starts one from the parent's latest response. */
       readonly fresh?: boolean;
@@ -215,8 +232,8 @@ export function useOpenSideChat() {
         return null;
       }
     }
-    if (options?.draft !== undefined && options.draft.trim().length > 0) {
-      useSideChatDraftStore.getState().appendDraft(sideChatRef.threadId, options.draft);
+    if (options?.quote !== undefined && options.quote.trim().length > 0) {
+      useSideChatDraftStore.getState().appendQuote(sideChatRef.threadId, options.quote);
     }
     const panels = useRightPanelStore.getState();
     for (const surface of selectThreadRightPanelState(panels.byThreadKey, parent).surfaces) {

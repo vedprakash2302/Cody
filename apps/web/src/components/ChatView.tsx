@@ -783,6 +783,9 @@ export default function ChatView(props: ChatViewProps) {
           : { sideChatDisabledReason: sideChatEntry.disabledReason }),
       }
     : {};
+  const askInSideChatStable = useStableCallback((text: string) => {
+    void sideChatEntry.open({ quote: text });
+  });
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -3354,6 +3357,12 @@ export default function ChatView(props: ChatViewProps) {
                 {...(!paintOnlyDisplayedTimeline
                   ? {
                       onCiteAssistantText: citeAssistantTextStable,
+                      ...(sideChatEntry.enabled && canOperateThread
+                        ? {
+                            onAskInSideChat: askInSideChatStable,
+                            askInSideChatDisabledReason: sideChatEntry.disabledReason,
+                          }
+                        : {}),
                       ...(activeProject ? { onRunShellCommand: runShellCommandStable } : {}),
                     }
                   : {})}

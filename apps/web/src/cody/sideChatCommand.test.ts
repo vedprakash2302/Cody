@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { sideChatQuestionForSend } from "./sideChatCommand";
+import { appendSideChatQuote, sideChatQuestionForSend } from "./sideChatCommand";
+
+describe("appendSideChatQuote", () => {
+  it("quotes every line and leaves an empty line for the question", () => {
+    expect(appendSideChatQuote("", "  first line\n\nsecond line\n")).toBe(
+      "> first line\n>\n> second line\n\n",
+    );
+  });
+
+  it("adds each new quote after what the draft already holds", () => {
+    const first = appendSideChatQuote("", "one");
+    expect(appendSideChatQuote(first, "two")).toBe("> one\n\n> two\n\n");
+    expect(appendSideChatQuote("why does\n", "three")).toBe("why does\n\n> three\n\n");
+  });
+
+  it("keeps the draft when the selection is only whitespace", () => {
+    expect(appendSideChatQuote("draft", " \n ")).toBe("draft");
+  });
+});
 
 const send = {
   sideChatsEnabled: true,

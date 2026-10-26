@@ -14,6 +14,8 @@ From a thread, do any of the following:
 - Press `mod+alt+s` (`thread.sideChat`).
 - Choose **Side chat** from the right panel's **+** menu.
 - Choose **Open side chat** in the command palette.
+- Select text in a response and choose **Ask in side chat**. The selection goes into the side
+  chat's composer as a quote, ready for your question. Select more text to add another quote.
 
 The side chat opens as a tab in the right panel. A thread has one open side chat at a time; opening
 it again shows the one you have.

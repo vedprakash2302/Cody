@@ -8,7 +8,7 @@ import {
 import type { RuntimeMode, ScopedThreadRef } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { GitBranchIcon, ShieldIcon } from "lucide-react";
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { ComposerFooterModeControls } from "../components/chat/ComposerFooterControls";
 import { ComposerBanner } from "../components/chat/ComposerBanner";
@@ -56,10 +56,12 @@ export function SideChatComposer(props: {
   const environmentId = sideRef.environmentId;
   const sideChatId = sideRef.threadId;
   const draft = useSideChatDraftStore((state) => state.drafts[sideChatId] ?? "");
+  const focusRequested = useSideChatDraftStore((state) => state.focusRequest === sideChatId);
   const pendingModel = useSideChatDraftStore((state) => state.models[sideChatId] ?? null);
   const settings = useEnvironmentSettings(environmentId);
   const providers = useEnvironmentProviders().get(environmentId);
   const [sending, setSending] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const startTurn = useOrchestrationCommand(threadEnvironment.startTurn, { reportFailure: false });
   const interruptTurn = useOrchestrationCommand(threadEnvironment.interruptTurn, {
@@ -93,6 +95,19 @@ export function SideChatComposer(props: {
         : "Ask about this thread";
   const editorDisabled = !canOperate || activeApproval !== null || choiceOnly;
   const hasSendableContent = progress === null && draft.trim().length > 0;
+  const draftEditable = progress === null && !editorDisabled;
+
+  // Decided once requests load, then dropped: a request answered later must
+  // not pull focus from wherever the user went meanwhile.
+  useEffect(() => {
+    if (!focusRequested || !requests.loaded) return;
+    useSideChatDraftStore.getState().clearFocusRequest(sideChatId);
+    const textarea = textareaRef.current;
+    if (!draftEditable || textarea === null) return;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.scrollTop = textarea.scrollHeight;
+  }, [focusRequested, requests.loaded, draftEditable, sideChatId]);
 
   const setDraft = (text: string) => useSideChatDraftStore.getState().setDraft(sideChatId, text);
 
@@ -258,6 +273,7 @@ export function SideChatComposer(props: {
                   >
                     <div className="relative flow-root font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)">
                       <textarea
+                        ref={textareaRef}
                         value={promptValue}
                         disabled={editorDisabled}
                         placeholder={placeholder}
