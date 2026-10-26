@@ -87,6 +87,7 @@
   "apps/server/src/cody/sideChatProviderText.test.ts",
   "apps/server/src/cody/conversationDigest.test.ts",
   "apps/server/src/cody/sideChatAttach.test.ts",
+  "apps/server/src/cody/sideChatTurnWiring.test.ts",
   "apps/server/src/ws.test.ts",
   "packages/client-runtime/src/state/codySideChats.test.ts",
   "packages/client-runtime/src/connection/resolver.test.ts",
