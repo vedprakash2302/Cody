@@ -117,8 +117,12 @@ const make = Effect.gen(function* () {
   return SideChatStore.of({
     has: (threadId) => ids.has(threadId),
     list: SubscriptionRef.get(snapshot),
-    add: (threadId) => update(threadId, (next) => void next.add(threadId)),
-    remove: (threadId) => update(threadId, (next) => void next.delete(threadId)),
+    add: Effect.fn("SideChatStore.add")(function (threadId) {
+      return update(threadId, (next) => void next.add(threadId));
+    }),
+    remove: Effect.fn("SideChatStore.remove")(function (threadId) {
+      return update(threadId, (next) => void next.delete(threadId));
+    }),
     changes: SubscriptionRef.changes(snapshot),
   });
 });

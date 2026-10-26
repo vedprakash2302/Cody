@@ -72,8 +72,8 @@ export function nextAutoUpdateStep(input: {
  * Asks one backend whether an agent is working. A backend that is starting,
  * restarting, unreachable, or answers anything unexpected counts as busy.
  */
-const probeBackend = (instance: DesktopBackendInstance) =>
-  Effect.gen(function* () {
+const probeBackend = Effect.fn("DesktopAutoUpdate.probeBackend")(
+  function* (instance: DesktopBackendInstance) {
     const snapshot = yield* instance.snapshot;
     if (!snapshot.desiredRunning) return false;
     if (!snapshot.ready) return true;
@@ -92,7 +92,9 @@ const probeBackend = (instance: DesktopBackendInstance) =>
         Effect.timeout(PROBE_TIMEOUT),
       );
     return activity.busy;
-  }).pipe(Effect.orElseSucceed(() => true));
+  },
+  Effect.orElseSucceed(() => true),
+);
 
 /**
  * Downloads new versions as the updater finds them and restarts into one once
@@ -137,19 +139,20 @@ export const listen: Effect.Effect<
     return busy;
   });
 
-  const recordState = (state: DesktopUpdateState) =>
-    Effect.gen(function* () {
-      yield* Ref.set(stateRef, state);
-      const version = state.downloadedVersion;
-      if (version === null) return;
-      if (state.errorContext === "install") {
-        yield* Ref.set(failedInstallVersionRef, version);
-      }
-      const nowMs = yield* Clock.currentTimeMillis;
-      yield* Ref.update(downloadedRef, (downloaded) =>
-        downloaded?.version === version ? downloaded : { version, atMs: nowMs },
-      );
-    });
+  const recordState = Effect.fn("DesktopAutoUpdate.recordState")(function* (
+    state: DesktopUpdateState,
+  ) {
+    yield* Ref.set(stateRef, state);
+    const version = state.downloadedVersion;
+    if (version === null) return;
+    if (state.errorContext === "install") {
+      yield* Ref.set(failedInstallVersionRef, version);
+    }
+    const nowMs = yield* Clock.currentTimeMillis;
+    yield* Ref.update(downloadedRef, (downloaded) =>
+      downloaded?.version === version ? downloaded : { version, atMs: nowMs },
+    );
+  });
 
   const evaluate = Effect.gen(function* () {
     const state = yield* Ref.get(stateRef);
