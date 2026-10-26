@@ -14,14 +14,21 @@ import * as ServerConfig from "../config.ts";
 
 const SIDE_CHATS_FILE = "cody-side-chats.json";
 
-/** For each side chat message that carried main's update, main's newest run it covered. */
+/**
+ * For each message that carried one conversation into another, the newest run
+ * of the carried conversation it covered.
+ */
 const CatchUps = Schema.Record(MessageId, RunId);
 type CatchUps = typeof CatchUps.Type;
+type CarriedBySideChat = Readonly<Record<ThreadId, CatchUps>>;
 
 const SideChatsFile = Schema.Struct({
   version: Schema.Literal(1),
   threadIds: Schema.Array(ThreadId),
+  /** Side chat messages that carried main's update. */
   catchUps: Schema.optionalKey(Schema.Record(ThreadId, CatchUps)),
+  /** Thread messages that carried an attached side chat. */
+  sentToThread: Schema.optionalKey(Schema.Record(ThreadId, CatchUps)),
 });
 const SideChatsFileJson = Schema.fromJsonString(SideChatsFile);
 const decodeSideChatsFile = Schema.decodeUnknownEffect(SideChatsFileJson);
@@ -57,6 +64,13 @@ export class SideChatStore extends Context.Service<
       messageId: MessageId,
       mainRunId: RunId,
     ) => Effect.Effect<void, SideChatStoreWriteError>;
+    readonly sentToThread: (sideChatId: ThreadId) => CatchUps;
+    /** A thread message carried this side chat through its run `sideChatRunId`. */
+    readonly recordSentToThread: (
+      sideChatId: ThreadId,
+      threadMessageId: MessageId,
+      sideChatRunId: RunId,
+    ) => Effect.Effect<void, SideChatStoreWriteError>;
     readonly changes: Stream.Stream<ReadonlyArray<ThreadId>>;
   }
 >()("t3/cody/SideChatStore") {}
@@ -70,6 +84,8 @@ export interface SideChatMembershipShape {
   readonly isSideChat: (threadId: ThreadId) => boolean;
   readonly catchUps: SideChatStore["Service"]["catchUps"];
   readonly recordCatchUp: SideChatStore["Service"]["recordCatchUp"];
+  readonly sentToThread: SideChatStore["Service"]["sentToThread"];
+  readonly recordSentToThread: SideChatStore["Service"]["recordSentToThread"];
 }
 
 export class SideChatMembership extends Context.Reference<SideChatMembershipShape>(
@@ -79,6 +95,8 @@ export class SideChatMembership extends Context.Reference<SideChatMembershipShap
       isSideChat: () => false,
       catchUps: () => ({}),
       recordCatchUp: () => Effect.void,
+      sentToThread: () => ({}),
+      recordSentToThread: () => Effect.void,
     }),
   },
 ) {}
@@ -108,23 +126,20 @@ const make = Effect.gen(function* () {
 
   // Read on every shell item and turn start, so lookups stay synchronous.
   let ids: ReadonlySet<ThreadId> = new Set(loaded.threadIds);
-  let catchUps: Readonly<Record<ThreadId, CatchUps>> = loaded.catchUps ?? {};
+  let carried: { readonly catchUps: CarriedBySideChat; readonly sentToThread: CarriedBySideChat } =
+    { catchUps: loaded.catchUps ?? {}, sentToThread: loaded.sentToThread ?? {} };
   const snapshot = yield* SubscriptionRef.make<ReadonlyArray<ThreadId>>([...ids]);
   const writeLock = yield* Semaphore.make(1);
 
-  const save = (
-    threadId: ThreadId,
-    next: ReadonlySet<ThreadId>,
-    nextCatchUps: Readonly<Record<ThreadId, CatchUps>>,
-  ) =>
-    encodeSideChatsFile({ version: 1, threadIds: [...next], catchUps: nextCatchUps }).pipe(
+  const save = (threadId: ThreadId, next: ReadonlySet<ThreadId>, nextCarried: typeof carried) =>
+    encodeSideChatsFile({ version: 1, threadIds: [...next], ...nextCarried }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath, contents })),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.mapError((cause) => new SideChatStoreWriteError({ threadId, cause })),
       Effect.andThen(
         Effect.suspend(() => {
-          catchUps = nextCatchUps;
+          carried = nextCarried;
           if (next === ids) return Effect.void;
           ids = next;
           return SubscriptionRef.set(snapshot, [...next]);
@@ -138,8 +153,27 @@ const make = Effect.gen(function* () {
         const next = new Set(ids);
         change(next);
         if (next.size === ids.size && [...next].every((id) => ids.has(id))) return Effect.void;
-        const { [threadId]: _forgotten, ...nextCatchUps } = catchUps;
-        return save(threadId, next, next.has(threadId) ? catchUps : nextCatchUps);
+        if (next.has(threadId)) return save(threadId, next, carried);
+        const { [threadId]: _catchUps, ...catchUps } = carried.catchUps;
+        const { [threadId]: _sent, ...sentToThread } = carried.sentToThread;
+        return save(threadId, next, { catchUps, sentToThread });
+      }),
+    );
+
+  const record = (
+    kind: keyof typeof carried,
+    threadId: ThreadId,
+    messageId: MessageId,
+    runId: RunId,
+  ) =>
+    writeLock.withPermit(
+      Effect.suspend(() => {
+        const current = carried[kind];
+        if (!ids.has(threadId) || current[threadId]?.[messageId] === runId) return Effect.void;
+        return save(threadId, ids, {
+          ...carried,
+          [kind]: { ...current, [threadId]: { ...current[threadId], [messageId]: runId } },
+        });
       }),
     );
 
@@ -152,19 +186,16 @@ const make = Effect.gen(function* () {
     remove: Effect.fn("SideChatStore.remove")(function (threadId) {
       return update(threadId, (next) => void next.delete(threadId));
     }),
-    catchUps: (threadId) => catchUps[threadId] ?? {},
+    catchUps: (threadId) => carried.catchUps[threadId] ?? {},
     recordCatchUp: Effect.fn("SideChatStore.recordCatchUp")(
       function (threadId, messageId, mainRunId) {
-        return writeLock.withPermit(
-          Effect.suspend(() =>
-            !ids.has(threadId) || catchUps[threadId]?.[messageId] === mainRunId
-              ? Effect.void
-              : save(threadId, ids, {
-                  ...catchUps,
-                  [threadId]: { ...catchUps[threadId], [messageId]: mainRunId },
-                }),
-          ),
-        );
+        return record("catchUps", threadId, messageId, mainRunId);
+      },
+    ),
+    sentToThread: (threadId) => carried.sentToThread[threadId] ?? {},
+    recordSentToThread: Effect.fn("SideChatStore.recordSentToThread")(
+      function (threadId, messageId, sideChatRunId) {
+        return record("sentToThread", threadId, messageId, sideChatRunId);
       },
     ),
     changes: SubscriptionRef.changes(snapshot),
@@ -181,6 +212,8 @@ export const layerMembership = Layer.effect(
       isSideChat: store.has,
       catchUps: store.catchUps,
       recordCatchUp: store.recordCatchUp,
+      sentToThread: store.sentToThread,
+      recordSentToThread: store.recordSentToThread,
     };
   }),
 );

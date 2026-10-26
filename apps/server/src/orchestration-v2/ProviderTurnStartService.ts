@@ -31,7 +31,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as SideChatStore from "../cody/SideChatStore.ts";
-import { sideChatProviderText } from "../cody/sideChatProviderText.ts";
+import { codyProviderText } from "../cody/sideChatProviderText.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
@@ -950,15 +950,14 @@ export const layer: Layer.Layer<
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;
       // Before the run shows as running, so a client refreshing on that sees the catch-up.
-      const sideChatText =
-        sideChats.isSideChat(projection.thread.id) && !goalCommand
-          ? yield* sideChatProviderText({
-              projectionStore,
-              sideChats,
-              thread: projection.thread,
-              message,
-            })
-          : null;
+      const codyText = goalCommand
+        ? null
+        : yield* codyProviderText({
+            projectionStore,
+            sideChats,
+            thread: projection.thread,
+            message,
+          });
       const events: Array<OrchestrationV2DomainEvent> = [
         {
           id: yield* idAllocator.allocate.event({
@@ -1052,7 +1051,7 @@ export const layer: Layer.Layer<
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
       const userText =
-        sideChatText ??
+        codyText ??
         projectComposerContextForProvider({
           text: message.text,
           records: message.context?.records ?? [],

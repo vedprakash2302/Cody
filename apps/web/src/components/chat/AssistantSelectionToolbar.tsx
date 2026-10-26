@@ -26,6 +26,7 @@ export function AssistantSelectionToolbar({
   onCite,
   onAskInSideChat,
   askInSideChatDisabledReason,
+  citeLabel = "Cite",
 }: {
   viewport: HTMLElement | null;
   threadRef: ScopedThreadRef;
@@ -33,6 +34,8 @@ export function AssistantSelectionToolbar({
   /** Cody: quotes the selection into the thread's side chat. */
   onAskInSideChat?: ((text: string, messageId: MessageId) => void) | undefined;
   askInSideChatDisabledReason?: string | undefined;
+  /** Cody: a side chat cites into its thread's composer, not its own. */
+  citeLabel?: string | undefined;
 }) {
   const [selection, setSelection] = useState<{
     citation: AssistantCitation;
@@ -237,11 +240,17 @@ export function AssistantSelectionToolbar({
         size="xs"
         variant="glass"
         disabled={tooLong}
-        aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
+        aria-label={
+          tooLong
+            ? "Selection is too long to cite"
+            : citeLabel === "Cite"
+              ? "Cite selection in composer"
+              : citeLabel
+        }
         onClick={cite}
       >
         <QuoteIcon aria-hidden="true" className="size-3.5" />
-        {tooLong ? "Shorten selection" : "Cite"}
+        {tooLong ? "Shorten selection" : citeLabel}
       </Button>
       {onAskInSideChat && !tooLong ? (
         <Button

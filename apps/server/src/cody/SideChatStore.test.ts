@@ -20,37 +20,43 @@ const storeAt = (baseDir: string) =>
   ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
 describe("SideChatStore", () => {
-  it.effect("keeps side chats and their catch-ups across a restart, forgetting removed ones", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "cody-side-chat-store-" });
+  it.effect(
+    "keeps side chats and what each side carried across a restart, forgetting removed ones",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "cody-side-chat-store-" });
 
-      yield* Effect.gen(function* () {
-        const store = yield* SideChatStore.SideChatStore;
-        yield* store.add(SIDE_CHAT);
-        yield* store.recordCatchUp(SIDE_CHAT, MESSAGE, MAIN_RUN);
-        assert.isTrue((yield* SideChatStore.SideChatMembership).isSideChat(SIDE_CHAT));
-      }).pipe(Effect.provide(storeAt(baseDir)));
+        yield* Effect.gen(function* () {
+          const store = yield* SideChatStore.SideChatStore;
+          yield* store.add(SIDE_CHAT);
+          yield* store.recordCatchUp(SIDE_CHAT, MESSAGE, MAIN_RUN);
+          yield* store.recordSentToThread(SIDE_CHAT, MESSAGE, MAIN_RUN);
+          assert.isTrue((yield* SideChatStore.SideChatMembership).isSideChat(SIDE_CHAT));
+        }).pipe(Effect.provide(storeAt(baseDir)));
 
-      const afterRestart = yield* Effect.gen(function* () {
-        const store = yield* SideChatStore.SideChatStore;
-        const listed = store.has(SIDE_CHAT);
-        const catchUps = store.catchUps(SIDE_CHAT);
-        yield* store.remove(SIDE_CHAT);
-        return { listed, catchUps };
-      }).pipe(Effect.provide(storeAt(baseDir)));
-      assert.isTrue(afterRestart.listed);
-      assert.deepEqual(afterRestart.catchUps, { [MESSAGE]: MAIN_RUN });
+        const afterRestart = yield* Effect.gen(function* () {
+          const store = yield* SideChatStore.SideChatStore;
+          const listed = store.has(SIDE_CHAT);
+          const catchUps = store.catchUps(SIDE_CHAT);
+          const sent = store.sentToThread(SIDE_CHAT);
+          yield* store.remove(SIDE_CHAT);
+          return { listed, catchUps, sent };
+        }).pipe(Effect.provide(storeAt(baseDir)));
+        assert.isTrue(afterRestart.listed);
+        assert.deepEqual(afterRestart.catchUps, { [MESSAGE]: MAIN_RUN });
+        assert.deepEqual(afterRestart.sent, { [MESSAGE]: MAIN_RUN });
 
-      const afterRemoval = yield* SideChatStore.SideChatStore.pipe(
-        Effect.map((store) => ({
-          listed: store.has(SIDE_CHAT),
-          catchUps: store.catchUps(SIDE_CHAT),
-        })),
-        Effect.provide(storeAt(baseDir)),
-      );
-      assert.deepEqual(afterRemoval, { listed: false, catchUps: {} });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        const afterRemoval = yield* SideChatStore.SideChatStore.pipe(
+          Effect.map((store) => ({
+            listed: store.has(SIDE_CHAT),
+            catchUps: store.catchUps(SIDE_CHAT),
+            sent: store.sentToThread(SIDE_CHAT),
+          })),
+          Effect.provide(storeAt(baseDir)),
+        );
+        assert.deepEqual(afterRemoval, { listed: false, catchUps: {}, sent: {} });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("starts empty from an unreadable list instead of failing the server", () =>

@@ -24,6 +24,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
+import { readSideChatSentState } from "./sideChatAttach.ts";
 import { readSideChatMainView } from "./sideChatMainUpdate.ts";
 import * as SideChatStore from "./SideChatStore.ts";
 
@@ -332,11 +333,21 @@ const make = Effect.gen(function* () {
             (cause) => new CodySideChatError({ threadId, reason: "thread-not-found", cause }),
           ),
         );
-      return yield* readSideChatMainView({
-        projectionStore,
-        thread,
-        catchUps: store.catchUps(threadId),
-      }).pipe(
+      const parentThreadId = thread.lineage.parentThreadId;
+      return yield* Effect.all([
+        readSideChatMainView({ projectionStore, thread, catchUps: store.catchUps(threadId) }),
+        parentThreadId === null
+          ? Effect.succeed(null)
+          : readSideChatSentState({
+              projectionStore,
+              sideChatId: threadId,
+              threadId: parentThreadId,
+              sent: store.sentToThread(threadId),
+            }),
+      ]).pipe(
+        Effect.map(([view, sent]) =>
+          sent === null ? view : { ...view, unsentToThread: sent.newRuns.length },
+        ),
         Effect.mapError(
           (cause) => new CodySideChatError({ threadId, reason: "read-failed", cause }),
         ),

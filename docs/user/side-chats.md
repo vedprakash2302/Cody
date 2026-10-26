@@ -50,8 +50,13 @@ commands, and it is told not to change anything unless you ask it to.
 ## When you're done
 
 - Hide the right panel or switch threads to keep the side chat; it keeps running.
-- Choose **Merge back** (the button beside **⋯**) to send a summary of the side chat to the thread
-  with your next message there.
+- Choose **Attach to thread** in the side chat's header or the tab's right-click menu. The side chat
+  attaches to the thread's composer as a chip with how many responses are new. Your next message
+  there brings what the side chat said since you last attached it, word for word, with a line on
+  the commands it ran and files it changed. Send the chip alone to have the thread's agent say
+  what it takes from the side chat, or remove the chip to cancel.
+- Select text in a side chat response and choose **Quote in thread** to quote just that into the
+  thread's composer.
 - Choose **Keep as thread** from the **⋯** menu to turn the side chat into an ordinary fork in
   your thread list.
 - Close its tab to close it. A side chat you never asked anything is deleted; any other moves to

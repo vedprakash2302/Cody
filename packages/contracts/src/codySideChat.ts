@@ -72,6 +72,8 @@ export const CodySideChatMainView = Schema.Struct({
   filesChanged: NonNegativeInt,
   /** The parent rolled back the run the side chat last saw. */
   wentBack: Schema.Boolean,
+  /** The side chat's finished responses its parent hasn't been sent. Older servers omit it. */
+  unsentToThread: Schema.optionalKey(NonNegativeInt),
 });
 export type CodySideChatMainView = typeof CodySideChatMainView.Type;
 

@@ -14,7 +14,6 @@ import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   AuthOrchestrationOperateScope,
   ThreadId,
@@ -26,6 +25,7 @@ import {
   ArrowUpRightIcon,
   GitBranchIcon,
   MoreHorizontalIcon,
+  PaperclipIcon,
   PencilIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -33,7 +33,6 @@ import { useRef, useState } from "react";
 
 import { ThreadVisitWatermark } from "../components/chat/ThreadVisitWatermark";
 import { MessagesTimeline } from "../components/chat/MessagesTimeline";
-import { PullRequestGlyph } from "../components/pullRequest/pullRequestIcons";
 import { Button } from "../components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../components/ui/menu";
 import { toastManager } from "../components/ui/toast";
@@ -68,6 +67,8 @@ import {
 } from "./SideChatComposer";
 import { sentUpdatePending } from "./sideChatCommand";
 import {
+  citeInThread,
+  sideChatHasUnsent,
   useSideChatActions,
   useSideChatDraftStore,
   useSideChatMainView,
@@ -230,8 +231,8 @@ export function SideChatPanel(props: {
           onDismiss: () =>
             useSideChatDraftStore.getState().dismissMovedOn(props.sideChatThreadId, wentBackKey),
         };
-  const canMergeBack =
-    canOperate && projection !== null && resolveLatestMergeBackRun(projection) !== null;
+  const hasUnsent = sideChatHasUnsent(mainView, shell);
+  const canAttach = canOperate && hasUnsent;
 
   return (
     <FileMetadataThreadProvider threadRef={sideRef} cwd={cwd} checkpoints={projection?.checkpoints}>
@@ -265,20 +266,22 @@ export function SideChatPanel(props: {
             <TooltipTrigger
               render={
                 <Button
-                  size="icon-xs"
+                  size="xs"
                   variant="ghost"
-                  aria-label="Merge back to the thread"
-                  disabled={!canMergeBack}
-                  onClick={() => void runAction("merge-back", sideRef)}
+                  disabled={!canAttach}
+                  onClick={() => void runAction("attach", sideRef)}
                 />
               }
             >
-              <PullRequestGlyph.merged className="size-3.5" />
+              <PaperclipIcon className="size-3.5" />
+              Attach to thread
             </TooltipTrigger>
             <TooltipPopup>
-              {canMergeBack
-                ? "Merge this side chat back into the thread"
-                : "Merge back after the side chat finishes a response"}
+              {canAttach
+                ? "Your next message in the thread brings what this side chat said"
+                : shell?.latestRun?.status === "completed"
+                  ? "The thread already has everything this side chat said"
+                  : "Attach after the side chat finishes a response"}
             </TooltipPopup>
           </Tooltip>
           <Menu>
@@ -345,6 +348,8 @@ export function SideChatPanel(props: {
               turnDiffSummaries={turnDiffSummaries}
               activeThreadEnvironmentId={environmentId}
               routeThreadKey={threadKey}
+              onCiteAssistantText={(citation) => citeInThread(parentRef, citation)}
+              citeLabel="Quote in thread"
               onOpenTurnDiff={() => void runAction("full-view", sideRef)}
               onOpenThread={openThread}
               onForkFromRun={forkResponse}
