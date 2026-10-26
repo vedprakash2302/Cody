@@ -870,21 +870,23 @@ it.effect(
             response._tag === "Exit" ? Queue.offer(responses, response.exit) : Effect.void,
         }).pipe(
           Effect.provide(
-            layerWsRpc(
-              {
-                sessionId: AuthSessionId.make("side-chat-test"),
-                subject: "side-chat-test",
-                method: "browser-session-cookie",
-                scopes: ["orchestration:read"],
-              },
-              {},
-              {},
-              yield* PreviewAutomationBroker.PreviewAutomationBroker,
-              yield* ServerBrowser.ServerBrowser,
-              { sideChats },
-            ).pipe(Layer.provide(services)),
+            Layer.mergeAll(
+              layerWsRpc(
+                {
+                  sessionId: AuthSessionId.make("side-chat-test"),
+                  subject: "side-chat-test",
+                  method: "browser-session-cookie",
+                  scopes: ["orchestration:read"],
+                },
+                {},
+                {},
+                yield* PreviewAutomationBroker.PreviewAutomationBroker,
+                yield* ServerBrowser.ServerBrowser,
+                { sideChats },
+              ).pipe(Layer.provide(services)),
+              RpcAuthorization.layer(["orchestration:read"]),
+            ),
           ),
-          Effect.provide(RpcAuthorization.layer(["orchestration:read"])),
           Effect.provideService(SideChatStore.SideChatMembership, {
             isSideChat: (threadId) => threadId === sideChat,
           }),
