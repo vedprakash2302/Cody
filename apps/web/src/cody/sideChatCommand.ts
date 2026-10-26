@@ -1,5 +1,28 @@
+import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+import { CODY_NEW_SIDE_CHAT_TITLE } from "@t3tools/contracts";
+
 /**
- * `/side` alone opens the side chat; `/side <question>` also asks it. Returns
+ * Whether a first message names its thread. A side chat takes a name only
+ * while it has none, so a name the user gave it stays.
+ */
+export const namesThreadOnSend = (thread: {
+  readonly title: string;
+  readonly source: { readonly codySideChat?: boolean | undefined };
+}) => thread.source.codySideChat !== true || thread.title === CODY_NEW_SIDE_CHAT_TITLE;
+
+/** The title seed for a side chat message: the server applies it only to a first message. */
+export function sideChatTitleSeed(title: string, text: string): { readonly titleSeed?: string } {
+  if (title !== CODY_NEW_SIDE_CHAT_TITLE) return {};
+  const seed = deriveThreadTitleSeed({
+    text: text.replace(/^>[ \t]?/gmu, ""),
+    attachments: [],
+    fallbackLabels: ["Catch up with main"],
+  });
+  return seed.length === 0 ? {} : { titleSeed: seed };
+}
+
+/**
+ * `/side` alone starts a side chat; `/side <question>` also asks it. Returns
  * null for any other text.
  */
 export function parseSideChatCommand(text: string): string | null {

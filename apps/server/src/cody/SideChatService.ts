@@ -1,4 +1,5 @@
 import {
+  CODY_NEW_SIDE_CHAT_TITLE,
   CommandId,
   CodySideChatError,
   type CodySideChatCloseResult,
@@ -26,15 +27,16 @@ import { forkParked } from "../serverActivation.ts";
 import { readSideChatMainView } from "./sideChatMainUpdate.ts";
 import * as SideChatStore from "./SideChatStore.ts";
 
-const SIDE_CHAT_TITLE_PREFIX = "Side chat · ";
+// Side chats made before they had their own names are titled after their parent.
+const LEGACY_TITLE_PREFIX = "Side chat · ";
 
-export const sideChatTitle = (parentTitle: string) => `${SIDE_CHAT_TITLE_PREFIX}${parentTitle}`;
-
-/** The title a promoted side chat keeps, or undefined when the user already renamed it. */
-export const promotedTitle = (title: string) =>
-  title.startsWith(SIDE_CHAT_TITLE_PREFIX) && title.length > SIDE_CHAT_TITLE_PREFIX.length
-    ? title.slice(SIDE_CHAT_TITLE_PREFIX.length)
-    : undefined;
+/** The title a promoted side chat keeps: its own name, or else its parent's title. */
+const promotedTitle = (title: string, parentTitle: string | undefined) =>
+  title.startsWith(LEGACY_TITLE_PREFIX) && title.length > LEGACY_TITLE_PREFIX.length
+    ? title.slice(LEGACY_TITLE_PREFIX.length)
+    : title === CODY_NEW_SIDE_CHAT_TITLE && parentTitle !== undefined
+      ? parentTitle
+      : title;
 
 const isLiveShell = (
   shell: OrchestrationV2ThreadShell | null,
@@ -43,7 +45,7 @@ const isLiveShell = (
 export class SideChatService extends Context.Service<
   SideChatService,
   {
-    /** Returns the parent's open side chat when it has one, so a parent has at most one open. */
+    /** Returns the parent's most recent open side chat unless asked for a fresh one. */
     readonly open: (
       input: CodySideChatOpenInput,
     ) => Effect.Effect<CodySideChatOpenResult, CodySideChatError>;
@@ -179,14 +181,6 @@ const make = Effect.gen(function* () {
         .toSorted(
           (left, right) => right.updatedAt.epochMilliseconds - left.updatedAt.epochMilliseconds,
         );
-      // A parent keeps at most one open side chat, so reopening or starting
-      // fresh closes the others first.
-      const closeOpenExcept = (keep: ThreadId | null) =>
-        Effect.forEach(
-          openSideChats.filter((shell) => shell.id !== keep),
-          closeShell,
-          { discard: true },
-        );
 
       if (input.reopenThreadId !== undefined) {
         const reopenThreadId = input.reopenThreadId;
@@ -197,7 +191,6 @@ const make = Effect.gen(function* () {
             reason: "not-a-side-chat",
           });
         }
-        yield* closeOpenExcept(target.id);
         if (target.archivedAt !== null) {
           yield* threads
             .dispatch({
@@ -225,7 +218,8 @@ const make = Effect.gen(function* () {
       // Providers without a native fork only pass a truncated summary, which is
       // too thin to ask about the thread.
       if (!(yield* supportsNativeFork(parent))) return yield* fail("provider-unsupported");
-      yield* closeOpenExcept(null);
+      const replaced = openSideChats.find((shell) => shell.id === input.replaceThreadId);
+      if (replaced !== undefined) yield* closeShell(replaced);
 
       const threadId = yield* ids.allocate
         .thread({ projectId: parent.projectId })
@@ -242,7 +236,7 @@ const make = Effect.gen(function* () {
           sourceThreadId: parentThreadId,
           targetThreadId: threadId,
           sourcePoint: { type: "latest_stable" },
-          title: sideChatTitle(parent.title),
+          title: CODY_NEW_SIDE_CHAT_TITLE,
         })
         .pipe(
           Effect.tapError(() => store.remove(threadId).pipe(Effect.ignore)),
@@ -309,6 +303,12 @@ const make = Effect.gen(function* () {
       const shell = yield* shellOf(threadId);
       if (!isLiveShell(shell)) return yield* fail("thread-not-found");
       yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
+      const parentTitle =
+        shell.lineage.parentThreadId === null
+          ? undefined
+          : (yield* threads
+              .getThreadShell(shell.lineage.parentThreadId)
+              .pipe(Effect.orElseSucceed(() => null)))?.title;
       // Clients hear about a thread through its events, so a rename is what
       // makes the promoted thread appear in their lists. It renames even to
       // the same title, which still sends the event.
@@ -317,7 +317,7 @@ const make = Effect.gen(function* () {
           type: "thread.metadata.update",
           commandId: CommandId.make(`cody:side-chat:${threadId}:promote`),
           threadId,
-          title: promotedTitle(shell.title) ?? shell.title,
+          title: promotedTitle(shell.title, parentTitle),
         })
         .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
     },

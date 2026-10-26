@@ -771,16 +771,22 @@ export default function ChatView(props: ChatViewProps) {
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
   const sideChatEntry = useSideChatEntry({ thread: serverThread, runs: serverProjection?.runs });
-  const openSideChatStable = useStableCallback(() => void sideChatEntry.open());
+  const newSideChatStable = useStableCallback(() => void sideChatEntry.startNew());
   const sideChatPanelProps = sideChatEntry.enabled
     ? {
-        onAddSideChat: openSideChatStable,
-        sideChatAvailable: sideChatEntry.available && canOperateThread,
+        onAddSideChat: newSideChatStable,
+        sideChatAvailable: sideChatEntry.canStartNew && canOperateThread,
         onSideChatAction: (action: SideChatAction, sideChatRef: ScopedThreadRef) =>
           void sideChatEntry.runAction(action, sideChatRef),
-        ...(sideChatEntry.disabledReason === undefined
+        ...(canOperateThread
+          ? {
+              onRenameSideChat: (sideChatRef: ScopedThreadRef, title: string) =>
+                void sideChatEntry.rename(sideChatRef, title),
+            }
+          : {}),
+        ...(sideChatEntry.startNewDisabledReason === undefined
           ? {}
-          : { sideChatDisabledReason: sideChatEntry.disabledReason }),
+          : { sideChatDisabledReason: sideChatEntry.startNewDisabledReason }),
       }
     : {};
   const askInSideChatStable = useStableCallback((text: string, messageId: MessageId) => {
@@ -2759,9 +2765,9 @@ export default function ChatView(props: ChatViewProps) {
         if (!canInterruptRunningThread) return false;
         if (!event.repeat) void onInterruptStable();
       },
-      "thread.sideChat": () => {
-        if (!sideChatEntry.available) return false;
-        openSideChatStable();
+      "thread.sideChat": ({ event }) => {
+        if (!sideChatEntry.canStartNew) return false;
+        if (!event.repeat) newSideChatStable();
       },
     },
     fallback: (command) => {
@@ -2985,18 +2991,18 @@ export default function ChatView(props: ChatViewProps) {
       return onSend(event, dispatchMode, submissionIntent, directAnnotation);
     }
     event?.preventDefault();
-    if (!sideChatEntry.available) {
+    if (!sideChatEntry.canStartNew) {
       toastManager.add({
         type: "warning",
         title: "No side chat yet",
-        description: sideChatEntry.disabledReason,
+        description: sideChatEntry.startNewDisabledReason,
       });
       return;
     }
     promptRef.current = "";
     setComposerDraftPrompt(composerDraftTarget, "");
     composerRef.current?.resetCursorState();
-    void sideChatEntry.open({ send: sideChatQuestion });
+    void sideChatEntry.startNew({ send: sideChatQuestion });
   };
   const onComposerSendStable = useStableCallback(onSendOrOpenSideChat);
   const sendPreviewAnnotation = (
@@ -3732,8 +3738,8 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollKeyUp={onComposerPageScrollKeyUpStable}
                               onPageScrollRelease={onComposerPageScrollReleaseStable}
                               onCompactContext={onComposerCompactContextStable}
-                              {...(sideChatEntry.available
-                                ? { onOpenSideChat: openSideChatStable }
+                              {...(sideChatEntry.canStartNew
+                                ? { onOpenSideChat: newSideChatStable }
                                 : {})}
                               onSend={onComposerSendStable}
                               onResume={onComposerResumeStable}

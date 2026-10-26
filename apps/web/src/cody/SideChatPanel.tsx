@@ -29,8 +29,11 @@ import {
   GitBranchIcon,
   Maximize2Icon,
   MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
   RefreshCwIcon,
   RotateCcwIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -115,6 +118,13 @@ export function SideChatPanel(props: {
   const { resolvedTheme } = useTheme();
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const listRef = useRef<LegendListRef | null>(null);
+  // A menu returns focus to its trigger on close, which would end the tab rename it started.
+  const renamePicked = useRef(false);
+  const keepFocus = () => {
+    const picked = renamePicked.current;
+    renamePicked.current = false;
+    return !picked;
+  };
   const [liveFollow, setLiveFollow] = useState(true);
   const dismissedMovedOn = useSideChatDraftStore(
     (state) => state.dismissedMovedOn[props.sideChatThreadId],
@@ -242,7 +252,22 @@ export function SideChatPanel(props: {
             >
               <MoreHorizontalIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup align="end" className="min-w-56">
+            <MenuPopup align="end" className="min-w-56" finalFocus={keepFocus}>
+              <MenuItem disabled={!canOperate} onClick={() => void runAction("new", sideRef)}>
+                <PlusIcon className="size-3.5" />
+                New side chat
+              </MenuItem>
+              <MenuItem
+                disabled={!canOperate}
+                onClick={() => {
+                  renamePicked.current = true;
+                  void runAction("rename", sideRef);
+                }}
+              >
+                <PencilIcon className="size-3.5" />
+                Rename
+              </MenuItem>
+              <MenuSeparator />
               <MenuItem
                 disabled={
                   !canOperate ||
@@ -284,6 +309,14 @@ export function SideChatPanel(props: {
               <MenuItem onClick={props.onClose}>
                 <XIcon className="size-3.5" />
                 Close side chat
+              </MenuItem>
+              <MenuItem
+                variant="destructive"
+                disabled={!canOperate}
+                onClick={() => void runAction("delete", sideRef)}
+              >
+                <Trash2Icon className="size-3.5" />
+                Delete side chat
               </MenuItem>
             </MenuPopup>
           </Menu>

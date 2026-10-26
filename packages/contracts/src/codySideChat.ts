@@ -32,19 +32,24 @@ export function readCodyClientFeatures(value: string | null | undefined): {
   return { sideChats: features.includes(CODY_SIDE_CHAT_CLIENT_FEATURE) };
 }
 
+/** A side chat's title until its first message names it. */
+export const CODY_NEW_SIDE_CHAT_TITLE = "New side chat";
+
 export const CodySideChatOpenInput = Schema.Struct({
   parentThreadId: ThreadId,
   creationSource: Schema.optionalKey(Schema.Literals(["web", "mobile"])),
-  /** Close the parent's open side chat and start a new one from its latest response. */
+  /** Start a new side chat from the parent's latest response, even when one is open. */
   fresh: Schema.optionalKey(Schema.Boolean),
-  /** Reopen this closed side chat of the parent, closing any other open one. */
+  /** With `fresh`, close this open side chat of the parent first. */
+  replaceThreadId: Schema.optionalKey(ThreadId),
+  /** Reopen this closed side chat of the parent. */
   reopenThreadId: Schema.optionalKey(ThreadId),
 });
 export type CodySideChatOpenInput = typeof CodySideChatOpenInput.Type;
 
 export const CodySideChatOpenResult = Schema.Struct({
   threadId: ThreadId,
-  /** False when the parent already had an open side chat, which is returned instead. */
+  /** False when an open side chat of the parent was returned instead. */
   created: Schema.Boolean,
 });
 export type CodySideChatOpenResult = typeof CodySideChatOpenResult.Type;

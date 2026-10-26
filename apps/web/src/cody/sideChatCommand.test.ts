@@ -1,6 +1,29 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { appendSideChatQuote, sideChatQuestionForSend } from "./sideChatCommand";
+import {
+  appendSideChatQuote,
+  namesThreadOnSend,
+  sideChatQuestionForSend,
+  sideChatTitleSeed,
+} from "./sideChatCommand";
+
+describe("side chat names", () => {
+  it("lets a first message name a thread, or a side chat that has no name yet", () => {
+    expect(namesThreadOnSend({ title: "New thread", source: {} })).toBe(true);
+    expect(namesThreadOnSend({ title: "New side chat", source: { codySideChat: true } })).toBe(
+      true,
+    );
+    expect(namesThreadOnSend({ title: "Retry logic", source: { codySideChat: true } })).toBe(false);
+  });
+
+  it("seeds an unnamed side chat from its message without the quote markers", () => {
+    expect(sideChatTitleSeed("New side chat", "> flaky\n\nwhy?")).toEqual({
+      titleSeed: "flaky why?",
+    });
+    expect(sideChatTitleSeed("New side chat", "")).toEqual({ titleSeed: "Catch up with main" });
+    expect(sideChatTitleSeed("Retry logic", "why?")).toEqual({});
+  });
+});
 
 describe("appendSideChatQuote", () => {
   it("quotes every line and leaves an empty line for the question", () => {

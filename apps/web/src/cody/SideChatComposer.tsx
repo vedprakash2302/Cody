@@ -32,6 +32,7 @@ import { useEnvironmentProviders } from "../state/environments";
 import { useThreadShell } from "../state/entities";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { sideChatTitleSeed } from "./sideChatCommand";
 import { useSideChatDraftStore } from "./sideChats";
 import { SideChatMainUpdateChip } from "./SideChatMainUpdateChip";
 import type { SideChatRequests } from "./useSideChatRequests";
@@ -183,6 +184,7 @@ export function SideChatComposer(props: {
           ...(mainRecord === null ? {} : { context: { version: 1, records: [mainRecord] } }),
           attachments: [],
         },
+        ...sideChatTitleSeed(shell.title, text),
         runtimeMode: shell.runtimeMode,
         interactionMode: shell.interactionMode,
         ...(pendingModel === null ? {} : { modelSelection: pendingModel }),
