@@ -113,18 +113,29 @@ function checkpointFiles(
 export function digestTurns(input: {
   readonly runIds: ReadonlyArray<RunId>;
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "role" | "text" | "runId" | "streaming">
+    Pick<OrchestrationV2ConversationMessage, "role" | "text" | "runId" | "streaming" | "context">
   >;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  /** Changed files by checkpoint, which also counts edits made beside the turn. */
   readonly checkpoints: ReadonlyArray<Pick<OrchestrationV2Checkpoint, "runId" | "files">>;
+  /** The receiving thread, whose own chips in these messages say nothing new. */
+  readonly omitChipsOf?: ThreadId | undefined;
 }): ReadonlyArray<DigestTurn> {
   return input.runIds.map((runId) => {
     const text = (role: "user" | "assistant") =>
       input.messages.flatMap((message) => {
         if (message.runId !== runId || message.streaming || message.role !== role) return [];
-        const body = replaceComposerContextReferences(
-          message.text,
-          (occurrence) => `[${occurrence.label}]`,
+        const omitted = new Set(
+          (message.context?.records ?? []).flatMap((record) =>
+            record.kind === "thread" &&
+            "threadId" in record &&
+            record.threadId === input.omitChipsOf
+              ? [record.contextId]
+              : [],
+          ),
+        );
+        const body = replaceComposerContextReferences(message.text, (occurrence) =>
+          omitted.has(occurrence.contextId) ? "" : `[${occurrence.label}]`,
         ).trim();
         return body.length === 0 ? [] : [body];
       });

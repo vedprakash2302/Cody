@@ -99,7 +99,8 @@ const sideRun = (ordinal: number, status: OrchestrationV2Run["status"]) =>
 const sideMessages = [
   message("sm1", "user", "is retry safe?", RunId.make("side-run-1")),
   message("sm2", "assistant", "Yes, the call is idempotent.", RunId.make("side-run-1")),
-  message("sm3", "user", "what about timeouts?", RunId.make("side-run-2")),
+  // The side chat's catch-up chip for this thread says nothing to the thread.
+  message("sm3", "user", `${chip} what about timeouts?`, RunId.make("side-run-2"), withChip),
   message("sm4", "assistant", "Raise them to 30s.", RunId.make("side-run-2")),
 ];
 const sideItems = [

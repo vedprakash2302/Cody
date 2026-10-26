@@ -2,7 +2,6 @@ import type {
   ComposerContextRecord,
   MessageId,
   OrchestrationMessageContext,
-  OrchestrationV2Checkpoint,
   OrchestrationV2ConversationMessage,
   OrchestrationV2ProviderTurn,
   OrchestrationV2Run,
@@ -121,10 +120,12 @@ function renderSideChatAttachment(input: {
   readonly title: string;
   readonly newRuns: ReadonlyArray<{ readonly id: RunId }>;
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "role" | "text" | "runId" | "streaming">
+    Pick<OrchestrationV2ConversationMessage, "role" | "text" | "runId" | "streaming" | "context">
   >;
+  /** The side chat's own edits. Its checkpoints would also count the thread's, made beside it. */
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
-  readonly checkpoints: ReadonlyArray<Pick<OrchestrationV2Checkpoint, "runId" | "files">>;
+  /** The thread receiving it. */
+  readonly threadId: ThreadId;
   readonly wentBack: boolean;
   readonly withoutQuestion: boolean;
   readonly maxChars?: number;
@@ -146,7 +147,8 @@ function renderSideChatAttachment(input: {
       runIds: input.newRuns.map((run) => run.id),
       messages: input.messages,
       items: input.items,
-      checkpoints: input.checkpoints,
+      checkpoints: [],
+      omitChipsOf: input.threadId,
     }),
     footer: input.withoutQuestion
       ? [
@@ -178,23 +180,19 @@ export const sideChatAttachmentText = Effect.fn("SideChat.attachmentText")(funct
   const runIds = state.newRuns.map((run) => run.id);
   const records =
     runIds.length === 0
-      ? { messages: [], turnItems: [], checkpoints: [] }
-      : yield* projectionStore.getThreadRecords(
-          sideChatId,
-          ["messages", "turnItems", "checkpoints"],
-          {
-            messageRunIds: runIds,
-            turnItemRunIds: runIds,
-            turnItemTypes: [...ACTIVITY_ITEM_TYPES],
-          },
-        );
+      ? { messages: [], turnItems: [] }
+      : yield* projectionStore.getThreadRecords(sideChatId, ["messages", "turnItems"], {
+          messageRunIds: runIds,
+          turnItemRunIds: runIds,
+          turnItemTypes: [...ACTIVITY_ITEM_TYPES],
+        });
   const text = renderSideChatAttachment({
     sideChatId,
     title: state.title,
     newRuns: state.newRuns,
     messages: records.messages,
     items: records.turnItems,
-    checkpoints: records.checkpoints,
+    threadId: input.threadId,
     wentBack: state.wentBack,
     withoutQuestion: input.withoutQuestion,
   });

@@ -547,7 +547,8 @@ export function citeInThread(threadRef: ScopedThreadRef, citation: AssistantCita
     threadRef,
     `${prompt}${separator}${formatAssistantCitationForComposer(citation)}`,
   );
-  dispatchSnapShotComposerFocus();
+  // After the editor takes the new prompt, so the caret lands after the quote.
+  window.requestAnimationFrame(dispatchSnapShotComposerFocus);
   return true;
 }
 
