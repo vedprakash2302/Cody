@@ -365,7 +365,13 @@ export function SideChatPanel(props: {
               onIsAtEndChange={(isAtEnd) => {
                 if (isAtEnd) setLiveFollow(true);
               }}
-              onManualNavigation={() => setLiveFollow(false)}
+              onViewportAttach={(viewport) =>
+                viewport.subscribe((navigation) => {
+                  if (navigation.source === "command" && navigation.releasesFollow) {
+                    setLiveFollow(false);
+                  }
+                })
+              }
               hideEmptyPlaceholder
               emptyPlaceholderInset={0}
             />
