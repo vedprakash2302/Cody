@@ -180,8 +180,9 @@ export const make = Effect.gen(function* BrowserSessionMake() {
   const platform = yield* HostProcess.Platform;
   const helper = yield* WindowsSsoPath;
   const clientSettings = yield* DesktopClientSettings;
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const ssoEnabled = () =>
-    Effect.runPromise(
+    runPromise(
       clientSettings.get.pipe(
         Effect.map((settings) => Option.getOrUndefined(settings)?.browserWindowsSso === true),
         Effect.orElseSucceed(() => false),

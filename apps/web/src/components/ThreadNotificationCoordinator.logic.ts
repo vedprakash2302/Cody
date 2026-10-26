@@ -79,18 +79,11 @@ export function createThreadNotificationGate<Key>(
 }
 
 /**
- * Stopped and silent runs never notify completion. A Cody side chat's answers show in its panel,
- * so only its approvals and questions notify.
+ * Stopped runs never notify completion. A Cody side chat's answers show in its panel, so only its
+ * approvals and questions notify.
  */
 export function threadCompletionIsQuiet(
-  thread: Pick<
-    OrchestrationV2ThreadShell,
-    "latestRunStopRequested" | "latestRunSilent" | "codySideChat"
-  >,
+  thread: Pick<OrchestrationV2ThreadShell, "latestRunStopRequested" | "codySideChat">,
 ): boolean {
-  return (
-    thread.latestRunStopRequested === true ||
-    thread.latestRunSilent === true ||
-    thread.codySideChat === true
-  );
+  return thread.latestRunStopRequested === true || thread.codySideChat === true;
 }

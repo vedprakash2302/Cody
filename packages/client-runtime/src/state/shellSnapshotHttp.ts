@@ -34,12 +34,14 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
   >;
   readonly timeoutMs?: number;
   readonly omitIdleSubagents?: boolean;
+  readonly omitOlderSettled?: boolean;
 }) {
   // Cody servers send side chats only to clients that ask; others ignore the query.
   const endpoint = {
     query: {
       codyFeatures: CODY_SIDE_CHAT_CLIENT_FEATURE,
       ...(input.omitIdleSubagents === true ? { omitIdleSubagents: "1" } : {}),
+      ...(input.omitOlderSettled === true ? { omitOlderSettled: "1" } : {}),
     },
   };
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -90,7 +92,7 @@ export class ShellSnapshotLoader extends Context.Service<
   {
     readonly load: (
       prepared: PreparedConnection,
-      options?: { readonly omitIdleSubagents?: boolean },
+      options?: { readonly omitIdleSubagents?: boolean; readonly omitOlderSettled?: boolean },
     ) => Effect.Effect<Option.Option<DeferredShellSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/shellSnapshotHttp/ShellSnapshotLoader") {}
@@ -112,6 +114,7 @@ export const layer: Layer.Layer<ShellSnapshotLoader, never, HttpClient.HttpClien
           signer,
           remoteAuthorization,
           ...(options?.omitIdleSubagents === true ? { omitIdleSubagents: true } : {}),
+          ...(options?.omitOlderSettled === true ? { omitOlderSettled: true } : {}),
         }).pipe(
           Effect.map(Option.some<DeferredShellSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),

@@ -26,7 +26,7 @@ thread is a side chat. Its consumers need no new layer, and their tests run unch
 A client asks for side chats with `codyFeatures=sideChat` on its WebSocket URL and shell snapshot
 request ([`sideChatVisibility`](../../apps/server/src/cody/sideChatVisibility.ts)). Those clients
 get side chat shells marked `codySideChat`; every other client never receives them, in the shell,
-archive, search, or pull request links. The push relay skips side chats for everyone, because it
+archive, thread family and older settled pages, search, or pull request links. The push relay skips side chats for everyone, because it
 reaches the official mobile app.
 
 The opt-in is a query parameter, not a header: a custom header needs a CORS preflight that an

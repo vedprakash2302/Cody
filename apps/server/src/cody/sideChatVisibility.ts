@@ -6,7 +6,13 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+
+import type {
+  OlderSettledThreadsListing,
+  OlderSettledThreadsQuery,
+} from "../orchestration-v2/ProjectionStore.ts";
 
 /**
  * How one client receives side chats in its thread lists. A Cody client gets
@@ -29,7 +35,7 @@ export const sideChatVisibility = (input: {
       }
     : { isHidden: input.isSideChat, present: (shell) => shell };
 
-const presentThreads = (
+export const presentThreads = (
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   visibility: ThreadVisibility,
 ) =>
@@ -51,6 +57,26 @@ export const filterArchivedShellSnapshot = (
   ...snapshot,
   threads: presentThreads(snapshot.threads, visibility),
 });
+
+/**
+ * A page shorter than its limit ends a client's paging, so hidden side chats are dropped from an
+ * over-read listing that still fills the requested page.
+ */
+export const listVisibleOlderSettledThreads = <E>(
+  list: (query: OlderSettledThreadsQuery) => Effect.Effect<OlderSettledThreadsListing, E>,
+  query: OlderSettledThreadsQuery,
+  visibility: ThreadVisibility,
+): Effect.Effect<OlderSettledThreadsListing, E> =>
+  query.limit === 0
+    ? list(query)
+    : list({ ...query, limit: query.limit * 2 }).pipe(
+        Effect.map((listing) => ({
+          ...listing,
+          threadIds: listing.threadIds
+            .filter((threadId) => !visibility.isHidden(threadId))
+            .slice(0, query.limit),
+        })),
+      );
 
 /**
  * Hidden items are dropped rather than sent as removals: the client never had

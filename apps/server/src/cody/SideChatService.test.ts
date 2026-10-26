@@ -161,6 +161,7 @@ const makeHarness = (options: {
         }),
       streamDomainEvents: Stream.fromQueue(events),
       readShellSnapshot: unused,
+      listOlderSettledThreads: unused,
       ensureLegacyTranscript: unused,
       searchThread: unused,
       searchThreadStream: () => Stream.empty,
