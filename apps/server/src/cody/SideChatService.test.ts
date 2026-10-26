@@ -25,6 +25,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SideChatService from "./SideChatService.ts";
@@ -213,6 +214,12 @@ const makeHarness = (options: {
       Layer.provideMerge(SideChatStore.layer),
       Layer.provide(Layer.succeed(ThreadManagementService.ThreadManagementService, threads)),
       Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistryV2, registry)),
+      Layer.provide(
+        Layer.succeed(
+          ProjectionStore.ProjectionStoreV2,
+          ProjectionStore.ProjectionStoreV2.of({} as ProjectionStore.ProjectionStoreV2Shape),
+        ),
+      ),
       Layer.provide(IdAllocator.layer),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "cody-side-chat-test-" })),

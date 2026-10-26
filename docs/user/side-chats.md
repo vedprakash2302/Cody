@@ -26,9 +26,18 @@ fork a conversation natively: Codex, Claude, OpenCode, or Pi.
 ## What a side chat sees
 
 A side chat copies the thread's history up to its last finished response. It doesn't see a
-response that is still running, and it doesn't follow the thread afterwards. When the thread has
-finished new work, the side chat says so; choose **New side chat** to start one from the thread's
-latest point.
+response that is still running, and it doesn't follow the thread on its own. When the thread
+finishes new work, the side chat shows how many responses and files changed. Then you can:
+
+- Choose **Catch up** to attach the thread to your next message. The side chat gets the thread's
+  messages and changed files since it last looked. Send the attachment alone to have the side
+  chat summarize what changed. Catch up is also in the side chat's **⋯** menu and in the command
+  palette as **Catch up side chat**.
+- Choose **Start fresh** to start a new side chat from the thread's latest point.
+
+Asking in the side chat about a response it hasn't seen attaches the thread for you. Remove the
+attachment if you don't want it. If the thread was rolled back past what the side chat saw, only
+**Start fresh** is offered.
 
 The side chat works in the same files as the thread. It asks before it edits files or runs
 commands, and it is told not to change anything unless you ask it to.

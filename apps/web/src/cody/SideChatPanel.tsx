@@ -19,7 +19,6 @@ import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-
 import {
   AuthOrchestrationOperateScope,
   ThreadId,
-  type OrchestrationV2ConversationMessage,
   type RunId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -30,6 +29,7 @@ import {
   GitBranchIcon,
   Maximize2Icon,
   MoreHorizontalIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   XIcon,
 } from "lucide-react";
@@ -63,33 +63,17 @@ import { useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { SideChatComposer } from "./SideChatComposer";
-import { useSideChatActions, useSideChatDraftStore, useSideChatOwnTurnItems } from "./sideChats";
+import { SideChatComposer, type SideChatMainNotice } from "./SideChatComposer";
+import {
+  useSideChatActions,
+  useSideChatDraftStore,
+  useSideChatMainView,
+  useSideChatOwnTurnItems,
+} from "./sideChats";
 import { useSideChatRequests } from "./useSideChatRequests";
 
 const NO_MESSAGES: never[] = [];
 const noop = () => {};
-const EXCERPT_LENGTH = 80;
-
-/** Main's answer at the fork point, as one plain line. */
-function forkPointExcerpt(
-  messages: ReadonlyArray<OrchestrationV2ConversationMessage> | undefined,
-  runId: RunId | null,
-): string | null {
-  if (messages === undefined || runId === null) return null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant" || message.runId !== runId) continue;
-    const line = message.text
-      .replace(/[`*_#>]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (line.length === 0) return null;
-    return line.length > EXCERPT_LENGTH ? `${line.slice(0, EXCERPT_LENGTH).trimEnd()}…` : line;
-  }
-  return null;
-}
-
 /**
  * A side chat of `parentRef`, beside it in the right panel. It shows only the
  * side chat's own messages: the history it copied from the parent is in the
@@ -114,12 +98,8 @@ export function SideChatPanel(props: {
     shellExists: shell !== null,
     waitForShell: true,
   });
-  const parentDetailRef = resolveThreadDetailRef(parentRef, {
-    shellExists: parentShell !== null,
-    waitForShell: true,
-  });
   const projection = useThreadProjection(detailRef)?.projection ?? null;
-  const parentProjection = useThreadProjection(parentDetailRef)?.projection ?? null;
+  const mainView = useSideChatMainView(shell?.source.codySideChat === true ? sideRef : null);
   const turnDiffSummaries = useThreadCheckpointSummaries(detailRef);
   const ownItems = useSideChatOwnTurnItems(detailRef);
   const timelineEntries = useIncrementalTimelineEntries(threadKey, {
@@ -211,16 +191,31 @@ export function SideChatPanel(props: {
     );
   }
 
-  const forkedFromRunId = shell.forkedFrom?.type === "run" ? shell.forkedFrom.runId : null;
-  const excerpt = forkPointExcerpt(parentProjection?.messages, forkedFromRunId);
+  const excerpt = mainView?.seenExcerpt ?? null;
   const parentWorking = parentShell !== null && threadRuntimeIsActive(parentShell.runtime);
-  const parentLatestRunId =
-    parentShell?.latestRun?.completedAt != null ? parentShell.latestRun.runId : null;
-  const parentMovedOn =
-    !parentWorking &&
-    parentLatestRunId !== null &&
-    parentLatestRunId !== forkedFromRunId &&
-    dismissedMovedOn !== parentLatestRunId;
+  // Keyed by main's latest response, so a dismissed notice returns with the next one. A
+  // rollback has its own key: it can undo the very response a catch-up dismissed.
+  const noticeKey =
+    mainView?.newRunIds.at(-1) ??
+    (mainView?.wentBack && mainView.seenRunId !== null ? `went-back:${mainView.seenRunId}` : null);
+  const startFresh = () => void runAction("fresh", sideRef);
+  const dismissNotice = () => {
+    if (noticeKey !== null) {
+      useSideChatDraftStore.getState().dismissMovedOn(props.sideChatThreadId, noticeKey);
+    }
+  };
+  const mainNotice: SideChatMainNotice | null =
+    mainView === null || parentWorking || noticeKey === null || dismissedMovedOn === noticeKey
+      ? null
+      : mainView.wentBack
+        ? { kind: "went-back", onStartFresh: startFresh, onDismiss: dismissNotice }
+        : {
+            kind: "moved-on",
+            responses: mainView.newRunIds.length,
+            files: mainView.filesChanged,
+            onStartFresh: startFresh,
+            onDismiss: dismissNotice,
+          };
 
   return (
     <FileMetadataThreadProvider threadRef={sideRef} cwd={cwd} checkpoints={projection?.checkpoints}>
@@ -262,6 +257,20 @@ export function SideChatPanel(props: {
               <MenuItem disabled={!canOperate} onClick={() => void runAction("keep", sideRef)}>
                 <ArrowUpRightIcon className="size-3.5" />
                 Keep as thread
+              </MenuItem>
+              <MenuItem
+                disabled={
+                  !canOperate ||
+                  mainView === null ||
+                  mainView.newRunIds.length === 0 ||
+                  mainView.wentBack
+                }
+                onClick={() =>
+                  useSideChatDraftStore.getState().setMainUpdate(sideRef.threadId, true)
+                }
+              >
+                <RefreshCwIcon className="size-3.5" />
+                Catch up with main
               </MenuItem>
               <MenuItem disabled={!canOperate} onClick={() => void runAction("fresh", sideRef)}>
                 <RotateCcwIcon className="size-3.5" />
@@ -346,17 +355,7 @@ export function SideChatPanel(props: {
             isWorking={isWorking}
             canInterrupt={canInterrupt}
             cwd={cwd}
-            movedOnNotice={
-              parentMovedOn && parentLatestRunId !== null
-                ? {
-                    onStartFresh: () => void runAction("fresh", sideRef),
-                    onDismiss: () =>
-                      useSideChatDraftStore
-                        .getState()
-                        .dismissMovedOn(props.sideChatThreadId, parentLatestRunId),
-                  }
-                : null
-            }
+            mainNotice={mainNotice}
           />
         </div>
       </div>

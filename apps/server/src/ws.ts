@@ -1963,6 +1963,7 @@ export const layerWsRpc = (
         [CODY_SIDE_CHAT_WS_METHODS.open]: (input) => sideChatService.open(input),
         [CODY_SIDE_CHAT_WS_METHODS.close]: (input) => sideChatService.close(input),
         [CODY_SIDE_CHAT_WS_METHODS.promote]: (input) => sideChatService.promote(input),
+        [CODY_SIDE_CHAT_WS_METHODS.mainView]: (input) => sideChatService.mainView(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>

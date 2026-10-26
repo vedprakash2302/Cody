@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  RunId,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadShell,
@@ -10,7 +11,7 @@ import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PrimaryConnectionTarget } from "../connection/model.ts";
-import { openSideChatsOf } from "./codySideChats.ts";
+import { openSideChatsOf, sideChatMainViewSignal } from "./codySideChats.ts";
 import { v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { createEnvironmentThreadShellAtoms } from "./threadShell.ts";
 
@@ -83,5 +84,45 @@ describe("Cody side chats in client state", () => {
       main.id,
     );
     expect(open.map((thread) => thread.id)).toEqual(["newer", "older"]);
+  });
+});
+
+describe("sideChatMainViewSignal", () => {
+  const idle = {
+    latestRunId: RunId.make("run-3"),
+    status: "rolled_back" as const,
+    activeRunId: null,
+    activityRunStatus: null,
+    itemCount: 12,
+  };
+  const working = (runId: string, status: "preparing" | "running", itemCount: number) => ({
+    ...idle,
+    status: "running" as const,
+    activeRunId: RunId.make(runId),
+    activityRunStatus: status,
+    itemCount,
+  });
+
+  it("changes when main rolls back again past an already rolled-back latest run", () => {
+    expect(sideChatMainViewSignal(undefined, { ...idle, itemCount: 8 })).not.toBe(
+      sideChatMainViewSignal(undefined, idle),
+    );
+  });
+
+  it("ignores items main adds while it works", () => {
+    expect(sideChatMainViewSignal(undefined, working("run-4", "running", 20))).toBe(
+      sideChatMainViewSignal(undefined, working("run-4", "running", 21)),
+    );
+  });
+
+  it("follows an earlier queued catch-up as it starts, behind a newer queued run", () => {
+    const signals = [
+      working("side-run-1", "running", 4),
+      working("side-run-2", "preparing", 5),
+      working("side-run-2", "running", 5),
+    ].map((sideChat) =>
+      sideChatMainViewSignal({ ...sideChat, latestRunId: RunId.make("side-run-3") }, undefined),
+    );
+    expect(new Set(signals).size).toBe(3);
   });
 });

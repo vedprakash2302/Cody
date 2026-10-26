@@ -552,6 +552,7 @@ const layerSideChatService = Layer.effectDiscard(
   }),
 ).pipe(
   Layer.provideMerge(SideChatService.layer),
+  Layer.provide(ProjectionStoreV2.layer),
   Layer.provide(IdAllocator.layer),
   Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
 );

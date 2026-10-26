@@ -1,4 +1,4 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   type AtomCommandResult,
@@ -23,16 +23,45 @@ import { ComposerHandleContext } from "../composerHandleContext";
 import { Button } from "../components/ui/button";
 import { toastManager } from "../components/ui/toast";
 import { useEnvironmentSettings } from "../hooks/useSettings";
+import { formatInlineContextReference } from "../lib/composerContextReferences";
+import { threadContextRecord, threadContextReference } from "../lib/composerContextRecords";
 import { newMessageId } from "../lib/utils";
 import { getAppModelOptionsForInstance } from "../modelSelection";
 import { applyProviderInstanceSettings, deriveProviderInstanceEntries } from "../providerInstances";
 import { useEnvironmentProviders } from "../state/environments";
+import { useThreadShell } from "../state/entities";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useSideChatDraftStore } from "./sideChats";
+import { SideChatMainUpdateChip } from "./SideChatMainUpdateChip";
 import type { SideChatRequests } from "./useSideChatRequests";
 
 const noop = () => {};
+
+/** Main moved past what the side chat has seen, by finished responses or a rollback. */
+export type SideChatMainNotice =
+  | {
+      readonly kind: "moved-on";
+      readonly responses: number;
+      readonly files: number;
+      readonly onStartFresh: () => void;
+      readonly onDismiss: () => void;
+    }
+  | {
+      readonly kind: "went-back";
+      readonly onStartFresh: () => void;
+      readonly onDismiss: () => void;
+    };
+
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+function mainNoticeText(notice: SideChatMainNotice): string {
+  if (notice.kind === "went-back") return "Main went back to an earlier response";
+  const responses = `Main has ${plural(notice.responses, "new response", "new responses")}`;
+  return notice.files === 0
+    ? responses
+    : `${responses} · ${plural(notice.files, "file changed", "files changed")}`;
+}
 
 /**
  * The side chat's composer, assembled from the main composer's own surface,
@@ -47,16 +76,19 @@ export function SideChatComposer(props: {
   readonly isWorking: boolean;
   readonly canInterrupt: boolean;
   readonly cwd: string | undefined;
-  readonly movedOnNotice: {
-    readonly onStartFresh: () => void;
-    readonly onDismiss: () => void;
-  } | null;
+  readonly mainNotice: SideChatMainNotice | null;
 }) {
   const { sideRef, shell, requests, canOperate } = props;
   const environmentId = sideRef.environmentId;
   const sideChatId = sideRef.threadId;
+  const parentThreadId = shell.lineage.parentThreadId;
+  const parentRef = parentThreadId === null ? null : scopeThreadRef(environmentId, parentThreadId);
+  const parentShell = useThreadShell(parentRef);
   const draft = useSideChatDraftStore((state) => state.drafts[sideChatId] ?? "");
   const focusRequested = useSideChatDraftStore((state) => state.focusRequest === sideChatId);
+  const mainUpdateAttached = useSideChatDraftStore(
+    (state) => parentRef !== null && state.mainUpdates[sideChatId] === true,
+  );
   const pendingModel = useSideChatDraftStore((state) => state.models[sideChatId] ?? null);
   const settings = useEnvironmentSettings(environmentId);
   const providers = useEnvironmentProviders().get(environmentId);
@@ -94,7 +126,7 @@ export function SideChatComposer(props: {
           : "Type your own answer, or leave this blank to use the selected option"
         : "Ask about this thread";
   const editorDisabled = !canOperate || activeApproval !== null || choiceOnly;
-  const hasSendableContent = progress === null && draft.trim().length > 0;
+  const hasSendableContent = progress === null && (draft.trim().length > 0 || mainUpdateAttached);
   const draftEditable = progress === null && !editorDisabled;
 
   // Decided once requests load, then dropped: a request answered later must
@@ -123,14 +155,34 @@ export function SideChatComposer(props: {
 
   const send = async () => {
     const text = draft.trim();
-    if (text.length === 0 || sending || activeApproval !== null) return;
+    const withMainUpdate = mainUpdateAttached && parentRef !== null;
+    if ((text.length === 0 && !withMainUpdate) || sending || activeApproval !== null) return;
+    const mainRecord = withMainUpdate
+      ? threadContextRecord(parentRef, parentShell?.title ?? "Main")
+      : null;
+    const store = useSideChatDraftStore.getState();
+    const dismissedBefore = store.dismissedMovedOn[sideChatId];
     setSending(true);
     setDraft("");
+    if (withMainUpdate) {
+      store.setMainUpdate(sideChatId, false);
+      // Until the turn starts, the server still counts these responses as new.
+      if (props.mainNotice?.kind === "moved-on") props.mainNotice.onDismiss();
+    }
     const result = await startTurn({
       environmentId,
       input: {
         threadId: sideChatId,
-        message: { messageId: newMessageId(), role: "user", text, attachments: [] },
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text:
+            mainRecord === null
+              ? text
+              : `${formatInlineContextReference(threadContextReference(mainRecord))}\n\n${text}`.trim(),
+          ...(mainRecord === null ? {} : { context: { version: 1, records: [mainRecord] } }),
+          attachments: [],
+        },
         runtimeMode: shell.runtimeMode,
         interactionMode: shell.interactionMode,
         ...(pendingModel === null ? {} : { modelSelection: pendingModel }),
@@ -142,6 +194,10 @@ export function SideChatComposer(props: {
       // Anything typed since sending stays, after the text that failed.
       const typedSince = useSideChatDraftStore.getState().drafts[sideChatId] ?? "";
       setDraft(typedSince.trim().length === 0 ? text : `${text}\n\n${typedSince}`);
+      if (withMainUpdate) {
+        store.setMainUpdate(sideChatId, true);
+        store.dismissMovedOn(sideChatId, dismissedBefore);
+      }
       reportFailure("Couldn't send", result);
       return;
     }
@@ -218,7 +274,8 @@ export function SideChatComposer(props: {
           />
         </ComposerBanner.Root>
       </ComposerBanner.Attachment>
-    ) : props.movedOnNotice !== null ? (
+    ) : props.mainNotice !== null &&
+      (props.mainNotice.kind === "went-back" || !mainUpdateAttached) ? (
       <ComposerBanner.Attachment>
         <ComposerBanner.Root variant="info" density="comfortable">
           <ComposerBanner.Row layout="wrap-actions">
@@ -227,22 +284,29 @@ export function SideChatComposer(props: {
             </ComposerBanner.Icon>
             <ComposerBanner.Content className="whitespace-nowrap">
               <span className="min-w-0 truncate font-medium leading-7 sm:leading-6">
-                Main has moved on since this side chat started
+                {mainNoticeText(props.mainNotice)}
               </span>
             </ComposerBanner.Content>
             <ComposerBanner.Actions>
+              {props.mainNotice.kind === "moved-on" ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!canOperate}
+                  onClick={() => useSideChatDraftStore.getState().setMainUpdate(sideChatId, true)}
+                >
+                  Catch up
+                </Button>
+              ) : null}
               <Button
                 size="xs"
                 variant="outline"
                 disabled={!canOperate}
-                onClick={props.movedOnNotice.onStartFresh}
+                onClick={props.mainNotice.onStartFresh}
               >
                 Start fresh
               </Button>
-              <ComposerBanner.Dismiss
-                aria-label="Dismiss"
-                onClick={props.movedOnNotice.onDismiss}
-              />
+              <ComposerBanner.Dismiss aria-label="Dismiss" onClick={props.mainNotice.onDismiss} />
             </ComposerBanner.Actions>
           </ComposerBanner.Row>
         </ComposerBanner.Root>
@@ -272,6 +336,17 @@ export function SideChatComposer(props: {
                     className="relative px-3 pt-3.5 pb-2 sm:px-4 sm:pt-4"
                   >
                     <div className="relative flow-root font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)">
+                      {mainUpdateAttached && parentRef !== null && progress === null ? (
+                        <div className="mb-1.5">
+                          <SideChatMainUpdateChip
+                            parentRef={parentRef}
+                            onRemove={() => {
+                              useSideChatDraftStore.getState().setMainUpdate(sideChatId, false);
+                              textareaRef.current?.focus();
+                            }}
+                          />
+                        </div>
+                      ) : null}
                       <textarea
                         ref={textareaRef}
                         value={promptValue}

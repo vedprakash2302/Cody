@@ -2,6 +2,7 @@ import {
   CommandId,
   CodySideChatError,
   type CodySideChatCloseResult,
+  type CodySideChatMainView,
   type CodySideChatOpenInput,
   type CodySideChatOpenResult,
   type CodySideChatThreadInput,
@@ -18,9 +19,11 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
+import { readSideChatMainView } from "./sideChatMainUpdate.ts";
 import * as SideChatStore from "./SideChatStore.ts";
 
 const SIDE_CHAT_TITLE_PREFIX = "Side chat · ";
@@ -49,6 +52,10 @@ export class SideChatService extends Context.Service<
     ) => Effect.Effect<CodySideChatCloseResult, CodySideChatError>;
     /** Turns the side chat into an ordinary fork, which every client lists. */
     readonly promote: (input: CodySideChatThreadInput) => Effect.Effect<void, CodySideChatError>;
+    /** What the side chat has seen of its parent, and what the parent finished since. */
+    readonly mainView: (
+      input: CodySideChatThreadInput,
+    ) => Effect.Effect<CodySideChatMainView, CodySideChatError>;
     /** Archives and deletes a parent's side chats with it. */
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
@@ -59,6 +66,7 @@ const make = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const store = yield* SideChatStore.SideChatStore;
+  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
   const crypto = yield* Crypto.Crypto;
   const openLocks = yield* KeyedLock.make<ThreadId>();
 
@@ -79,17 +87,18 @@ const make = Effect.gen(function* () {
         ),
       );
 
-  const sideChatsOf = (parentThreadId: ThreadId) =>
-    Effect.gen(function* () {
-      const shells = yield* Effect.forEach(
-        yield* store.list,
-        (threadId) => threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null)),
-        { concurrency: 8 },
-      );
-      return shells
-        .filter(isLiveShell)
-        .filter((shell) => shell.lineage.parentThreadId === parentThreadId);
-    });
+  const sideChatsOf = Effect.fn("SideChatService.sideChatsOf")(function* (
+    parentThreadId: ThreadId,
+  ) {
+    const shells = yield* Effect.forEach(
+      yield* store.list,
+      (threadId) => threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null)),
+      { concurrency: 8 },
+    );
+    return shells
+      .filter(isLiveShell)
+      .filter((shell) => shell.lineage.parentThreadId === parentThreadId);
+  });
 
   const requireSideChat = (threadId: ThreadId) =>
     store.has(threadId)
@@ -112,43 +121,44 @@ const make = Effect.gen(function* () {
    * Closes one side chat: deleted when nothing was asked yet, otherwise its
    * turn stops and it is archived, so it can be reopened.
    */
-  const closeShell = (shell: OrchestrationV2ThreadShell) =>
-    Effect.gen(function* () {
-      const threadId = shell.id;
-      const fail = (reason: CodySideChatError["reason"], cause?: unknown) =>
-        new CodySideChatError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
-      if (shell.latestRunId === null) {
-        yield* threads
-          .dispatch({
-            type: "thread.delete",
-            commandId: CommandId.make(`cody:side-chat:${threadId}:close-delete`),
-            threadId,
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-        yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
-        return "deleted" as const;
-      }
-      if (shell.activeRunId !== null) {
-        yield* threads
-          .interruptThread({
-            projectId: shell.projectId,
-            commandId: yield* freshCommandId(threadId, "close-interrupt"),
-            threadId,
-            reason: "Side chat closed",
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-      }
-      if (shell.archivedAt === null) {
-        yield* threads
-          .dispatch({
-            type: "thread.archive",
-            commandId: yield* freshCommandId(threadId, "close-archive"),
-            threadId,
-          })
-          .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
-      }
-      return "archived" as const;
-    });
+  const closeShell = Effect.fn("SideChatService.closeShell")(function* (
+    shell: OrchestrationV2ThreadShell,
+  ) {
+    const threadId = shell.id;
+    const fail = (reason: CodySideChatError["reason"], cause?: unknown) =>
+      new CodySideChatError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
+    if (shell.latestRunId === null) {
+      yield* threads
+        .dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make(`cody:side-chat:${threadId}:close-delete`),
+          threadId,
+        })
+        .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+      yield* store.remove(threadId).pipe(Effect.mapError((cause) => fail("store-failed", cause)));
+      return "deleted" as const;
+    }
+    if (shell.activeRunId !== null) {
+      yield* threads
+        .interruptThread({
+          projectId: shell.projectId,
+          commandId: yield* freshCommandId(threadId, "close-interrupt"),
+          threadId,
+          reason: "Side chat closed",
+        })
+        .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+    }
+    if (shell.archivedAt === null) {
+      yield* threads
+        .dispatch({
+          type: "thread.archive",
+          commandId: yield* freshCommandId(threadId, "close-archive"),
+          threadId,
+        })
+        .pipe(Effect.mapError((cause) => fail("dispatch-failed", cause)));
+    }
+    return "archived" as const;
+  });
 
   const open: SideChatService["Service"]["open"] = Effect.fn("SideChatService.open")(
     function* (input) {
@@ -313,8 +323,31 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const followParent = (event: OrchestrationV2DomainEvent) =>
-    Effect.gen(function* () {
+  const mainView: SideChatService["Service"]["mainView"] = Effect.fn("SideChatService.mainView")(
+    function* (input) {
+      const threadId = input.threadId;
+      yield* requireSideChat(threadId);
+      const { thread } = yield* projectionStore
+        .getThreadRecords(threadId, [])
+        .pipe(
+          Effect.mapError(
+            (cause) => new CodySideChatError({ threadId, reason: "thread-not-found", cause }),
+          ),
+        );
+      return yield* readSideChatMainView({
+        projectionStore,
+        thread,
+        catchUps: store.catchUps(threadId),
+      }).pipe(
+        Effect.mapError(
+          (cause) => new CodySideChatError({ threadId, reason: "read-failed", cause }),
+        ),
+      );
+    },
+  );
+
+  const followParent = Effect.fn("SideChatService.followParent")(
+    function* (event: OrchestrationV2DomainEvent) {
       if (event.type !== "thread.archived" && event.type !== "thread.deleted") return;
       if (store.has(event.threadId)) {
         if (event.type === "thread.deleted") yield* store.remove(event.threadId);
@@ -343,14 +376,17 @@ const make = Effect.gen(function* () {
           ),
         { discard: true },
       );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not follow a side chat's parent.", {
-          threadId: event.threadId,
-          cause,
-        }),
+    },
+    (effect, event) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not follow a side chat's parent.", {
+            threadId: event.threadId,
+            cause,
+          }),
+        ),
       ),
-    );
+  );
 
   // Ids whose thread is gone, such as one deleted while the server was down.
   const forgetMissing = Effect.gen(function* () {
@@ -382,7 +418,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return SideChatService.of({ open, close, promote, start });
+  return SideChatService.of({ open, close, promote, mainView, start });
 });
 
 export const layer = Layer.effect(SideChatService, make);

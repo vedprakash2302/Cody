@@ -182,7 +182,7 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   /** Cody: quotes selected assistant text into the thread's side chat. */
-  onAskInSideChat?: ((text: string) => void) | undefined;
+  onAskInSideChat?: ((text: string, messageId: MessageId) => void) | undefined;
   askInSideChatDisabledReason?: string | undefined;
   isWorking: boolean;
   runlessWorkActive?: boolean;

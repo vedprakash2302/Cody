@@ -31,7 +31,7 @@ export function AssistantSelectionToolbar({
   threadRef: ScopedThreadRef;
   onCite: (citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) => boolean;
   /** Cody: quotes the selection into the thread's side chat. */
-  onAskInSideChat?: ((text: string) => void) | undefined;
+  onAskInSideChat?: ((text: string, messageId: MessageId) => void) | undefined;
   askInSideChatDisabledReason?: string | undefined;
 }) {
   const [selection, setSelection] = useState<{
@@ -200,7 +200,7 @@ export function AssistantSelectionToolbar({
       });
       return;
     }
-    onAskInSideChat(selection.citation.text);
+    onAskInSideChat(selection.citation.text, selection.citation.messageId);
     window.getSelection()?.removeAllRanges();
     dismiss();
   };

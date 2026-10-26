@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 
 import { EnvironmentAuthorizationError } from "./auth.ts";
-import { ThreadId } from "./baseSchemas.ts";
+import { NonNegativeInt, RunId, ThreadId } from "./baseSchemas.ts";
 
 /**
  * Cody's side chats: a fork of a thread that opens beside it instead of in the
@@ -13,6 +13,7 @@ export const CODY_SIDE_CHAT_WS_METHODS = {
   open: "cody.sideChat.open",
   close: "cody.sideChat.close",
   promote: "cody.sideChat.promote",
+  mainView: "cody.sideChat.mainView",
 } as const;
 
 /**
@@ -57,6 +58,20 @@ export const CodySideChatCloseResult = Schema.Struct({
 });
 export type CodySideChatCloseResult = typeof CodySideChatCloseResult.Type;
 
+/** What a side chat has seen of its parent, and what the parent finished since. */
+export const CodySideChatMainView = Schema.Struct({
+  /** The newest parent run the side chat has seen, through its fork or a catch-up. */
+  seenRunId: Schema.NullOr(RunId),
+  /** The start of the parent's answer in that run. */
+  seenExcerpt: Schema.NullOr(Schema.String),
+  /** The parent's finished runs since then, oldest first. */
+  newRunIds: Schema.Array(RunId),
+  filesChanged: NonNegativeInt,
+  /** The parent rolled back the run the side chat last saw. */
+  wentBack: Schema.Boolean,
+});
+export type CodySideChatMainView = typeof CodySideChatMainView.Type;
+
 export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
   "CodySideChatError",
   {
@@ -69,6 +84,7 @@ export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
       "provider-unsupported",
       "store-failed",
       "dispatch-failed",
+      "read-failed",
     ]),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -89,6 +105,8 @@ export class CodySideChatError extends Schema.TaggedError<CodySideChatError>()(
         return "Failed to save the side chat list.";
       case "dispatch-failed":
         return "Failed to update the side chat.";
+      case "read-failed":
+        return "Failed to read the side chat.";
     }
   }
 }
@@ -102,6 +120,12 @@ export const CodySideChatOpenRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.open, {
 export const CodySideChatCloseRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.close, {
   payload: CodySideChatThreadInput,
   success: CodySideChatCloseResult,
+  error: Schema.Union([CodySideChatError, EnvironmentAuthorizationError]),
+});
+
+export const CodySideChatMainViewRpc = Rpc.make(CODY_SIDE_CHAT_WS_METHODS.mainView, {
+  payload: CodySideChatThreadInput,
+  success: CodySideChatMainView,
   error: Schema.Union([CodySideChatError, EnvironmentAuthorizationError]),
 });
 
