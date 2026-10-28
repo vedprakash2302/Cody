@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
-import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import {
   Clock3Icon,
@@ -49,11 +48,7 @@ import {
 import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
+import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
@@ -498,7 +493,7 @@ function ScheduledTaskEnvironmentList({
   const states = environments.map((environment) => {
     const index = connectedIds.indexOf(environment.environmentId);
     const query = index < 0 ? null : queries[index]!;
-    const data = query === null ? null : Option.getOrNull(AsyncResult.value(query));
+    const data = query === null ? null : AsyncResult.getOrElse(query, () => null);
     return {
       environment,
       connected: index >= 0,
@@ -1169,12 +1164,10 @@ function ScheduledTaskEditorForm({
   const projectThreads = useThreadShellsForProjectRefs(selectedProjectRefs);
   const threadOptions = scheduledTaskThreadOptions(projectThreads, draft.threadId);
   const selectedThreadTitle = threadOptions.find((option) => option.id === draft.threadId)?.title;
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(
-      deriveProviderInstanceEntries(providers),
-      settings,
-      selectedProject?.id ?? null,
-    ),
+  const instanceEntries = providerInstanceEntriesFor(
+    providers,
+    settings,
+    selectedProject?.id ?? null,
   );
 
   const firstInstance = instanceEntries[0];

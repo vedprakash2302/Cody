@@ -558,6 +558,7 @@ type MessagesTimelineRowContent =
     }
   | {
       kind: "turn-fold";
+      deferredWorkItemIds?: ReadonlyArray<string>;
       id: string;
       createdAt: string;
       runId: RunId;
@@ -566,6 +567,7 @@ type MessagesTimelineRowContent =
     }
   | {
       kind: "attempt-fold";
+      deferredWorkItemIds?: ReadonlyArray<string>;
       id: string;
       createdAt: string;
       runId: RunId;
@@ -756,6 +758,7 @@ interface TurnFold {
 }
 
 interface SupersededAttemptFold {
+  readonly deferredWorkItemIds: ReadonlyArray<string>;
   readonly runId: RunId;
   readonly attemptId: RunAttemptId;
   readonly anchorEntryId: string;
@@ -778,6 +781,18 @@ function completeSupersededReplyEntryIds(
     ) {
       continue;
     }
+    const previous = lastOutputByAttemptId.get(entry.attempt.id);
+    const deferredEnd =
+      previous?.kind === "work"
+        ? previous.entry.projectedItem?.item.deferredWork?.lastOrdinal
+        : undefined;
+    const ordinal =
+      entry.kind === "work"
+        ? entry.entry.projectedItem?.item.ordinal
+        : entry.kind === "message"
+          ? entry.projectedItem?.item.ordinal
+          : undefined;
+    if (deferredEnd !== undefined && ordinal !== undefined && deferredEnd > ordinal) continue;
     lastOutputByAttemptId.set(entry.attempt.id, entry);
   }
   const replyEntryIds = new Set<string>();
@@ -817,6 +832,7 @@ function deriveSupersededAttemptFolds(
       completeAttemptIds.has(entry.attempt.id) ||
       unfoldedRunIds.has(entry.attempt.runId) ||
       (entry.kind === "message" && entry.message.role === "user") ||
+      (entry.kind === "event" && entry.projectedItem.item.type === "handoff") ||
       entry.kind === "html-render" ||
       entry.kind === "mcp-app" ||
       timelineEntryIsPersistentResourceCard(entry) ||
@@ -836,6 +852,11 @@ function deriveSupersededAttemptFolds(
     const attempt = firstEntry?.attempt;
     if (firstEntry === undefined || attempt === undefined) continue;
     foldsByAnchorEntryId.set(firstEntry.id, {
+      deferredWorkItemIds: entries.flatMap((entry) =>
+        entry.kind === "work" && entry.entry.projectedItem?.item.deferredWork
+          ? [String(entry.entry.projectedItem.sourceItemId)]
+          : [],
+      ),
       runId: attempt.runId,
       attemptId: attempt.id,
       anchorEntryId: firstEntry.id,
@@ -1450,6 +1471,9 @@ export function deriveMessagesTimelineRows(input: {
     liveSubagentEntryIds,
     completeSupersededReplyIds,
   );
+  const supersededWorkItemIds = new Set(
+    [...supersededFoldsByAnchorEntryId.values()].flatMap((fold) => fold.deferredWorkItemIds),
+  );
   const activeVisualResponseRunIds = deriveActiveVisualResponseRunIds({
     timelineEntries: timelineEntries,
     unsettledRunId,
@@ -1711,9 +1735,18 @@ export function deriveMessagesTimelineRows(input: {
 
     const turnFold = foldsByAnchorEntryId.get(timelineEntry.id);
     if (turnFold) {
+      const deferredWorkItemIds = timelineEntries.flatMap((entry) =>
+        turnFold.entryIds.has(entry.id) &&
+        entry.kind === "work" &&
+        entry.entry.projectedItem?.item.deferredWork &&
+        !supersededWorkItemIds.has(String(entry.entry.projectedItem.sourceItemId))
+          ? [String(entry.entry.projectedItem.sourceItemId)]
+          : [],
+      );
       nextRows.push({
         kind: "turn-fold",
         id: `turn-fold:${turnFold.runId}`,
+        ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
         label: turnFold.label,
@@ -1729,6 +1762,7 @@ export function deriveMessagesTimelineRows(input: {
     if (supersededFold) {
       nextRows.push({
         kind: "attempt-fold",
+        deferredWorkItemIds: supersededFold.deferredWorkItemIds,
         id: `attempt-fold:${supersededFold.attemptId}`,
         createdAt: supersededFold.createdAt,
         runId: supersededFold.runId,
@@ -2380,14 +2414,18 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
 
+    case "attempt-fold":
     case "turn-fold": {
       const bf = b as typeof a;
-      return a.createdAt === bf.createdAt && a.label === bf.label && a.expanded === bf.expanded;
-    }
-
-    case "attempt-fold": {
-      const bf = b as typeof a;
-      return a.createdAt === bf.createdAt && a.label === bf.label && a.expanded === bf.expanded;
+      const anchors = a.deferredWorkItemIds ?? [];
+      const nextAnchors = bf.deferredWorkItemIds ?? [];
+      return (
+        a.createdAt === bf.createdAt &&
+        a.label === bf.label &&
+        a.expanded === bf.expanded &&
+        anchors.length === nextAnchors.length &&
+        anchors.every((id, index) => id === nextAnchors[index])
+      );
     }
 
     case "context-compaction": {
