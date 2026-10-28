@@ -176,7 +176,6 @@ const makeHarness = (options: {
       getThreadTranscript: unused,
       getThreadSnapshotWindow: unused,
       getProjectThreadRecords: unused,
-      getProjectThread: unused,
       getShellSnapshot: unused,
       listActiveSubagentThreadIds: unused,
       listProjectThreads: unused,

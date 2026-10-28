@@ -11,12 +11,13 @@ import * as SideChatService from "./cody/SideChatService.ts";
 import * as SideChatStore from "./cody/SideChatStore.ts";
 import {
   filterArchivedShellSnapshot,
-  filterArchivedShellStream,
   filterShellStream,
   listVisibleOlderSettledThreads,
   presentThreads,
   sideChatVisibility,
 } from "./cody/sideChatVisibility.ts";
+import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
+import * as PeerLinks from "./peer/PeerLinks.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -33,7 +34,6 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
-import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
   AcpRegistryOperationError,
   CommandId,
@@ -52,7 +52,6 @@ import {
   type DiscoveredLocalServerList,
   type EditorId,
   type FileManagerRevealKind,
-  type OrchestrationClientOrigin,
   type OrchestrationV2Command,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -139,11 +138,9 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
-  archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
   bufferShellLiveStream,
   coalesceShellApplicationEvents,
-  coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
   dedupeShellEnrichment,
   loadOlderSettledThreadsPage,
@@ -159,8 +156,10 @@ import {
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
-import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
-import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
+import {
+  coalesceLiveUpdatedEvents,
+  coalesceThreadLiveStream,
+} from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import {
   buildBoundedThreadStreamSnapshot,
   decideThreadResume,
@@ -201,7 +200,6 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -253,6 +251,7 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as TriageService from "./triage/TriageService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -262,6 +261,7 @@ import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReact
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -658,23 +658,6 @@ function shouldUseBoundedThreadSnapshot(input: {
   return input.acceptBoundedSnapshot === true;
 }
 
-function readClientConnectionOrigin(
-  request: HttpServerRequest.HttpServerRequest,
-): OrchestrationClientOrigin {
-  const url = HttpServerRequest.toURL(request);
-  if (Option.isNone(url)) {
-    return {};
-  }
-  const surface = url.value.searchParams.get("clientSurface");
-  const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
-  return {
-    ...(isClientSurface(surface) ? { surface } : {}),
-    ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
-      ? { appVersion }
-      : {}),
-  };
-}
-
 // Keep telemetry per socket; several client types can connect simultaneously.
 function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
   const url = HttpServerRequest.toURL(request);
@@ -981,7 +964,9 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
         if (shell !== null) return yield* snapshotThenLive();
       }
-      const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+      const replay = coalesceLiveUpdatedEvents(
+        yield* loadReplayThrough(input.afterSequence, highWater),
+      );
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
@@ -1246,9 +1231,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
 export const layerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
-  clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
-  previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   codyClientFeatures: { readonly sideChats: boolean },
 ) =>
@@ -1313,6 +1296,10 @@ export const layerWsRpc = (
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const crypto = yield* Crypto.Crypto;
+      // RPC client ids are only unique within one socket; terminals share viewers across sockets.
+      const terminalViewerPrefix = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const terminalViewerId = (metadata: { readonly client: { readonly id: number } }) =>
+        `${terminalViewerPrefix}:${metadata.client.id}`;
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4().pipe(
           Effect.orDie,
@@ -1365,6 +1352,8 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const peerLinks = yield* PeerLinks.PeerLinks;
+      const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -1390,10 +1379,12 @@ export const layerWsRpc = (
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const sourceControlSignIn = yield* SourceControlSignIn.SourceControlSignIn;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
+      const triage = yield* TriageService.TriageService;
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -1881,42 +1872,6 @@ export const layerWsRpc = (
         },
       );
 
-      const subscribeOrchestrationV2ArchivedShell = Effect.fn(
-        "ws.orchestrationV2.subscribeArchivedShell",
-      )(function* () {
-        const snapshot = yield* getOrchestrationV2ArchivedShellSnapshot;
-        const live = threadManagement
-          .streamStoredEventsFrom({ afterSequence: snapshot.snapshotSequence })
-          .pipe(
-            Stream.groupedWithin(512, Duration.millis(50)),
-            Stream.mapEffect((events) =>
-              Effect.forEach(
-                coalesceStoredThreadEvents(Array.from(events)),
-                (stored) =>
-                  threadManagement
-                    .getThreadShell(stored.event.threadId)
-                    .pipe(
-                      Effect.map((shell) =>
-                        archivedShellStreamItemFromThreadShell({ stored, shell }),
-                      ),
-                    ),
-                { concurrency: 8 },
-              ),
-            ),
-            Stream.flatMap(Stream.fromIterable),
-            Stream.filterMap((item) => (item === null ? Result.failVoid : Result.succeed(item))),
-            (stream) => bufferLiveStream(stream),
-            Stream.mapError(
-              (cause) =>
-                new OrchestrationV2GetShellSnapshotError({
-                  message: "Failed while streaming archived threads",
-                  cause,
-                }),
-            ),
-          );
-        return Stream.concat(rpcInitialItems([{ kind: "snapshot" as const, snapshot }]), live);
-      });
-
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         const result = yield* projectMutationOperation(projectService, mutation);
         if (mutation.type === "project.delete")
@@ -2209,10 +2164,6 @@ export const layerWsRpc = (
                 ),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: (_input) =>
-          Stream.unwrap(subscribeOrchestrationV2ArchivedShell()).pipe(
-            filterArchivedShellStream(threadVisibility),
-          ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input) =>
           Stream.unwrap(subscribeOrchestrationV2Shell(input)).pipe(
             filterShellStream(threadVisibility),
@@ -2229,8 +2180,6 @@ export const layerWsRpc = (
               Effect.as(commandOutputHub.subscribe(input)),
             ),
           ),
-        [WS_METHODS.scheduledTasksList]: (_input) =>
-          scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
           scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) => scheduledTasks.upsert(input),
@@ -2558,7 +2507,6 @@ export const layerWsRpc = (
         [WS_METHODS.chatGptImportProfile]: (input) => providerAuth.importProfile(input),
         [WS_METHODS.chatGptHandoffSubscribe]: (input) =>
           subscribeChatGptHandoff(input, currentSessionId),
-        [WS_METHODS.codexAuthCallbackSubscribe]: (input) => subscribeCodexAuthCallback(input),
         [WS_METHODS.providerAuthCancel]: (input) => providerAuth.cancel(input, currentSessionId),
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
         [WS_METHODS.providerAuthSubscribe]: (input) =>
@@ -2587,8 +2535,15 @@ export const layerWsRpc = (
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
-        [WS_METHODS.serverGetSettings]: (_input) =>
-          serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+        [WS_METHODS.peerLinksList]: (_input) =>
+          peerLinks.list.pipe(Effect.map((links) => ({ links }))),
+        [WS_METHODS.peerLinksLink]: (input) => peerLinks.link(input),
+        [WS_METHODS.peerLinksUnlink]: ({ environmentId }) =>
+          peerLinks.unlink(environmentId).pipe(Effect.map((removed) => ({ removed }))),
+        [WS_METHODS.peerLinksAnswerRequest]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(peerLinkRequests.answer(input)),
+          ),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
@@ -2619,6 +2574,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
+        [WS_METHODS.serverPrepareTriage]: (input) => triage.prepare(input),
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
@@ -2634,9 +2590,6 @@ export const layerWsRpc = (
               ),
             ),
           ),
-        [WS_METHODS.serverReportHostPowerState]: (input) =>
-          backgroundPolicy.reportHostPowerState(input),
-        [WS_METHODS.serverGetBackgroundPolicy]: (_input) => backgroundPolicy.snapshot,
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) => relayClient.resolve,
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>((queue) =>
@@ -2762,6 +2715,10 @@ export const layerWsRpc = (
           sourceControlRepositories.lookupRepository(input),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           sourceControlRepositories.cloneRepository(input),
+        [WS_METHODS.sourceControlSignInStart]: (input) => sourceControlSignIn.start(input),
+        [WS_METHODS.sourceControlSignInWait]: (input) => sourceControlSignIn.wait(input),
+        [WS_METHODS.sourceControlSignInCancel]: (input) => sourceControlSignIn.cancel(input),
+        [WS_METHODS.sourceControlAppAccess]: (input) => sourceControlSignIn.access(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           projectCloneTracker.start(input, {
             createProject: (project) =>
@@ -3084,17 +3041,12 @@ export const layerWsRpc = (
         [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
         [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
         [WS_METHODS.terminalOpen]: (input) => terminalManager.open(input),
-        [WS_METHODS.terminalAttach]: (input) =>
-          terminalOutputStream(
-            (listener, registerCleanup) =>
-              terminalManager.attachStream(input, listener, registerCleanup),
-            (listener, registerCleanup) =>
-              terminalManager.resyncStream(input, listener, registerCleanup),
-          ),
+        [WS_METHODS.terminalAttach]: (input, metadata) =>
+          terminalManager.attachOutputStream(input, terminalViewerId(metadata)),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
-        [WS_METHODS.terminalResize]: (input) => terminalManager.resize(input),
+        [WS_METHODS.terminalResize]: (input, metadata) =>
+          terminalManager.resize(input, terminalViewerId(metadata)),
         [WS_METHODS.terminalClear]: (input) => terminalManager.clear(input),
-        [WS_METHODS.terminalRestart]: (input) => terminalManager.restart(input),
         [WS_METHODS.terminalClose]: (input) => terminalManager.close(input),
         [WS_METHODS.terminalObserve]: (input) =>
           terminalOutputStream(
@@ -3103,8 +3055,6 @@ export const layerWsRpc = (
             (listener, registerCleanup) =>
               terminalManager.resyncStream(input, listener, registerCleanup),
           ),
-        [WS_METHODS.subscribeTerminalEvents]: (_input) =>
-          terminalOutputStream(terminalManager.subscribe),
         [WS_METHODS.subscribeTerminalMetadata]: (_input) =>
           Stream.callback<TerminalMetadataStreamEvent>((queue) =>
             Effect.acquireRelease(
@@ -3113,10 +3063,8 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.previewOpen]: (input) => previewManager.open(input),
-        [WS_METHODS.previewNavigate]: (input) => previewManager.navigate(input),
         [WS_METHODS.previewResize]: (input) => previewManager.resize(input),
         [WS_METHODS.previewAdjust]: (input) => previewManager.adjust(input),
-        [WS_METHODS.previewRefresh]: (input) => previewManager.refresh(input),
         [WS_METHODS.previewClose]: (input) => previewManager.close(input),
         [WS_METHODS.previewList]: (input) => previewManager.list(input),
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
@@ -3146,6 +3094,7 @@ export const layerWsRpc = (
         [WS_METHODS.deviceDetail]: (input) => deviceService.detail(input),
         [WS_METHODS.deviceAction]: (input) => deviceService.action(input),
         [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
+        [WS_METHODS.previewStopLocalServer]: (input) => portDiscovery.stopServer(input),
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           Stream.callback<DiscoveredLocalServerList>((queue) =>
             Effect.gen(function* () {
@@ -3327,12 +3276,6 @@ export const layerWsRpc = (
               );
             }),
           ),
-        [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
-          Stream.unwrap(
-            Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>
-              Stream.concat(Stream.make(latest), changes),
-            ),
-          ),
         [WS_METHODS.subscribeResourceTelemetry]: (_input) =>
           Stream.unwrap(
             Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
@@ -3358,11 +3301,12 @@ export const WS_RPC_SERVER_OPTIONS = {
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
-    const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
+    const peerLinks = yield* PeerLinks.PeerLinks;
+    const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3394,14 +3338,10 @@ export const layer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         const codyClientFeatures = readCodyClientFeatures(
-          Option.getOrUndefined(HttpServerRequest.toURL(request))?.searchParams.get(
-            CODY_CLIENT_FEATURES_PARAM,
-          ),
+          requestUrl.value.searchParams.get(CODY_CLIENT_FEATURES_PARAM),
         );
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.recordOwners(readClientOwners(request), "client");
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
@@ -3432,14 +3372,7 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(
-              session,
-              clientOrigin,
-              clientAnalyticsProps,
-              previewAutomationBroker,
-              serverBrowser,
-              codyClientFeatures,
-            ).pipe(
+            layerWsRpc(session, clientAnalyticsProps, serverBrowser, codyClientFeatures).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
@@ -3456,6 +3389,8 @@ export const layer = Layer.unwrap(
                   reviewGuides,
                 ),
               ),
+              Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+              Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

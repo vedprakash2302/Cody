@@ -1,6 +1,5 @@
 import type {
   OrchestrationV2ArchivedShellSnapshot,
-  OrchestrationV2ArchivedShellStreamItem,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2ThreadShell,
@@ -100,22 +99,6 @@ const filterShellStreamItem = (
   }
 };
 
-const filterArchivedShellStreamItem = (
-  item: OrchestrationV2ArchivedShellStreamItem,
-  visibility: ThreadVisibility,
-): OrchestrationV2ArchivedShellStreamItem | undefined => {
-  switch (item.kind) {
-    case "snapshot":
-      return { ...item, snapshot: filterArchivedShellSnapshot(item.snapshot, visibility) };
-    case "thread.updated":
-      return visibility.isHidden(item.thread.id)
-        ? undefined
-        : { ...item, thread: visibility.present(item.thread) };
-    case "thread.removed":
-      return visibility.isHidden(item.threadId) ? undefined : item;
-  }
-};
-
 const isDefined = <A>(value: A | undefined): value is A => value !== undefined;
 
 export const filterShellStream =
@@ -123,13 +106,5 @@ export const filterShellStream =
   <E, R>(stream: Stream.Stream<OrchestrationV2ShellStreamItem, E, R>) =>
     stream.pipe(
       Stream.map((item) => filterShellStreamItem(item, visibility)),
-      Stream.filter(isDefined),
-    );
-
-export const filterArchivedShellStream =
-  (visibility: ThreadVisibility) =>
-  <E, R>(stream: Stream.Stream<OrchestrationV2ArchivedShellStreamItem, E, R>) =>
-    stream.pipe(
-      Stream.map((item) => filterArchivedShellStreamItem(item, visibility)),
       Stream.filter(isDefined),
     );

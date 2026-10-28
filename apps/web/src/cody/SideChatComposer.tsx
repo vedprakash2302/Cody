@@ -6,14 +6,13 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { RuntimeMode, ScopedThreadRef } from "@t3tools/contracts";
+import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import { createModelSelection } from "@t3tools/shared/model";
-import { GitBranchIcon, ShieldIcon } from "lucide-react";
+import { GitBranchIcon } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { ComposerFooterModeControls } from "../components/chat/ComposerFooterControls";
 import { ComposerBanner } from "../components/chat/ComposerBanner";
-import { ComposerPendingApprovalActions } from "../components/chat/ComposerPendingApprovalActions";
-import { ComposerPendingApprovalPanel } from "../components/chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "../components/chat/ComposerPendingUserInputPanel";
 import { ComposerPrimaryActions } from "../components/chat/ComposerPrimaryActions";
 import { ComposerSurface } from "../components/chat/ComposerSurface";
@@ -24,7 +23,7 @@ import { Button } from "../components/ui/button";
 import { toastManager } from "../components/ui/toast";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { formatInlineContextReference } from "../lib/composerContextReferences";
-import { threadContextRecord, threadContextReference } from "../lib/composerContextRecords";
+import { threadContextReference } from "../lib/composerContextRecords";
 import { newMessageId } from "../lib/utils";
 import { getAppModelOptionsForInstance } from "../modelSelection";
 import { applyProviderInstanceSettings, deriveProviderInstanceEntries } from "../providerInstances";
@@ -120,7 +119,7 @@ export function SideChatComposer(props: {
 
   // Decided once requests load, then dropped: a request answered later must
   // not pull focus from wherever the user went meanwhile.
-  // oxlint-disable-next-line t3code/react-effect-budget -- moves DOM focus once requests load
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves DOM focus once requests load
   useEffect(() => {
     if (!focusRequested || !requests.loaded) return;
     useSideChatDraftStore.getState().clearFocusRequest(sideChatId);
@@ -218,34 +217,9 @@ export function SideChatComposer(props: {
     if (result._tag === "Failure") reportFailure("Couldn't change the mode", result);
   };
 
+  // Approvals wait on their timeline row, as in the main thread.
   const banner =
-    activeApproval !== null ? (
-      <ComposerBanner.Attachment>
-        <ComposerBanner.Root variant="warning" density="spacious">
-          <ComposerBanner.Row layout="approval">
-            <ComposerBanner.Icon>
-              <ShieldIcon />
-            </ComposerBanner.Icon>
-            <ComposerBanner.Content>
-              <ComposerPendingApprovalPanel
-                approval={activeApproval}
-                pendingCount={requests.pendingApprovals.length}
-              />
-            </ComposerBanner.Content>
-            <ComposerBanner.Actions>
-              <ComposerPendingApprovalActions
-                requestId={activeApproval.requestId}
-                disabled={!canOperate}
-                isResponding={requests.respondingRequestIds.includes(activeApproval.requestId)}
-                options={activeApproval.options}
-                canRespond={activeApproval.responseCapability === "live"}
-                onRespondToApproval={requests.respondToApproval}
-              />
-            </ComposerBanner.Actions>
-          </ComposerBanner.Row>
-        </ComposerBanner.Root>
-      </ComposerBanner.Attachment>
-    ) : activeUserInput !== null && progress !== null ? (
+    activeUserInput !== null && progress !== null ? (
       <ComposerBanner.Attachment>
         <ComposerBanner.Root variant="info">
           <ComposerPendingUserInputPanel
@@ -428,7 +402,6 @@ export function SideChatComposer(props: {
                         sendDisabledReason={
                           activeApproval !== null ? "Resolve the approval request first" : null
                         }
-                        isConnecting={false}
                         isEnvironmentUnavailable={false}
                         isPreparingWorktree={false}
                         hasSendableContent={hasSendableContent}

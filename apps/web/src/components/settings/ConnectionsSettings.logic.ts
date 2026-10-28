@@ -5,7 +5,7 @@ import {
   resolveHostedPairingUrl,
   resolveOriginPairingUrl,
 } from "./pairingUrls";
-import { getPairingTokenFromUrl } from "../../pairingUrl";
+import { getPairingTokenFromUrl } from "@t3tools/shared/remote";
 import { readHostedPairingRequest } from "../../hostedPairing";
 import {
   type ServerClientSessionRecord,

@@ -9,7 +9,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  deriveLatestThreadRun,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
@@ -46,7 +45,6 @@ import {
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
   derivePhase,
-  isLatestRunSettled,
 } from "../session-logic";
 import {
   resolveThreadDetailRef,
@@ -138,7 +136,6 @@ export function SideChatPanel(props: {
     reportFailure: false,
   });
 
-  const latestRun = projection === null ? null : deriveLatestThreadRun(projection);
   const activityRun = projection === null ? null : deriveThreadActivityRun(projection);
   const runtime = projection === null ? null : deriveThreadRuntime(projection);
   const runlessWorkStartedAt = projection === null ? null : deriveRunlessWorkStartedAt(projection);
@@ -325,9 +322,12 @@ export function SideChatPanel(props: {
             </div>
           ) : (
             <MessagesTimeline
+              pendingApprovals={requests.pendingApprovals}
+              respondingRequestIds={requests.respondingRequestIds}
+              onRespondToApproval={requests.respondToApproval}
+              canOperateThread={canOperate}
               isWorking={isWorking}
               runlessWorkActive={runlessWorkStartedAt !== null}
-              activeTurnInProgress={isWorking || !isLatestRunSettled(latestRun, runtime)}
               awaitingUser={
                 requests.activeApproval !== null
                   ? "approval"

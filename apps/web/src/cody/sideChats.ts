@@ -37,7 +37,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { getClientSettings } from "../hooks/useSettings";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { threadContextRecord } from "../lib/composerContextRecords";
+import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import { dispatchSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { newMessageId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
