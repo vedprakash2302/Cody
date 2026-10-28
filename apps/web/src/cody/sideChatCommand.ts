@@ -76,22 +76,6 @@ export function parseSideChatCommand(text: string): string | null {
 }
 
 /**
- * The side chat draft after quoting `selection` into it, ending on an empty
- * line for the question. The quote carries the text itself because the side
- * chat may have forked before the turn it came from.
- */
-export function appendSideChatQuote(draft: string, selection: string): string {
-  const quote = selection
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => (line.trim().length === 0 ? ">" : `> ${line}`))
-    .join("\n");
-  if (quote === ">") return draft;
-  const before = draft.trimEnd();
-  return before.length === 0 ? `${quote}\n\n` : `${before}\n\n${quote}\n\n`;
-}
-
-/**
  * The side chat question a composer send carries instead of a turn, or null
  * when the send goes to the thread. Attachments, contexts, and preview
  * annotations always go to the thread.

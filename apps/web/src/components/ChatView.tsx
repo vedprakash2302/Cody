@@ -805,8 +805,8 @@ export default function ChatView(props: ChatViewProps) {
           : { sideChatDisabledReason: sideChatEntry.startNewDisabledReason }),
       }
     : {};
-  const askInSideChatStable = useStableCallback((text: string, messageId: MessageId) => {
-    void sideChatEntry.open({ quote: text, quoteMessageId: messageId });
+  const askInSideChatStable = useStableCallback((citation: AssistantCitation) => {
+    void sideChatEntry.open({ quote: citation });
   });
   const hasHeldQueuedRuns =
     isServerThread &&

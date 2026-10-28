@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ConversationMessage,
   ThreadId,
 } from "@t3tools/contracts";
+import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import {
   projectComposerContextForProvider,
   replaceComposerContextReferences,
@@ -32,15 +33,21 @@ export const sideChatProviderText = Effect.fn("SideChat.providerText")(function*
   const parentThreadId = thread.lineage.parentThreadId;
   const record = parentThreadId === null ? null : mainUpdateRecord(message, parentThreadId);
   if (record === null) {
-    return withSideChatRules(projectComposerContextForProvider({ text: message.text, records }));
+    return withSideChatRules(
+      expandAssistantCitationsForProvider(
+        projectComposerContextForProvider({ text: message.text, records }),
+      ),
+    );
   }
 
-  const question = projectComposerContextForProvider({
-    text: replaceComposerContextReferences(message.text, (occurrence) =>
-      occurrence.contextId === record.contextId ? "" : occurrence.source,
-    ).trim(),
-    records: records.filter((candidate) => candidate.contextId !== record.contextId),
-  }).trim();
+  const question = expandAssistantCitationsForProvider(
+    projectComposerContextForProvider({
+      text: replaceComposerContextReferences(message.text, (occurrence) =>
+        occurrence.contextId === record.contextId ? "" : occurrence.source,
+      ).trim(),
+      records: records.filter((candidate) => candidate.contextId !== record.contextId),
+    }).trim(),
+  );
   // A retried start must not count its own earlier attempt as seen.
   const state = yield* readSideChatMainState({
     projectionStore,

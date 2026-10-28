@@ -11,6 +11,7 @@ import {
   ThreadId,
   type ThreadContextRecord,
 } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import {
   formatComposerContextReference,
   toKindScopedComposerContextId,
@@ -188,6 +189,30 @@ describe("sideChatProviderText", () => {
       });
       assert.strictEqual(text, `${SIDE_CHAT_RULES}\n\nwhy?`);
       assert.deepEqual(recorded, []);
+
+      const quote = serializeAssistantCitation({
+        version: 1,
+        environmentId: EnvironmentId.make("env"),
+        threadId: MAIN,
+        messageId: MessageId.make("m1"),
+        text: "retry 3 times",
+        start: 0,
+        end: 13,
+        prefix: "",
+        suffix: "",
+      });
+      for (const withMain of [false, true]) {
+        const quoted = yield* sideChatProviderText({
+          projectionStore: makeStore([]),
+          sideChats,
+          thread: sideChatThread,
+          message: withMain
+            ? message("s2", "user", `${chip} ${quote}\n\nwhy?`, null, withChip)
+            : message("s2", "user", `${quote}\n\nwhy?`, null),
+        });
+        assert.notInclude(quoted, "t3-citation:");
+        assert.include(quoted, '"text": "retry 3 times"');
+      }
     }),
   );
 

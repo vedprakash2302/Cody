@@ -37,6 +37,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { getClientSettings } from "../hooks/useSettings";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import { dispatchSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { newMessageId } from "../lib/utils";
@@ -60,7 +61,7 @@ import { useEnvironmentQuerySelector } from "../state/query";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { appendSideChatQuote, sideChatTitleSeed, type SideChatSentUpdate } from "./sideChatCommand";
+import { sideChatTitleSeed, type SideChatSentUpdate } from "./sideChatCommand";
 import { messageRunId } from "./messageRunId";
 
 export const codySideChats = createCodySideChatAtoms({
@@ -131,6 +132,8 @@ export interface SideChatQuestionDraft {
 /** Unsent side chat text and answers, kept while the panel shows another tab. */
 export const useSideChatDraftStore = create<{
   readonly drafts: Readonly<Record<string, string>>;
+  /** Thread text quoted into the side chat's next message, shown as chips. */
+  readonly quotes: Readonly<Record<string, ReadonlyArray<AssistantCitation>>>;
   /** A model picked in the side chat that its next message switches to. */
   readonly models: Readonly<Record<string, ModelSelection>>;
   /**
@@ -149,7 +152,8 @@ export const useSideChatDraftStore = create<{
   readonly renameRequest: string | null;
   readonly setDraft: (sideChatThreadId: string, text: string) => void;
   readonly appendDraft: (sideChatThreadId: string, text: string) => void;
-  readonly appendQuote: (sideChatThreadId: string, selection: string) => void;
+  readonly addQuote: (sideChatThreadId: string, citation: AssistantCitation) => void;
+  readonly setQuotes: (sideChatThreadId: string, quotes: ReadonlyArray<AssistantCitation>) => void;
   readonly clearFocusRequest: (sideChatThreadId: string) => void;
   readonly setRenameRequest: (sideChatThreadId: string | null) => void;
   readonly setModel: (sideChatThreadId: string, model: ModelSelection | null) => void;
@@ -162,6 +166,7 @@ export const useSideChatDraftStore = create<{
   ) => void;
 }>((set) => ({
   drafts: {},
+  quotes: {},
   models: {},
   dismissedMovedOn: {},
   sentUpdates: {},
@@ -180,14 +185,22 @@ export const useSideChatDraftStore = create<{
         },
       };
     }),
-  appendQuote: (sideChatThreadId, selection) =>
-    set((state) => ({
-      drafts: {
-        ...state.drafts,
-        [sideChatThreadId]: appendSideChatQuote(state.drafts[sideChatThreadId] ?? "", selection),
-      },
-      focusRequest: sideChatThreadId,
-    })),
+  addQuote: (sideChatThreadId, citation) =>
+    set((state) => {
+      const current = state.quotes[sideChatThreadId] ?? [];
+      const key = serializeAssistantCitation(citation);
+      return {
+        quotes: current.some((quote) => serializeAssistantCitation(quote) === key)
+          ? state.quotes
+          : { ...state.quotes, [sideChatThreadId]: [...current, citation] },
+        focusRequest: sideChatThreadId,
+      };
+    }),
+  setQuotes: (sideChatThreadId, quotes) =>
+    set((state) => {
+      const { [sideChatThreadId]: _previous, ...rest } = state.quotes;
+      return { quotes: quotes.length === 0 ? rest : { ...rest, [sideChatThreadId]: quotes } };
+    }),
   clearFocusRequest: (sideChatThreadId) =>
     set((state) => (state.focusRequest === sideChatThreadId ? { focusRequest: null } : state)),
   setRenameRequest: (sideChatThreadId) => set({ renameRequest: sideChatThreadId }),
@@ -240,10 +253,11 @@ export function useOpenSideChat() {
   return async (
     parent: ScopedThreadRef,
     options?: {
-      /** Selected text to quote into the composer, which then takes focus. */
-      readonly quote?: string;
-      /** The thread message the quote came from; one the side chat hasn't seen brings back the thread's update. */
-      readonly quoteMessageId?: MessageId;
+      /**
+       * Selected thread text to quote into the composer, which then takes focus.
+       * A quote from a response the side chat hasn't seen brings back the thread's update.
+       */
+      readonly quote?: AssistantCitation;
       readonly send?: string;
       /** Starts a new side chat from the parent's latest response. */
       readonly fresh?: boolean;
@@ -288,13 +302,11 @@ export function useOpenSideChat() {
         return null;
       }
     }
-    if (options?.quote !== undefined && options.quote.trim().length > 0) {
+    if (options?.quote !== undefined) {
       // Decided before the quote shows, so the question can't go without the thread's update.
-      const unseen =
-        options.quoteMessageId !== undefined &&
-        (await isUnseenByMain(parent, sideChatRef, options.quoteMessageId));
+      const unseen = await isUnseenByMain(parent, sideChatRef, options.quote.messageId);
       const drafts = useSideChatDraftStore.getState();
-      drafts.appendQuote(sideChatRef.threadId, options.quote);
+      drafts.addQuote(sideChatRef.threadId, options.quote);
       if (unseen) drafts.dismissMovedOn(sideChatRef.threadId, undefined);
     }
     useRightPanelStore.getState().openSideChat(parent, sideChatRef.threadId);

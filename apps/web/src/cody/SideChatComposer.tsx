@@ -5,8 +5,9 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { RuntimeMode, ScopedThreadRef } from "@t3tools/contracts";
+import type { AssistantCitation, RuntimeMode, ScopedThreadRef } from "@t3tools/contracts";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { createModelSelection } from "@t3tools/shared/model";
 import { GitBranchIcon } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -34,6 +35,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { sideChatTitleSeed } from "./sideChatCommand";
 import { useSideChatDraftStore } from "./sideChats";
 import { SideChatMainUpdateChip } from "./SideChatMainUpdateChip";
+import { SideChatQuoteChip } from "./SideChatQuoteChip";
 import type { SideChatRequests } from "./useSideChatRequests";
 
 const noop = () => {};
@@ -56,6 +58,8 @@ export interface SideChatWentBack {
  * banners, pickers and send button so it reads as the same control. Models
  * stay within the parent's provider instance, which holds the forked session.
  */
+const NO_QUOTES: ReadonlyArray<AssistantCitation> = [];
+
 export function SideChatComposer(props: {
   readonly sideRef: ScopedThreadRef;
   readonly shell: EnvironmentThreadShell;
@@ -75,6 +79,7 @@ export function SideChatComposer(props: {
   const parentRef = parentThreadId === null ? null : scopeThreadRef(environmentId, parentThreadId);
   const parentShell = useThreadShell(parentRef);
   const draft = useSideChatDraftStore((state) => state.drafts[sideChatId] ?? "");
+  const quotes = useSideChatDraftStore((state) => state.quotes[sideChatId] ?? NO_QUOTES);
   const focusRequested = useSideChatDraftStore((state) => state.focusRequest === sideChatId);
   const mainUpdate = parentRef === null ? null : props.mainUpdate;
   const pendingModel = useSideChatDraftStore((state) => state.models[sideChatId] ?? null);
@@ -114,7 +119,8 @@ export function SideChatComposer(props: {
           : "Type your own answer, or leave this blank to use the selected option"
         : "Ask about this thread";
   const editorDisabled = !canOperate || activeApproval !== null || choiceOnly;
-  const hasSendableContent = progress === null && (draft.trim().length > 0 || mainUpdate !== null);
+  const hasSendableContent =
+    progress === null && (draft.trim().length > 0 || quotes.length > 0 || mainUpdate !== null);
   const draftEditable = progress === null && !editorDisabled;
 
   // Decided once requests load, then dropped: a request answered later must
@@ -144,8 +150,18 @@ export function SideChatComposer(props: {
 
   const send = async () => {
     const text = draft.trim();
+    const sentQuotes = quotes;
     const sentUpdate = parentRef === null ? null : mainUpdate;
-    if ((text.length === 0 && sentUpdate === null) || sending || activeApproval !== null) return;
+    if (
+      (text.length === 0 && sentQuotes.length === 0 && sentUpdate === null) ||
+      sending ||
+      activeApproval !== null
+    ) {
+      return;
+    }
+    const body = [sentQuotes.map(serializeAssistantCitation).join(" "), text]
+      .filter((part) => part.length > 0)
+      .join("\n\n");
     const mainRecord =
       sentUpdate === null || parentRef === null
         ? null
@@ -154,6 +170,7 @@ export function SideChatComposer(props: {
     const messageId = newMessageId();
     setSending(true);
     setDraft("");
+    store.setQuotes(sideChatId, []);
     // Until the provider takes the turn, the server still counts these responses as new.
     if (sentUpdate !== null) store.setSentUpdate(sideChatId, { key: sentUpdate.key, messageId });
     const result = await startTurn({
@@ -165,12 +182,15 @@ export function SideChatComposer(props: {
           role: "user",
           text:
             mainRecord === null
-              ? text
-              : `${formatInlineContextReference(threadContextReference(mainRecord))}\n\n${text}`.trim(),
+              ? body
+              : `${formatInlineContextReference(threadContextReference(mainRecord))}\n\n${body}`.trim(),
           ...(mainRecord === null ? {} : { context: { version: 1, records: [mainRecord] } }),
           attachments: [],
         },
-        ...sideChatTitleSeed(shell.title, text),
+        ...sideChatTitleSeed(
+          shell.title,
+          text.length > 0 ? text : sentQuotes.map((quote) => quote.text).join("\n"),
+        ),
         runtimeMode: shell.runtimeMode,
         interactionMode: shell.interactionMode,
         ...(pendingModel === null ? {} : { modelSelection: pendingModel }),
@@ -183,6 +203,8 @@ export function SideChatComposer(props: {
       // Anything typed since sending stays, after the text that failed.
       const typedSince = useSideChatDraftStore.getState().drafts[sideChatId] ?? "";
       setDraft(typedSince.trim().length === 0 ? text : `${text}\n\n${typedSince}`);
+      const quotedSince = useSideChatDraftStore.getState().quotes[sideChatId] ?? [];
+      store.setQuotes(sideChatId, [...sentQuotes, ...quotedSince]);
       if (useSideChatDraftStore.getState().sentUpdates[sideChatId]?.messageId === messageId) {
         store.setSentUpdate(sideChatId, null);
       }
@@ -288,19 +310,35 @@ export function SideChatComposer(props: {
                     className="relative px-3 pt-3.5 pb-2 sm:px-4 sm:pt-4"
                   >
                     <div className="relative flow-root font-(family-name:--font-composer,var(--font-sans)) text-(length:--font-size-prompt,var(--text-sm)) max-sm:pointer-coarse:text-(length:--font-size-prompt-touch)">
-                      {mainUpdate !== null && parentRef !== null && progress === null ? (
-                        <div className="mb-1.5">
-                          <SideChatMainUpdateChip
-                            parentRef={parentRef}
-                            responses={mainUpdate.responses}
-                            files={mainUpdate.files}
-                            onRemove={() => {
-                              useSideChatDraftStore
-                                .getState()
-                                .dismissMovedOn(sideChatId, mainUpdate.key);
-                              textareaRef.current?.focus();
-                            }}
-                          />
+                      {progress === null &&
+                      ((mainUpdate !== null && parentRef !== null) || quotes.length > 0) ? (
+                        <div className="mb-1.5 flex flex-wrap gap-1.5">
+                          {mainUpdate !== null && parentRef !== null ? (
+                            <SideChatMainUpdateChip
+                              parentRef={parentRef}
+                              responses={mainUpdate.responses}
+                              files={mainUpdate.files}
+                              onRemove={() => {
+                                useSideChatDraftStore
+                                  .getState()
+                                  .dismissMovedOn(sideChatId, mainUpdate.key);
+                                textareaRef.current?.focus();
+                              }}
+                            />
+                          ) : null}
+                          {quotes.map((quote, index) => (
+                            <SideChatQuoteChip
+                              key={serializeAssistantCitation(quote)}
+                              citation={quote}
+                              onRemove={() => {
+                                useSideChatDraftStore.getState().setQuotes(
+                                  sideChatId,
+                                  quotes.filter((_, candidate) => candidate !== index),
+                                );
+                                textareaRef.current?.focus();
+                              }}
+                            />
+                          ))}
                         </div>
                       ) : null}
                       <textarea
