@@ -2,6 +2,11 @@ name: Personal candidate build
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_mac:
+        description: Publish without a macOS build; Macs keep the previous release's files
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -153,6 +158,7 @@ jobs:
 
   mac:
     needs: bundle
+    if: ${{ !inputs.skip_mac }}
     uses: ./.github/workflows/release-desktop.yml
     with:
       label: Cody macOS Apple Silicon
@@ -175,6 +181,7 @@ jobs:
 
   publish:
     needs: [bundle, linux, windows, mac]
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' && (needs.mac.result == 'success' || (inputs.skip_mac && needs.mac.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -212,6 +219,26 @@ jobs:
           pattern: cli-*
           path: release-assets
           merge-multiple: true
+
+      # Without nightly-mac.yml in the newest release, the Mac updater reports an error.
+      - name: Carry the previous macOS files forward
+        if: ${{ inputs.skip_mac }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 20 --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p nightly-mac.yml -D release-assets 2>/dev/null; then
+              echo "Carrying macOS files from $tag"
+              for file in $(sed -n 's/^ *\(- \)\{0,1\}url: //p' release-assets/nightly-mac.yml); do
+                gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p "$file" -p "$file.blockmap" -D release-assets
+              done
+              exit 0
+            fi
+          done
+          echo "No earlier release has macOS files." >&2
+          exit 1
 
       - name: Merge and verify updater manifests
         shell: bash
