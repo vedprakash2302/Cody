@@ -50,6 +50,8 @@ const fixture = Effect.gen(function* () {
   const latest = yield* git(cwd, ["rev-parse", "HEAD"]);
   // Push by URL so the local t3/main tracking ref stays stale.
   yield* git(cwd, ["push", remote, "HEAD:refs/heads/main"]);
+  // Some git builds still update the tracking ref for a matching URL.
+  yield* git(cwd, ["update-ref", "refs/remotes/t3/main", initial]);
   yield* git(cwd, ["checkout", "main"]);
   return { cwd, root, remote, fork, initial, latest, git, driver };
 });
