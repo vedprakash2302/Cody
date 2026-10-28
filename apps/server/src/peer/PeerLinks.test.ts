@@ -413,6 +413,16 @@ it.effect("tells the agent to link again once the peer revokes the link or it ex
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it("sends plain http only over loopback or Tailscale, including a listed peer's IPv4 address", () => {
+  const peers = new Set(["100.94.177.122"]);
+  expect(PeerLinks.plainHttpStaysEncrypted("127.0.0.1", peers)).toBe(true);
+  expect(PeerLinks.plainHttpStaysEncrypted("box.tail30643b.ts.net", peers)).toBe(true);
+  expect(PeerLinks.plainHttpStaysEncrypted("[fd7a:115c:a1e0::1]", peers)).toBe(true);
+  expect(PeerLinks.plainHttpStaysEncrypted("100.94.177.122", peers)).toBe(true);
+  expect(PeerLinks.plainHttpStaysEncrypted("100.94.177.123", peers)).toBe(false);
+  expect(PeerLinks.plainHttpStaysEncrypted("192.168.1.20", peers)).toBe(false);
+});
+
 it.effect(
   "refuses to link itself, plain http off this machine and the tailnet, or a peer that cannot hold a linked agent to its limits",
   () =>
@@ -452,6 +462,15 @@ it.effect(
           })
           .pipe(Effect.flip);
         expect(lanAlternate.message).toContain("plain http");
+        // A carrier-grade NAT address is not a tailnet peer of this machine.
+        const sharedSpace = yield* a.links
+          .link({
+            url: "http://100.64.0.1:3773",
+            pairingCode: pairing.credential,
+            access: "auto",
+          })
+          .pipe(Effect.flip);
+        expect(sharedSpace.message).toContain("plain http");
 
         yield* Ref.set(b.descriptor, laptop);
         const self = yield* a.links
