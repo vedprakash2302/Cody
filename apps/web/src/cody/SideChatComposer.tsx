@@ -194,8 +194,9 @@ export function SideChatComposer(props: {
         runtimeMode: shell.runtimeMode,
         interactionMode: shell.interactionMode,
         ...(pendingModel === null ? {} : { modelSelection: pendingModel }),
-        // A steer joins the running turn, which never delivers the thread's update.
-        dispatchMode: props.isWorking || mainRecord !== null ? "queue" : "auto",
+        // A steer joins the running turn, which delivers neither the thread's update nor readable quotes.
+        dispatchMode:
+          props.isWorking || mainRecord !== null || sentQuotes.length > 0 ? "queue" : "auto",
       },
     });
     setSending(false);
@@ -203,7 +204,10 @@ export function SideChatComposer(props: {
       // Anything typed since sending stays, after the text that failed.
       const typedSince = useSideChatDraftStore.getState().drafts[sideChatId] ?? "";
       setDraft(typedSince.trim().length === 0 ? text : `${text}\n\n${typedSince}`);
-      const quotedSince = useSideChatDraftStore.getState().quotes[sideChatId] ?? [];
+      const sentKeys = new Set(sentQuotes.map(serializeAssistantCitation));
+      const quotedSince = (useSideChatDraftStore.getState().quotes[sideChatId] ?? []).filter(
+        (quote) => !sentKeys.has(serializeAssistantCitation(quote)),
+      );
       store.setQuotes(sideChatId, [...sentQuotes, ...quotedSince]);
       if (useSideChatDraftStore.getState().sentUpdates[sideChatId]?.messageId === messageId) {
         store.setSentUpdate(sideChatId, null);
