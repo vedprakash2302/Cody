@@ -339,6 +339,42 @@ export const readTailscaleExitNode = readTailscaleOutput("status", ["status", "-
   Effect.flatMap(parseTailscaleExitNode),
 );
 
+const TailscalePeerAddressesJson = Schema.Struct({
+  Peer: Schema.optional(
+    Schema.Record(Schema.String, Schema.Struct({ TailscaleIPs: Schema.optional(Schema.Unknown) })),
+  ),
+});
+
+const decodeTailscalePeerAddressesJson = Schema.decodeEffect(
+  Schema.fromJsonString(TailscalePeerAddressesJson),
+);
+
+/** The IPv4 addresses of this node's tailnet peers, which it reaches only over WireGuard. */
+export const parseTailscalePeerIpv4Addresses = (
+  rawStatusJson: string,
+): Effect.Effect<ReadonlySet<string>, TailscaleStatusParseError> =>
+  decodeTailscalePeerAddressesJson(rawStatusJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map(
+      (parsed) =>
+        new Set(
+          Object.values(parsed.Peer ?? {}).flatMap((peer) =>
+            Array.isArray(peer.TailscaleIPs)
+              ? peer.TailscaleIPs.filter(
+                  (address): address is string =>
+                    typeof address === "string" && isTailscaleIpv4Address(address),
+                )
+              : [],
+          ),
+        ),
+    ),
+  );
+
+export const readTailscalePeerIpv4Addresses = readTailscaleOutput("status", [
+  "status",
+  "--json",
+]).pipe(Effect.flatMap(parseTailscalePeerIpv4Addresses));
+
 const TailscalePrefsJson = Schema.Struct({
   RunSSH: Schema.optional(Schema.Unknown),
   WantRunning: Schema.optional(Schema.Unknown),
