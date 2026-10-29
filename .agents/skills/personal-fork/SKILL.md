@@ -149,6 +149,7 @@ These come from earlier syncs. Each run starts in a fresh thread, so anything le
 - Pending approvals render on their timeline row (#26255), not in the composer. `SideChatPanel` passes its `requests` approvals to `MessagesTimeline`; `apps/web/src/cody/sideChatApprovals.test.ts` fails if that stops.
 - Upstream's startup recovery window (`DesktopStartupRecovery.ts`, #25903) hard-codes "T3 Code" and T3's releases page. Cody uses `environment.branding.baseName` and the Cody releases URL there; recheck after upstream edits it.
 - Dead-code sweeps such as #26238 delete RPCs and props Cody filtered or extended (`subscribeArchivedShell`, `onRollbackCheckpoint`). Drop Cody's matching filter or prop instead of restoring upstream's code. Helpers Cody imports can move packages (`threadContextRecord` now lives in `@t3tools/shared/composerContextReferences`).
+- Upstream's usage fallback (#26164, #26234) decides which usage windows block a model in `exhaustedUsageWindow` (`packages/shared/src/usageLimits.ts`). Cody's OpenCode driver also reports GitHub Copilot quotas as `copilot_*` windows, so the `opencode` case limits them to `github-copilot` models and ignores `copilot_completions`. `usageLimits.test.ts` covers it; recheck when upstream edits that switch.
 
 If resolving the merge would require uncertain product decisions, or a capability can only be confirmed by hand, leave `personal/main` unchanged. Push the checked merge to a new `sync/<date>` branch instead of discarding it, and explain the conflict and the decision or test needed.
 

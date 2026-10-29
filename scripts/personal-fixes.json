@@ -30,6 +30,7 @@
   "packages/client-runtime/src/operations/commands.test.ts",
   "apps/server/src/usage/UsageService.test.ts",
   "packages/shared/src/usageMerge.test.ts",
+  "packages/shared/src/usageLimits.test.ts",
   "apps/web/src/lib/previewAnnotation.test.ts",
   "apps/desktop/src/preview/WindowsSso.test.ts",
   "apps/server/src/preview/WindowsSso.test.ts",
