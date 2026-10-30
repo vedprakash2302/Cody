@@ -34,12 +34,14 @@
         "sign-macos.ts",
         "smoke-desktop-app.ts",
         "verify-windows-desktop-artifact.ts",
+        // Cody: run by hand to regenerate the app icons.
+        "export-cody-icons.mjs",
       ],
       "ignoreDependencies": ["agent-device", "esbuild"],
       // The `t3` npm package's files: copied into the package, never imported.
       // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
       // knip run beside it in check:changed must not report.
-      "ignore": ["npm-launcher/**", ".knip-test-*/**"],
+      "ignore": ["npm-launcher/**", ".knip-test-*/**", "cody-preview.d.mts"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -79,6 +81,8 @@
         "src/preview-pip-preload.ts!",
         "src/mac-permission-preload.ts!",
         "src/preview/Annotation.css!",
+        // Cody: the Electron launchers and artifact build run it by path.
+        "scripts/build-windows-sso.mjs",
       ],
       // The injected runtime resolves Playwright by string; release tooling runs
       // electron-builder from this workspace, outside its package scripts.

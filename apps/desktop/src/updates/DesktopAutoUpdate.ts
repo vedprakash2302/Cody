@@ -21,12 +21,12 @@ const { logInfo, logWarning } = DesktopObservability.makeComponentLogger("deskto
 /** Served by each backend; see apps/server/src/desktopUpdate/DesktopAgentActivity.ts. */
 export const AGENT_ACTIVITY_PATH = "/api/desktop/agent-activity";
 /** How long every backend must report idle before the app restarts into an update. */
-export const AUTO_INSTALL_IDLE = Duration.minutes(5);
+const AUTO_INSTALL_IDLE = Duration.minutes(5);
 /**
  * A fresh download waits this long before an automatic install, so a remote
  * client's "update this machine" request can finish its own install handshake.
  */
-export const DOWNLOAD_SETTLE = Duration.minutes(5);
+const DOWNLOAD_SETTLE = Duration.minutes(5);
 const ACTIVITY_POLL_INTERVAL = Duration.minutes(1);
 const PROBE_TIMEOUT = Duration.seconds(5);
 

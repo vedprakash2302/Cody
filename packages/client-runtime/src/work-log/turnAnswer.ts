@@ -1,18 +1,11 @@
-/**
- * Clients fold a settled turn down to its last assistant message. Agents often
- * finish cleanup after answering ("I've closed the browser."), so that last
- * message can be a one-line wrap-up that hides the real answer written just
- * before it. This finds that answer so it stays visible.
- *
- * It looks one step back only. Commentary between tool calls ("Let me check
- * X") must stay folded, and a chain across every small tool gap would surface
- * all of it.
- */
+// A settled turn folds to its last assistant message, which can be a one-line
+// wrap-up after cleanup that hides the real answer. This finds that answer. It
+// looks one step back only, so commentary between tool calls stays folded.
 
 /** Longest last message that still reads as a wrap-up rather than an answer. */
-export const WRAP_UP_MAX_CHARS = 280;
+const WRAP_UP_MAX_CHARS = 280;
 /** Most tool calls a wrap-up may follow its answer by. */
-export const WRAP_UP_MAX_TOOL_CALLS = 3;
+const WRAP_UP_MAX_TOOL_CALLS = 3;
 
 export type TurnSequenceItem =
   | { readonly kind: "assistant"; readonly id: string; readonly text: string }

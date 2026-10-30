@@ -70,7 +70,7 @@ export function sentUpdatePending(
  * `/side` alone starts a side chat; `/side <question>` also asks it. Returns
  * null for any other text.
  */
-export function parseSideChatCommand(text: string): string | null {
+function parseSideChatCommand(text: string): string | null {
   const match = /^\/side(?:\s+([\s\S]*))?$/i.exec(text.trim());
   return match === null ? null : (match[1] ?? "").trim();
 }

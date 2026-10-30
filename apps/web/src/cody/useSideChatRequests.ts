@@ -17,15 +17,15 @@ import { useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import {
-  buildPendingUserInputAnswers,
-  derivePendingUserInputProgress,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
-} from "../pendingUserInput";
+} from "@t3tools/client-runtime/state/pending-user-input";
+import { derivePendingUserInputProgress } from "../pendingUserInput";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { planSideChatAdvance } from "./sideChatAnswers";
 import { sideChatRequestKey, useSideChatDraftStore } from "./sideChats";
 
 type DraftAnswers = Record<string, PendingUserInputDraftAnswer>;
@@ -162,7 +162,7 @@ export function useSideChatRequests(
       const question = progress?.activeQuestion;
       if (question == null) return;
       updateActiveDraft(question.id, (draft) =>
-        setPendingUserInputCustomAnswer(draft, text, question),
+        setPendingUserInputCustomAnswer(question, draft, text),
       );
     },
     previousQuestion: () => {
@@ -176,12 +176,13 @@ export function useSideChatRequests(
       ) {
         return;
       }
-      if (!progress.isLastQuestion) {
-        setQuestionIndex(progress.questionIndex + 1);
+      const step = planSideChatAdvance(progress, activeUserInput.questions, activeDrafts);
+      if (step.type === "stay") return;
+      if (step.type === "next") {
+        setQuestionIndex(step.questionIndex);
         return;
       }
-      const answers = buildPendingUserInputAnswers(activeUserInput.questions, activeDrafts);
-      if (answers === null) return;
+      const answers = step.answers;
       const requestId = activeUserInput.requestId;
       void withResponding(requestId, async () => {
         const result = await respondToUserInput({

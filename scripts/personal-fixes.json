@@ -96,5 +96,6 @@
   "apps/web/src/cody/sideChatNotifications.test.ts",
   "apps/web/src/cody/messageRunId.test.ts",
   "apps/web/src/cody/sideChatApprovals.test.ts",
+  "apps/web/src/cody/sideChatAnswers.test.ts",
   "apps/server/src/peer/PeerLinks.test.ts"
 ]

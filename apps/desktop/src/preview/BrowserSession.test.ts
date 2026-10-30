@@ -71,9 +71,9 @@ describe("BrowserSession", () => {
     });
   });
 
-  // Cody: since upstream #17316 the desktop runs the tabs a person opens for a
-  // remote environment in its own browser, so every persistent session it
-  // creates must carry Windows work-account sign-in.
+  // Cody: the desktop runs the tabs a person opens for a remote environment in
+  // its own browser, so every persistent session it creates must carry Windows
+  // work-account sign-in.
   it.effect("installs Windows work-account sign-in on persistent sessions only", () =>
     Effect.gen(function* () {
       const webRequests = new Map<string, ReturnType<typeof vi.fn>>();
@@ -315,11 +315,16 @@ describe("BrowserSession", () => {
       assert.isUndefined(sessions.get(partition));
 
       yield* browserSessions.getSession("scope-untouched");
+      const other = yield* browserSessions.getSession("scope-other");
       yield* browserSessions.clearCookies([partition]);
 
       const created = sessions.get(partition);
       assert.isDefined(created);
       assert.strictEqual(created.clearStorageData.mock.calls.length, 1);
+      assert.deepStrictEqual(created.clearStorageData.mock.calls[0]?.[0], {
+        storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"],
+      });
+      assert.strictEqual(vi.mocked(other.clearStorageData).mock.calls.length, 0);
     }).pipe(Effect.provide(layer)),
   );
 });

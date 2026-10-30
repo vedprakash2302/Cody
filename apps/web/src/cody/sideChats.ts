@@ -42,7 +42,7 @@ import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import { dispatchSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { newMessageId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
-import type { PendingUserInputDraftAnswer } from "../pendingUserInput";
+import type { PendingUserInputDraftAnswer } from "@t3tools/client-runtime/state/pending-user-input";
 import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
