@@ -63,7 +63,7 @@ import {
 import { useProjects, useThreadShell, useThreadShellsForProjectRefs } from "../../state/entities";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
-import { useThreadFamily } from "../../state/threads";
+import { threadFamilies, useThreadFamily } from "../../state/threads";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -73,7 +73,7 @@ import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionS
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
+import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -547,19 +547,13 @@ function ScheduledTaskEnvironmentList({
     <SettingsGroup>
       {populated.map(({ environment, tasks }) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
-        const transport = environmentTransportLabel(environment);
         return (
           <div key={environment.environmentId} className="divide-y divide-border/50">
             <EnvironmentRow
               kind={resolveEnvironmentMachineKind(environment.serverConfig)}
               label={primary}
               subtitle={
-                <>
-                  {secondary && secondary !== transport ? (
-                    <span className="block truncate">{secondary}</span>
-                  ) : null}
-                  <span className="block truncate">{transport}</span>
-                </>
+                <ScheduledTaskEnvironmentSubtitle environment={environment} secondary={secondary} />
               }
             >
               <ConnectionStatusDot
@@ -614,6 +608,24 @@ function ScheduledTaskEnvironmentList({
         );
       })}
     </SettingsGroup>
+  );
+}
+
+function ScheduledTaskEnvironmentSubtitle({
+  environment,
+  secondary,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly secondary: string;
+}) {
+  const transport = useEnvironmentTransportLabel(environment);
+  return (
+    <>
+      {secondary && secondary !== transport ? (
+        <span className="block truncate">{secondary}</span>
+      ) : null}
+      <span className="block truncate">{transport}</span>
+    </>
   );
 }
 
@@ -1174,10 +1186,19 @@ function ScheduledTaskEditorForm({
   const selectedProjectRefs = selectedProjectId
     ? [scopeProjectRef(environmentId, selectedProjectId as ProjectId)]
     : [];
-  useThreadFamily(environmentId, draft.threadId ? (draft.threadId as ThreadId) : null);
+  const boundThreadId = draft.threadId ? (draft.threadId as ThreadId) : null;
+  useThreadFamily(environmentId, boundThreadId);
   const projectThreads = useThreadShellsForProjectRefs(selectedProjectRefs);
+  // The shell can omit older settled threads; their family read still carries the title.
+  const boundThreadFamily = useEnvironmentQuery(
+    boundThreadId !== null && !projectThreads.some((thread) => thread.id === boundThreadId)
+      ? threadFamilies.familyAtom(environmentId, boundThreadId)
+      : null,
+  );
   const threadOptions = scheduledTaskThreadOptions(projectThreads, draft.threadId);
-  const selectedThreadTitle = threadOptions.find((option) => option.id === draft.threadId)?.title;
+  const selectedThreadTitle =
+    boundThreadFamily.data?.threads.find((row) => row.id === boundThreadId)?.title ??
+    threadOptions.find((option) => option.id === draft.threadId)?.title;
   const instanceEntries = providerInstanceEntriesFor(
     providers,
     settings,

@@ -54,7 +54,7 @@ const UsageResponse = Schema.Struct({
 
 // Select before decoding so an OAuth or self-hosted connection cannot fall
 // through to another stored account. NULL-active rows predate the selection flag.
-const readConsoleApiKey = (databasePath: string) =>
+const readStoredApiKey = (databasePath: string, integrationId: "opencode" | "opencode-go") =>
   Effect.try(() => {
     const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -62,10 +62,10 @@ const readConsoleApiKey = (databasePath: string) =>
       const row = database
         .prepare(
           `SELECT value FROM credential
-           WHERE integration_id = 'opencode' AND active IS NOT 0
+           WHERE integration_id = ? AND active IS NOT 0
            ORDER BY active DESC, time_created DESC, id DESC LIMIT 1`,
         )
-        .get();
+        .get(integrationId);
       const stored =
         typeof row?.value === "string"
           ? Option.getOrUndefined(decodeStoredKey(row.value))
@@ -115,11 +115,8 @@ type GoProbeResult =
   | { readonly windows: ReadonlyArray<ServerProviderUsageWindow>; readonly apiKey: string }
   | "unsupported";
 
-const readGoWindows = Effect.fn("readGoWindows")(function* (keys: {
-  readonly consoleKey: string | undefined;
-  readonly goKey: string | undefined;
-}) {
-  let apiKey = keys.consoleKey || keys.goKey;
+const readGoWindows = Effect.fn("readGoWindows")(function* (keys: ReadonlyArray<string>) {
+  let apiKey = keys[0];
   if (!apiKey) return "unsupported" as const;
   const client = yield* HttpClient.HttpClient;
   const readUsage = (key: string) =>
@@ -129,8 +126,9 @@ const readGoWindows = Effect.fn("readGoWindows")(function* (keys: {
       ),
     );
   let response = yield* readUsage(apiKey);
-  if ((response.status === 401 || response.status === 403) && keys.goKey && keys.goKey !== apiKey) {
-    apiKey = keys.goKey;
+  for (const key of keys.slice(1)) {
+    if (response.status !== 401 && response.status !== 403) break;
+    apiKey = key;
     response = yield* readUsage(apiKey);
   }
   // A valid Zen key can exist without a Go subscription.
@@ -280,15 +278,23 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
     // Console supplies Go credentials in OpenCode 2. Inline auth explicitly
     // overrides local credentials, including the Console connection.
     const databaseFile = env.OPENCODE_DB ?? "opencode.db";
-    const consoleKey =
+    const databasePath = path.resolve(dataHome, "opencode", databaseFile);
+    const storedKeys =
       env.OPENCODE_AUTH_CONTENT || databaseFile === ":memory:"
-        ? undefined
-        : yield* readConsoleApiKey(path.resolve(dataHome, "opencode", databaseFile));
+        ? []
+        : [
+            yield* readStoredApiKey(databasePath, "opencode"),
+            // OpenCode 2 imports auth.json once, so a replaced Go key only exists here.
+            yield* readStoredApiKey(databasePath, "opencode-go"),
+          ];
+    const goKeys = [
+      ...new Set([...storedKeys, goKey].filter((key): key is string => Boolean(key))),
+    ];
     const copilotAuth = decodeCopilotAuth(auth["github-copilot"]);
 
     const probes = yield* Effect.all(
       {
-        "OpenCode Go": guardProbe(readGoWindows({ consoleKey, goKey })),
+        "OpenCode Go": guardProbe(readGoWindows(goKeys)),
         "GitHub Copilot": Option.isSome(copilotAuth)
           ? guardProbe(readCopilotWindows(copilotAuth.value))
           : Effect.succeed("unsupported" as const),
