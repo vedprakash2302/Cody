@@ -457,8 +457,6 @@ export interface ChatComposerProps {
   onRemoveEditingQueuedAttachment: (attachmentId: string) => void;
 
   onCompactContext: () => void;
-  /** Cody: opens the thread's side chat; absent where side chats aren't available. */
-  onOpenSideChat?: (() => void) | undefined;
   onSend: (
     e?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
@@ -1127,7 +1125,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSkills,
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
-    sideChatAvailable: props.onOpenSideChat !== undefined,
     questionAttachmentTarget,
   });
 
@@ -1840,15 +1837,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
-      if (item.command === "model" || item.command === "side") {
+      if (item.command === "model") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
           focusEditorAfterReplace: false,
         });
         if (applied) {
           setComposerHighlightedItemId(null);
-          if (item.command === "model") setIsComposerModelPickerOpen(true);
-          else props.onOpenSideChat?.();
+          setIsComposerModelPickerOpen(true);
         }
         return;
       }

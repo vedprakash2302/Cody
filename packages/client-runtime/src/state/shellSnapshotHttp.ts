@@ -1,4 +1,4 @@
-import { CODY_SIDE_CHAT_CLIENT_FEATURE, EnvironmentHttpCommonError } from "@t3tools/contracts";
+import { EnvironmentHttpCommonError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -36,10 +36,8 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
   readonly omitIdleSubagents?: boolean;
   readonly omitOlderSettled?: boolean;
 }) {
-  // Cody servers send side chats only to clients that ask; others ignore the query.
   const endpoint = {
     query: {
-      codyFeatures: CODY_SIDE_CHAT_CLIENT_FEATURE,
       ...(input.omitIdleSubagents === true ? { omitIdleSubagents: "1" } : {}),
       ...(input.omitOlderSettled === true ? { omitOlderSettled: "1" } : {}),
     },
@@ -53,7 +51,6 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
     request: ({ client, headers }) =>
       client
         .shellSnapshot({
-          ...endpoint,
           headers: withOrchestrationProtocolHeader(headers),
           ...endpoint,
           responseMode: "response-only",

@@ -39,12 +39,6 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
-  CodySideChatCloseRpc,
-  CodySideChatMainViewRpc,
-  CodySideChatOpenRpc,
-  CodySideChatPromoteRpc,
-} from "./codySideChat.ts";
-import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
   ProviderAuthState,
@@ -2184,8 +2178,4 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
   WsOrchestrationV2SubscribeCommandOutputRpc,
-  CodySideChatOpenRpc,
-  CodySideChatCloseRpc,
-  CodySideChatPromoteRpc,
-  CodySideChatMainViewRpc,
 ).middleware(RpcScopeAuthorization);

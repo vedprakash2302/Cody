@@ -462,7 +462,7 @@ export function createEnvironmentThreadShellAtoms(input: {
           }
           seen.add(key);
           const thread = threads.get(ref.threadId);
-          if (thread !== undefined && thread.codySideChat !== true) {
+          if (thread !== undefined) {
             next.push(scopedThread(ref.environmentId, thread, subagentRequests));
           }
         }
@@ -494,8 +494,6 @@ export function createEnvironmentThreadShellAtoms(input: {
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        // Cody side chats open beside their parent, never in thread lists.
-        if (thread.codySideChat === true) continue;
         next.push(scopedThread(environmentId, thread, subagentRequests));
       }
     }
@@ -513,7 +511,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     const next: EnvironmentThreadShell[] = [];
     for (const ref of get(threadRefsAtom)) {
       const shell = get(quietThreadShellAtomFamily(threadKey(ref)));
-      if (shell !== null && shell.source.codySideChat !== true) next.push(shell);
+      if (shell !== null) next.push(shell);
     }
     if (arrayElementsEqual(previousQuietThreadShells, next)) return previousQuietThreadShells;
     previousQuietThreadShells = next;
@@ -557,8 +555,7 @@ export function createEnvironmentThreadShellAtoms(input: {
       for (const thread of get(environmentThreadsAtom(environmentId))) {
         if (
           thread.archivedAt !== null ||
-          isShownUnderParent({ environmentId, threadId: thread.id }, thread.lineage, underParent) ||
-          thread.codySideChat === true
+          isShownUnderParent({ environmentId, threadId: thread.id }, thread.lineage, underParent)
         ) {
           continue;
         }

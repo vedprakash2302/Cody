@@ -1,21 +1,7 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
-import {
-  CODY_CLIENT_FEATURES_PARAM,
-  CODY_SIDE_CHAT_WS_METHODS,
-  readCodyClientFeatures,
-} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
-import * as SideChatService from "./cody/SideChatService.ts";
-import * as SideChatStore from "./cody/SideChatStore.ts";
-import {
-  filterArchivedShellSnapshot,
-  filterShellStream,
-  listVisibleOlderSettledThreads,
-  presentThreads,
-  sideChatVisibility,
-} from "./cody/sideChatVisibility.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 
@@ -1240,19 +1226,12 @@ export const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   reportProfiles: ServerBrowser.ProfileReporter,
-  codyClientFeatures: { readonly sideChats: boolean },
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-      const sideChatService = yield* SideChatService.SideChatService;
-      const sideChatMembership = yield* SideChatStore.SideChatMembership;
-      const threadVisibility = sideChatVisibility({
-        isSideChat: sideChatMembership.isSideChat,
-        clientWantsSideChats: codyClientFeatures.sideChats,
-      });
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
         | ThreadLaunchService.ThreadLaunchService
@@ -1849,7 +1828,6 @@ export const layerWsRpc = (
           threads: threads.archivedThreads,
         } as const;
       }).pipe(
-        Effect.map((snapshot) => filterArchivedShellSnapshot(snapshot, threadVisibility)),
         Effect.flatMap((snapshot) =>
           enrichProjectShells(snapshot.projects).pipe(
             Effect.map(({ projects }) => ({ ...snapshot, projects })),
@@ -1880,7 +1858,7 @@ export const layerWsRpc = (
               (cause) => new OrchestrationV2GetShellSnapshotError({ message, cause }),
             ),
           );
-          return { snapshotSequence, threads: presentThreads(threads.threads, threadVisibility) };
+          return { snapshotSequence, threads: threads.threads };
         },
       );
 
@@ -1940,10 +1918,6 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
-        [CODY_SIDE_CHAT_WS_METHODS.open]: (input) => sideChatService.open(input),
-        [CODY_SIDE_CHAT_WS_METHODS.close]: (input) => sideChatService.close(input),
-        [CODY_SIDE_CHAT_WS_METHODS.promote]: (input) => sideChatService.promote(input),
-        [CODY_SIDE_CHAT_WS_METHODS.mainView]: (input) => sideChatService.mainView(input),
         [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
           threadManagement.forceStopThread(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
@@ -1997,19 +1971,6 @@ export const layerWsRpc = (
               threadManagement.readShellSnapshot({ location: "active", threadIds }),
             latestSequence: applicationEvents.latestApplicationSequence,
           }).pipe(
-            Effect.map((result) => ({
-              ...result,
-              matches: result.matches.filter(
-                (match) => !sideChatMembership.isSideChat(match.threadId),
-              ),
-              ...(result.threads === undefined
-                ? {}
-                : {
-                    threads: result.threads.filter(
-                      (thread) => !sideChatMembership.isSideChat(thread.id),
-                    ),
-                  }),
-            })),
             Effect.mapError(
               (cause) =>
                 new OrchestrationSearchThreadsError({
@@ -2025,19 +1986,11 @@ export const layerWsRpc = (
         [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: (input) =>
           loadOlderSettledThreadsPage({
             sql,
-            listThreads: listVisibleOlderSettledThreads(
-              threadManagement.listOlderSettledThreads,
-              input,
-              threadVisibility,
-            ),
+            listThreads: threadManagement.listOlderSettledThreads(input),
             readThreads: (threadIds) =>
               threadManagement.readShellSnapshot({ location: "active", threadIds }),
             latestSequence: applicationEvents.latestApplicationSequence,
           }).pipe(
-            Effect.map((page) => ({
-              ...page,
-              threads: presentThreads(page.threads, threadVisibility),
-            })),
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2GetShellSnapshotError({
@@ -2176,9 +2129,7 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input) =>
-          Stream.unwrap(subscribeOrchestrationV2Shell(input)).pipe(
-            filterShellStream(threadVisibility),
-          ),
+          Stream.unwrap(subscribeOrchestrationV2Shell(input)),
         [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>
           Stream.unwrap(
             Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
@@ -2649,12 +2600,6 @@ export const layerWsRpc = (
                 ? Effect.succeed({ threads: [] })
                 : listLinkedPullRequestThreads(key).pipe(
                     Effect.provideService(SqlClient.SqlClient, sql),
-                    Effect.map((result) => ({
-                      ...result,
-                      threads: result.threads.filter(
-                        (thread) => !sideChatMembership.isSideChat(thread.id),
-                      ),
-                    })),
                   ),
             ),
           ),
@@ -3368,9 +3313,6 @@ export const layer = Layer.unwrap(
           ),
         );
         const clientAnalyticsProps = readClientAnalyticsProps(request);
-        const codyClientFeatures = readCodyClientFeatures(
-          requestUrl.value.searchParams.get(CODY_CLIENT_FEATURES_PARAM),
-        );
         yield* analytics.recordOwners(readClientOwners(request), "client");
         const reportProfiles = yield* serverBrowser.profileReporter;
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
@@ -3402,13 +3344,7 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(
-              session,
-              clientAnalyticsProps,
-              serverBrowser,
-              reportProfiles,
-              codyClientFeatures,
-            ).pipe(
+            layerWsRpc(session, clientAnalyticsProps, serverBrowser, reportProfiles).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),

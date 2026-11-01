@@ -1,5 +1,4 @@
 import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
-import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 
 export type ThreadNotificationKind = "input" | "completion";
 
@@ -76,14 +75,4 @@ export function createThreadNotificationGate<Key>(
       lastSettled.clear();
     },
   };
-}
-
-/**
- * Stopped runs never notify completion. A Cody side chat's answers show in its panel, so only its
- * approvals and questions notify.
- */
-export function threadCompletionIsQuiet(
-  thread: Pick<OrchestrationV2ThreadShell, "latestRunStopRequested" | "codySideChat">,
-): boolean {
-  return thread.latestRunStopRequested === true || thread.codySideChat === true;
 }

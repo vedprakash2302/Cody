@@ -4,7 +4,7 @@ import {
   type AssistantCitation,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { MessagesSquareIcon, QuoteIcon } from "lucide-react";
+import { QuoteIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -18,31 +18,22 @@ import {
   type SelectionActionPoint,
 } from "~/lib/selectionActions";
 import { Button } from "../ui/button";
-import { toastManager } from "../ui/toast";
 
 export function AssistantSelectionToolbar({
   viewport,
   threadRef,
   onCite,
-  onAskInSideChat,
-  askInSideChatDisabledReason,
-  citeLabel = "Cite",
 }: {
   viewport: HTMLElement | null;
   threadRef: ScopedThreadRef;
   onCite: (citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) => boolean;
-  /** Cody: quotes the selection into the thread's side chat. */
-  onAskInSideChat?: ((citation: AssistantCitation) => void) | undefined;
-  askInSideChatDisabledReason?: string | undefined;
-  /** Cody: a side chat cites into its thread's composer, not its own. */
-  citeLabel?: string | undefined;
 }) {
   const [selection, setSelection] = useState<{
     citation: AssistantCitation;
     position: SelectionActionPoint;
     sourceAnchor: AssistantCitationSourceAnchor;
   } | null>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node and clamps its position inside the window before paint
@@ -167,11 +158,10 @@ export function AssistantSelectionToolbar({
       ) {
         return;
       }
-      const firstAction = toolbar.querySelector<HTMLButtonElement>("button:not(:disabled)");
-      if (!firstAction) return;
+      if (toolbar.disabled) return;
       event.preventDefault();
       event.stopPropagation();
-      firstAction.focus({ preventScroll: true });
+      toolbar.focus({ preventScroll: true });
     };
     document.addEventListener("keydown", focusActions, true);
     document.addEventListener("selectionchange", actions.selectionChanged);
@@ -195,79 +185,29 @@ export function AssistantSelectionToolbar({
     dismiss();
     return true;
   };
-  const askInSideChat = () => {
-    if (!onAskInSideChat) return;
-    if (askInSideChatDisabledReason !== undefined) {
-      toastManager.add({
-        type: "warning",
-        title: "No side chat yet",
-        description: askInSideChatDisabledReason,
-      });
-      return;
-    }
-    onAskInSideChat(selection.citation);
-    window.getSelection()?.removeAllRanges();
-    dismiss();
-  };
-  const moveFocus = (step: 1 | -1) => {
-    const buttons = Array.from(
-      toolbarRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [],
-    );
-    if (buttons.length === 0) return;
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    buttons[(current + step + buttons.length) % buttons.length]?.focus({ preventScroll: true });
-  };
   return createPortal(
-    <div
+    <Button
       ref={toolbarRef}
-      role="toolbar"
-      aria-label="Selection actions"
-      className="fixed z-50 flex max-w-[calc(100vw-1rem)] gap-1"
+      type="button"
+      size="xs"
+      variant="glass"
+      disabled={tooLong}
+      aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
+      className="fixed z-50 max-w-[calc(100vw-1rem)]"
       style={{ left: selection.position.x, top: selection.position.y }}
       onPointerDown={(event) => event.preventDefault()}
+      onClick={cite}
       onKeyDown={(event) => {
         event.stopPropagation();
-        if (event.nativeEvent.isComposing) return;
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
           event.preventDefault();
           dismiss();
-        } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-          event.preventDefault();
-          moveFocus(event.key === "ArrowRight" ? 1 : -1);
         }
       }}
     >
-      <Button
-        type="button"
-        size="xs"
-        variant="glass"
-        disabled={tooLong}
-        aria-label={
-          tooLong
-            ? "Selection is too long to cite"
-            : citeLabel === "Cite"
-              ? "Cite selection in composer"
-              : citeLabel
-        }
-        onClick={cite}
-      >
-        <QuoteIcon aria-hidden="true" className="size-3.5" />
-        {tooLong ? "Shorten selection" : citeLabel}
-      </Button>
-      {onAskInSideChat && !tooLong ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="glass"
-          aria-disabled={askInSideChatDisabledReason !== undefined || undefined}
-          title={askInSideChatDisabledReason}
-          onClick={askInSideChat}
-        >
-          <MessagesSquareIcon aria-hidden="true" className="size-3.5" />
-          Ask in side chat
-        </Button>
-      ) : null}
-    </div>,
+      <QuoteIcon aria-hidden="true" className="size-3.5" />
+      {tooLong ? "Shorten selection" : "Cite"}
+    </Button>,
     document.body,
   );
 }

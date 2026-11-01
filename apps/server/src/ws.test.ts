@@ -8,12 +8,9 @@ import {
   ThreadId,
   ProviderDriverKind,
   ProviderInstanceId,
-  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
-  WsRpcGroup,
   WsServerRefreshProvidersRpc,
   WsSubscribeServerConfigRpc,
-  type OrchestrationV2GetOlderSettledThreadsInput,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
@@ -49,7 +46,6 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -91,8 +87,6 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as NpmRelease from "./cloud/npmRelease.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
-import * as SideChatService from "./cody/SideChatService.ts";
-import * as SideChatStore from "./cody/SideChatStore.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
@@ -543,7 +537,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ServerSelfUpdate.ServerSelfUpdate)({}),
   Layer.mock(NpmRelease.NpmRelease)({}),
   Layer.mock(SessionStore.SessionStore)({ cookieName: "config-test", legacyCookieName: undefined }),
-  Layer.mock(SideChatService.SideChatService)({}),
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(SourceControlSignIn.SourceControlSignIn)({}),
@@ -671,7 +664,6 @@ it.effect(
             {},
             yield* ServerBrowser.ServerBrowser,
             () => Effect.void,
-            { sideChats: false },
           ).pipe(Layer.provide(configRpcServices)),
         ),
       );
@@ -840,7 +832,6 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
-          { sideChats: false },
         ).pipe(Layer.provide(configRpcServices)),
       ),
     );
@@ -896,141 +887,6 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     ),
     Effect.scoped,
   ),
-);
-
-it.effect(
-  "thread rows the shell omits keep side chats from official clients and mark them for Cody",
-  () =>
-    Effect.gen(function* () {
-      const sideChat = ThreadId.make("side-chat");
-      const row = (id: string) =>
-        ({
-          id: ThreadId.make(id),
-          settledAt: DateTime.makeUnsafe(0),
-        }) as unknown as OrchestrationV2ThreadShell;
-      const ids = ["older-0", "side-chat", "older-1", "older-2"].map((id) => ThreadId.make(id));
-      const listedLimits: Array<number> = [];
-      const services = Layer.mergeAll(
-        layerUnusedConfigRpcServices,
-        Layer.mock(ThreadManagement.ThreadManagementService)({
-          listOlderSettledThreads: (query) =>
-            Effect.sync(() => {
-              listedLimits.push(query.limit);
-              return { threadIds: ids.slice(0, query.limit), counts: [] };
-            }),
-          readShellSnapshot: (options) =>
-            Effect.succeed(
-              Effect.succeed({
-                schemaVersion: 1,
-                snapshotSequence: 7,
-                threads: (options?.threadIds ?? ids).map((id) => row(id)),
-                archivedThreads: [],
-              }),
-            ),
-        }),
-        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
-          latestApplicationSequence: Effect.succeed(7),
-        }),
-        Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-        Layer.mock(UsageLimitSources.UsageLimitSources)({}),
-        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
-        Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-          scratchRoot: Effect.succeedNone,
-          namedProjectsRoot: process.cwd(),
-        }),
-        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
-        Layer.mock(ServerEnvironment.ServerEnvironment)({}),
-        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
-      );
-      const call = Effect.fn("callAs")(function* (
-        sideChats: boolean,
-        request:
-          | {
-              readonly tag: typeof ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads;
-              readonly payload: OrchestrationV2GetOlderSettledThreadsInput;
-            }
-          | {
-              readonly tag: typeof ORCHESTRATION_V2_WS_METHODS.getThreadFamily;
-              readonly payload: { readonly threadId: ThreadId };
-            },
-      ) {
-        const responses = yield* Queue.unbounded<unknown>();
-        const server = yield* RpcServer.makeNoSerialization(WsRpcGroup, {
-          ...WS_RPC_SERVER_OPTIONS,
-          onFromServer: (response) =>
-            response._tag === "Exit" ? Queue.offer(responses, response.exit) : Effect.void,
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              layerWsRpc(
-                {
-                  sessionId: AuthSessionId.make("side-chat-test"),
-                  subject: "side-chat-test",
-                  method: "browser-session-cookie",
-                  scopes: ["orchestration:read"],
-                },
-                {},
-                yield* ServerBrowser.ServerBrowser,
-                () => Effect.void,
-                { sideChats },
-              ).pipe(Layer.provide(services)),
-              RpcAuthorization.layer(["orchestration:read"]),
-            ),
-          ),
-          Effect.provideService(SideChatStore.SideChatMembership, {
-            isSideChat: (threadId) => threadId === sideChat,
-            catchUps: () => ({}),
-            recordCatchUp: () => Effect.void,
-            sentToThread: () => ({}),
-            recordSentToThread: () => Effect.void,
-          }),
-        );
-        yield* server.write(0, {
-          _tag: "Request",
-          id: RpcMessage.RequestId("request"),
-          ...request,
-          headers: Headers.empty,
-        });
-        const exit = (yield* Queue.take(responses)) as {
-          readonly _tag: string;
-          readonly value: { readonly threads: ReadonlyArray<OrchestrationV2ThreadShell> };
-        };
-        if (exit._tag !== "Success") return yield* Effect.die(`Request failed: ${String(exit)}`);
-        return exit.value.threads.map((thread) =>
-          thread.codySideChat === true ? `${thread.id} (side chat)` : thread.id,
-        );
-      });
-
-      const page = {
-        tag: ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads,
-        payload: { before: { settledAt: "2026-01-01T00:00:00.000Z" }, limit: 2 },
-      } as const;
-      assert.deepEqual(yield* call(false, page), ["older-0", "older-1"]);
-      assert.deepEqual(yield* call(true, page), ["older-0", "side-chat (side chat)"]);
-      assert.deepEqual(listedLimits, [4, 4]);
-      const family = {
-        tag: ORCHESTRATION_V2_WS_METHODS.getThreadFamily,
-        payload: { threadId: ThreadId.make("older-0") },
-      } as const;
-      assert.deepEqual(yield* call(false, family), ["older-0", "older-1", "older-2"]);
-      assert.deepEqual(yield* call(true, family), [
-        "older-0",
-        "side-chat (side chat)",
-        "older-1",
-        "older-2",
-      ]);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.fresh(layerConfigSources),
-          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
-          Layer.mock(ServerBrowser.ServerBrowser)({}),
-        ),
-      ),
-      Effect.scoped,
-    ),
 );
 
 // Compaction keeps the oldest and newest event per message, so a cursor older

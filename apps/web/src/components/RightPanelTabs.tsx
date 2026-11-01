@@ -1,15 +1,6 @@
-import { ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
-import { SideChatTabStatusDot } from "../cody/SideChatTabStatusDot";
-import {
-  readSideChatHasUnsent,
-  type SideChatAction,
-  useSideChatDraftStore,
-  useSideChatTabTitle,
-} from "../cody/sideChats";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
@@ -21,7 +12,6 @@ import type {
   ProjectId,
   PullRequestState,
   ResolvedKeybindingsConfig,
-  ScopedThreadRef,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -43,7 +33,6 @@ import {
   FileDiff,
   Files,
   Globe2,
-  MessagesSquare,
   Plus,
   TerminalSquare,
 } from "lucide-react";
@@ -148,12 +137,6 @@ export interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
-  /** Cody: present only where side chats are supported. */
-  onAddSideChat?: () => void;
-  sideChatAvailable?: boolean;
-  sideChatDisabledReason?: string;
-  onSideChatAction?: (action: SideChatAction, sideChatRef: ScopedThreadRef) => void;
-  onRenameSideChat?: (sideChatRef: ScopedThreadRef, title: string) => void;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -206,30 +189,10 @@ const SURFACE_UNAVAILABLE_HINTS = {
   device: "Available from a thread.",
 } as const;
 
-/** Cody: the side chat entry, listed only where the server supports side chats. */
-function sideChatSurfaceActions(props: {
-  readonly onAddSideChat?: (() => void) | undefined;
-  readonly sideChatAvailable?: boolean | undefined;
-  readonly sideChatDisabledReason?: string | undefined;
-}) {
-  if (props.onAddSideChat === undefined) return [];
-  return [
-    {
-      label: "Side chat",
-      icon: MessagesSquare,
-      shortcut: "S",
-      available: props.sideChatAvailable === true,
-      disabledReason: props.sideChatDisabledReason ?? "Side chats aren't available here.",
-      onClick: props.onAddSideChat,
-    },
-  ];
-}
-
 type TabContextMenuAction =
   | "rename"
   | "copy-path"
   | "toggle-mute"
-  | `side-chat:${SideChatAction}`
   | "close"
   | "close-others"
   | "close-to-right"
@@ -348,9 +311,6 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
-  onAddSideChat?: () => void;
-  sideChatAvailable?: boolean;
-  sideChatDisabledReason?: string;
 }) {
   const [highlight, setHighlight] = useState(-1);
 
@@ -412,7 +372,6 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
     },
-    ...sideChatSurfaceActions(props),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -596,8 +555,6 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
-    case "side-chat":
-      return "Side chat";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -688,8 +645,6 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
-    case "side-chat":
-      return <MessagesSquare className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -858,6 +813,7 @@ function RightPanelTab(
 ) {
   const {
     surface,
+    title,
     audio,
     audioRuntimeTabId,
     onActivate,
@@ -867,11 +823,6 @@ function RightPanelTab(
     onStartRename,
     onFinishRename,
   } = props;
-  const sideChatTitle = useSideChatTabTitle(
-    props.environmentId,
-    surface.kind === "side-chat" ? surface.resourceId : null,
-  );
-  const title = sideChatTitle ?? props.title;
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: surface.id,
     disabled: props.dragDisabled,
@@ -891,12 +842,6 @@ function RightPanelTab(
           <span
             className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-current"
             aria-hidden
-          />
-        ) : null}
-        {surface.kind === "side-chat" && props.environmentId !== null ? (
-          <SideChatTabStatusDot
-            environmentId={props.environmentId}
-            sideChatThreadId={surface.resourceId}
           />
         ) : null}
       </PanelTabCloseButton>
@@ -924,7 +869,7 @@ function RightPanelTab(
       )}
       {props.renaming ? (
         <input
-          aria-label={surface.kind === "side-chat" ? "Side chat name" : "Device tab name"}
+          aria-label="Device tab name"
           className="w-24 min-w-0 rounded-sm bg-background px-1 outline-none ring-1 ring-inset ring-ring"
           defaultValue={title}
           ref={(element) => {
@@ -948,7 +893,7 @@ function RightPanelTab(
               <button
                 type="button"
                 onDoubleClick={() => {
-                  if (props.canRename) onStartRename(surface.id);
+                  if (surface.kind === "device" && props.canRename) onStartRename(surface.id);
                 }}
                 className="cursor-pointer flex min-w-0 items-center"
                 onClick={() => onActivate(surface)}
@@ -1004,11 +949,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const tabListRef = useRef<HTMLDivElement>(null);
   const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
-  const sideChatRenameRequest = useSideChatDraftStore((state) => state.renameRequest);
-  const canRenameSurface = (surface: RightPanelSurface) =>
-    surface.kind === "device"
-      ? props.onRenameDevice !== undefined
-      : surface.kind === "side-chat" && props.onRenameSideChat !== undefined;
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({
     hasOverflow: false,
@@ -1126,7 +1066,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
     },
-    ...sideChatSurfaceActions(props),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1149,7 +1088,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (surfaceIndex < 0) return;
 
     const items: ContextMenuItem<TabContextMenuAction>[] = [];
-    if (canRenameSurface(surface)) items.push({ id: "rename", label: "Rename" });
+    if (surface.kind === "device" && props.onRenameDevice)
+      items.push({ id: "rename", label: "Rename" });
     if (surface.kind === "file" && surface.attachment === undefined) {
       items.push({ id: "copy-path", label: "Copy path" });
     }
@@ -1165,28 +1105,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }),
       });
     }
-    const sideChatRef =
-      surface.kind === "side-chat" &&
-      props.environmentId !== null &&
-      props.onSideChatAction !== undefined
-        ? scopeThreadRef(props.environmentId, ThreadId.make(surface.resourceId))
-        : null;
-    const runSideChatAction = (action: SideChatAction) => {
-      if (sideChatRef !== null) props.onSideChatAction?.(action, sideChatRef);
-    };
-    if (sideChatRef !== null) {
-      items.push(
-        {
-          id: "side-chat:attach",
-          label: "Attach to thread",
-          disabled: !readSideChatHasUnsent(sideChatRef),
-        },
-        { id: "side-chat:keep", label: "Keep as thread" },
-        { id: "side-chat:delete", label: "Delete", destructive: true },
-      );
-    }
     items.push(
-      { id: "close", label: "Close", separatorBefore: sideChatRef !== null },
+      { id: "close", label: "Close" },
       {
         id: "close-others",
         label: "Close others",
@@ -1224,15 +1144,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         }
         break;
       }
-      case "side-chat:attach":
-        runSideChatAction("attach");
-        break;
-      case "side-chat:keep":
-        runSideChatAction("keep");
-        break;
-      case "side-chat:delete":
-        runSideChatAction("delete");
-        break;
       case "close":
         props.onCloseSurface(surface);
         break;
@@ -1265,18 +1176,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   );
   const onStartRenameTab = useStableCallback((surfaceId: string) => setRenamingDevice(surfaceId));
   const onFinishRenameTab = useStableCallback((surfaceId: string, title: string) => {
-    const surface = props.surfaces.find((entry) => entry.id === surfaceId);
-    if (surface?.kind === "side-chat") {
-      useSideChatDraftStore.getState().setRenameRequest(null);
-      if (props.environmentId !== null) {
-        props.onRenameSideChat?.(
-          scopeThreadRef(props.environmentId, ThreadId.make(surface.resourceId)),
-          title,
-        );
-      }
-    } else {
-      props.onRenameDevice?.(surfaceId, title);
-    }
+    props.onRenameDevice?.(surfaceId, title);
     setRenamingDevice(null);
   });
 
@@ -1365,14 +1265,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   props.previewSessions,
                   props.desktopByTabId,
                 );
-                const renaming =
-                  renamingDevice === surface.id ||
-                  (surface.kind === "side-chat" && sideChatRenameRequest === surface.resourceId);
                 return (
                   <RightPanelTab
                     key={surface.id}
                     surface={surface}
-                    dragDisabled={!props.onMoveSurface || renaming}
+                    dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
                     active={surface.id === props.activeSurfaceId}
                     pending={props.pendingSurfaceIds.has(surface.id)}
                     title={surfaceTitle(surface, props.previewSessions, props.terminalLabelsById)}
@@ -1387,8 +1284,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     theme={resolvedTheme}
                     environmentId={props.environmentId}
                     pullRequestStatusSeed={props.pullRequestStatusSeeds?.[surface.id]}
-                    renaming={renaming}
-                    canRename={canRenameSurface(surface)}
+                    renaming={renamingDevice === surface.id}
+                    canRename={props.onRenameDevice !== undefined}
                     ownsDesktopTitleBar={ownsDesktopTitleBar}
                     onActivate={onActivateTab}
                     onClose={onCloseTab}
@@ -1550,15 +1447,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             deviceAvailable={props.deviceAvailable}
-            {...(props.onAddSideChat === undefined
-              ? {}
-              : {
-                  onAddSideChat: props.onAddSideChat,
-                  sideChatAvailable: props.sideChatAvailable ?? false,
-                  ...(props.sideChatDisabledReason === undefined
-                    ? {}
-                    : { sideChatDisabledReason: props.sideChatDisabledReason }),
-                })}
           />
         ) : (
           props.children

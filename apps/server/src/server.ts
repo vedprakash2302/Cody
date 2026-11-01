@@ -193,9 +193,6 @@ import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
-import * as SideChatService from "./cody/SideChatService.ts";
-import * as SideChatStore from "./cody/SideChatStore.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
@@ -553,23 +550,6 @@ const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
 
-const layerSideChats = Layer.merge(
-  SideChatStore.layer,
-  SideChatStore.layerMembership.pipe(Layer.provide(SideChatStore.layer)),
-);
-
-const layerSideChatService = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const service = yield* SideChatService.SideChatService;
-    yield* service.start();
-  }),
-).pipe(
-  Layer.provideMerge(SideChatService.layer),
-  Layer.provide(ProjectionStoreV2.layer),
-  Layer.provide(IdAllocator.layer),
-  Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-);
-
 const layerProviderInstallationRefresh = Layer.effectDiscard(
   Effect.gen(function* () {
     const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
@@ -615,7 +595,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   layerThreadPullRequestWorker,
-  layerSideChatService,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -649,8 +628,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
-  // Read by turn start, the relay, and the transports, all built above.
-  Layer.provideMerge(layerSideChats),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(SecretResolver.layer),

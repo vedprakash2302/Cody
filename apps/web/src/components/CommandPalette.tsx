@@ -64,7 +64,6 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
-  MessagesSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
@@ -102,7 +101,6 @@ import {
 } from "./promptLinks/copyPromptLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
-import { useSideChatEntry } from "../cody/sideChats";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
@@ -448,7 +446,6 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
-  const sideChatEntry = useSideChatEntry({ thread: activeThread ?? null });
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
   );
@@ -1330,32 +1327,6 @@ function OpenCommandPaletteDialog(props: {
         useRightPanelStore.getState().open(threadRef, "pull-requests");
       },
     });
-    if (sideChatEntry.enabled) {
-      actionItems.push({
-        kind: "action",
-        value: "action:new-side-chat",
-        searchTerms: ["side chat", "side", "btw", "ask", "question", "new"],
-        title: "New side chat",
-        disabled: !sideChatEntry.canStartNew,
-        icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
-        shortcutCommand: "thread.sideChat",
-        run: async () => {
-          await sideChatEntry.startNew();
-        },
-      });
-      if (sideChatEntry.hasOpenSideChat) {
-        actionItems.push({
-          kind: "action",
-          value: "action:open-side-chat",
-          searchTerms: ["side chat", "side", "btw", "ask", "question"],
-          title: "Open side chat",
-          icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
-          run: async () => {
-            await sideChatEntry.open();
-          },
-        });
-      }
-    }
   }
 
   if (activeThread !== null && canShareActiveThreadWithGuest) {

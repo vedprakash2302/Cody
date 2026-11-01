@@ -31,9 +31,6 @@ const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
-const SideChatPanel = lazy(() =>
-  import("../../cody/SideChatPanel").then((module) => ({ default: module.SideChatPanel })),
-);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -168,18 +165,6 @@ export function RightPanelSurfaceContent(props: {
     }
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
-    case "side-chat":
-      return (
-        <Suspense fallback={null}>
-          <SideChatPanel
-            key={surface.id}
-            parentRef={threadRef}
-            sideChatThreadId={surface.resourceId}
-            visible={visible}
-            onClose={() => props.onCloseSurface(surface)}
-          />
-        </Suspense>
-      );
     case "device":
       return (
         <Suspense fallback={null}>

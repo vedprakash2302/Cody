@@ -69,7 +69,6 @@ export function useComposerMenuItems({
   selectedProviderSkills,
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
-  sideChatAvailable = false,
   questionAttachmentTarget,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
@@ -86,8 +85,6 @@ export function useComposerMenuItems({
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
-  /** Cody: offers /side when the thread can open a side chat. */
-  readonly sideChatAvailable?: boolean;
   readonly questionAttachmentTarget: DraftId | null;
 }) {
   // Thread mentions rank by recency as of when the composer mounted.
@@ -236,17 +233,6 @@ export function useComposerMenuItems({
                 command: "default",
                 label: "/default",
                 description: "Switch this thread back to normal build mode",
-              },
-            ] as const)
-          : []),
-        ...(sideChatAvailable
-          ? ([
-              {
-                id: "slash:side",
-                type: "slash-command",
-                command: "side",
-                label: "/side",
-                description: "Ask about this thread in a new side chat",
               },
             ] as const)
           : []),

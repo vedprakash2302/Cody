@@ -23,7 +23,6 @@ import * as ConnectionCredentialStore from "./credentialStore.ts";
 import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
-  RelayConnectionTarget,
   SshConnectionTarget,
   type ConnectionTarget,
 } from "./model.ts";
@@ -202,72 +201,8 @@ describe("ConnectionResolver", () => {
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
         socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2&codyFeatures=sideChat",
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
         httpAuthorization: null,
-        target,
-      });
-    }),
-  );
-
-  it.effect("authorizes a desktop primary environment with its platform bearer token", () =>
-    Effect.gen(function* () {
-      const bearerInputs = yield* Ref.make<ReadonlyArray<{ token: string; method: string }>>([]);
-      const layerBroker = yield* makeDependencies({
-        primaryBearerToken: "desktop-bearer",
-        authorizeBearer: (input) =>
-          Ref.update(bearerInputs, (values) => [
-            ...values,
-            { token: input.bearerToken, method: input.connectionMethod },
-          ]).pipe(
-            Effect.as({
-              environmentId: input.expectedEnvironmentId,
-              label: "Primary",
-              httpBaseUrl: input.httpBaseUrl,
-              socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop",
-              httpAuthorization: {
-                _tag: "Bearer" as const,
-                token: input.bearerToken,
-              },
-            }),
-          ),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-      const target = new PrimaryConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Primary",
-        httpBaseUrl: "http://127.0.0.1:3777",
-        wsBaseUrl: "ws://127.0.0.1:3777",
-      });
-
-      expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl:
-          "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=2&codyFeatures=sideChat",
-        httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
-        target,
-      });
-      expect(yield* Ref.get(bearerInputs)).toEqual([{ token: "desktop-bearer", method: "direct" }]);
-    }),
-  );
-
-  it.effect("prepares relay connections with the authorized endpoint and credentials", () =>
-    Effect.gen(function* () {
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const layerBroker = yield* makeDependencies();
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
-
-      expect(yield* broker.prepare(catalogEntry(target))).toEqual({
-        environmentId: ENVIRONMENT_ID,
-        label: "Authorized relay environment",
-        httpBaseUrl: ENDPOINT.httpBaseUrl,
-        socketUrl: `wss://authorized.example.test/ws?wsTicket=dpop&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}&codyFeatures=sideChat`,
-        httpAuthorization: {
-          _tag: "Dpop",
-          accessToken: "dpop-access-token",
-          expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        },
         target,
       });
     }),

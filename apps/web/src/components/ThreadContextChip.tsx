@@ -16,9 +16,7 @@ export function ThreadContextChip(props: {
   const { environmentId, threadId } = props.record;
   const shell = useThreadShell({ environmentId, threadId });
   const project = useProject(shell ? scopeProjectRef(environmentId, shell.projectId) : null);
-  // Cody: an attached side chat's chip keeps its label, which says how much is new.
-  const title =
-    (shell?.source.codySideChat === true ? null : shell?.title?.trim()) || props.record.title;
+  const title = shell?.title?.trim() || props.record.title;
   return (
     <Tooltip>
       <TooltipTrigger

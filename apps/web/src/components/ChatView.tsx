@@ -37,8 +37,6 @@ import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useStableCallback } from "../hooks/useStableCallback";
-import { sideChatQuestionForSend } from "../cody/sideChatCommand";
-import { type SideChatAction, useSideChatEntry } from "../cody/sideChats";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
@@ -816,28 +814,6 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
-  const sideChatEntry = useSideChatEntry({ thread: serverThread, runs: serverProjection?.runs });
-  const newSideChatStable = useStableCallback(() => void sideChatEntry.startNew());
-  const sideChatPanelProps = sideChatEntry.enabled
-    ? {
-        onAddSideChat: newSideChatStable,
-        sideChatAvailable: sideChatEntry.canStartNew && canOperateThread,
-        onSideChatAction: (action: SideChatAction, sideChatRef: ScopedThreadRef) =>
-          void sideChatEntry.runAction(action, sideChatRef),
-        ...(canOperateThread
-          ? {
-              onRenameSideChat: (sideChatRef: ScopedThreadRef, title: string) =>
-                void sideChatEntry.rename(sideChatRef, title),
-            }
-          : {}),
-        ...(sideChatEntry.startNewDisabledReason === undefined
-          ? {}
-          : { sideChatDisabledReason: sideChatEntry.startNewDisabledReason }),
-      }
-    : {};
-  const askInSideChatStable = useStableCallback((citation: AssistantCitation) => {
-    void sideChatEntry.open({ quote: citation });
-  });
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -2732,10 +2708,6 @@ export default function ChatView(props: ChatViewProps) {
         if (!canInterruptRunningThread) return false;
         if (!event.repeat) void onInterruptStable();
       },
-      "thread.sideChat": ({ event }) => {
-        if (!sideChatEntry.canStartNew) return false;
-        if (!event.repeat) newSideChatStable();
-      },
     },
     fallback: (command) => {
       const scriptId = projectScriptIdFromCommand(command);
@@ -2938,36 +2910,7 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
-  const onSendOrOpenSideChat: typeof onSend = async (
-    event,
-    dispatchMode,
-    submissionIntent,
-    directAnnotation,
-  ) => {
-    const sideChatQuestion = sideChatQuestionForSend({
-      sideChatsEnabled: sideChatEntry.enabled,
-      directAnnotation: directAnnotation !== undefined,
-      hasNonPromptContent: composerHasNonPromptContent,
-      prompt: promptRef.current,
-    });
-    if (sideChatQuestion === null) {
-      return onSend(event, dispatchMode, submissionIntent, directAnnotation);
-    }
-    event?.preventDefault();
-    if (!sideChatEntry.canStartNew) {
-      toastManager.add({
-        type: "warning",
-        title: "No side chat yet",
-        description: sideChatEntry.startNewDisabledReason,
-      });
-      return;
-    }
-    promptRef.current = "";
-    setComposerDraftPrompt(composerDraftTarget, "");
-    composerRef.current?.resetCursorState();
-    void sideChatEntry.startNew({ send: sideChatQuestion });
-  };
-  const onComposerSendStable = useStableCallback(onSendOrOpenSideChat);
+  const onComposerSendStable = useStableCallback(onSend);
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -3396,12 +3339,6 @@ export default function ChatView(props: ChatViewProps) {
                 citationRequest={citationRequest}
                 citationHistory={citationHistory}
                 onCiteAssistantText={citeAssistantTextStable}
-                {...(sideChatEntry.enabled && canOperateThread
-                  ? {
-                      onAskInSideChat: askInSideChatStable,
-                      askInSideChatDisabledReason: sideChatEntry.disabledReason,
-                    }
-                  : {})}
                 {...(activeProject ? { onRunShellCommand: runShellCommandStable } : {})}
                 isWorking={isWorking}
                 runlessWorkActive={runlessWorkStartedAt !== null}
@@ -3681,9 +3618,6 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollKeyUp={onComposerPageScrollKeyUpStable}
                               onPageScrollRelease={onComposerPageScrollReleaseStable}
                               onCompactContext={onComposerCompactContextStable}
-                              {...(sideChatEntry.canStartNew
-                                ? { onOpenSideChat: newSideChatStable }
-                                : {})}
                               onSend={onComposerSendStable}
                               onResume={onComposerResumeStable}
                               onInterrupt={onInterruptStable}
@@ -3963,7 +3897,6 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurfaceStable}
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
-          {...sideChatPanelProps}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
