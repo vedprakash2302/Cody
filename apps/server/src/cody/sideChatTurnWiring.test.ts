@@ -42,7 +42,6 @@ import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as SideChatStore from "./SideChatStore.ts";
 import { SIDE_CHAT_RULES } from "./sideChatRules.ts";
 
 // These run upstream's turn services, so a merge that drops Cody's calls into
@@ -93,14 +92,13 @@ const sideChatProjection = {
   checkpoints: [],
 } as unknown as OrchestrationV2ThreadProjection;
 
-const membership = (recorded: Array<RunId>): SideChatStore.SideChatMembershipShape => ({
-  isSideChat: (threadId) => threadId === SIDE_CHAT,
-  catchUps: () => ({}),
-  recordCatchUp: () => Effect.void,
-  sentToThread: () => ({}),
-  recordSentToThread: (_sideChatId, _messageId, runId) =>
-    Effect.sync(() => void recorded.push(runId)),
-});
+/** Upstream's shell for SIDE_CHAT marks it a side chat of THREAD. */
+const getThreadShell = (threadId: ThreadId) =>
+  Effect.succeed(
+    threadId === SIDE_CHAT
+      ? ({ id: SIDE_CHAT, lineage: { parentThreadId: THREAD, sideChat: true } } as never)
+      : null,
+  );
 
 const recordsFor = (projection: () => OrchestrationV2ThreadProjection) => (threadId: ThreadId) =>
   Effect.succeed(threadId === SIDE_CHAT ? sideChatProjection : projection());
@@ -111,7 +109,9 @@ const assertCarriesSideChat = (text: string | undefined) => {
   assert.isTrue(text?.endsWith("</side-chat-context>\n\nship it"));
 };
 
-function threadProjection(): OrchestrationV2ThreadProjection {
+function threadProjection(
+  options: { readonly sideChat?: boolean } = {},
+): OrchestrationV2ThreadProjection {
   const run = {
     id: runId,
     threadId: THREAD,
@@ -137,7 +137,14 @@ function threadProjection(): OrchestrationV2ThreadProjection {
       projectId: ProjectId.make("wiring-project"),
       branch: null,
       worktreePath: null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: THREAD },
+      lineage: options.sideChat
+        ? {
+            parentThreadId: ThreadId.make("wiring-main"),
+            relationshipToParent: "fork",
+            rootThreadId: ThreadId.make("wiring-main"),
+            sideChat: true,
+          }
+        : { parentThreadId: null, relationshipToParent: null, rootThreadId: THREAD },
       forkedFrom: null,
     } as unknown as OrchestrationV2ThreadProjection["thread"],
     runs: [
@@ -265,9 +272,9 @@ const providerSession = {
   lastError: null,
 } as const;
 
-const startTurn = (sideChats: SideChatStore.SideChatMembershipShape) =>
+const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
   Effect.gen(function* () {
-    let projection = threadProjection();
+    let projection = threadProjection(options);
     let sentText: string | undefined;
     const turnStartContext = () => Effect.sync(() => ({ ...projection, hasConversation: true }));
     const layer = ProviderTurnStart.layer.pipe(
@@ -296,6 +303,7 @@ const startTurn = (sideChats: SideChatStore.SideChatMembershipShape) =>
           }),
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getThreadRecords: recordsFor(() => projection),
+            getThreadShell,
             getTurnStartContext: turnStartContext,
             getRuntimeRecoveryProjection: turnStartContext,
           }),
@@ -321,7 +329,6 @@ const startTurn = (sideChats: SideChatStore.SideChatMembershipShape) =>
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({
             resolve: () => Effect.succeed({ cwd: "/tmp/side-chat-wiring" } as never),
           }),
-          Layer.succeed(SideChatStore.SideChatMembership, sideChats),
         ),
       ),
     );
@@ -338,18 +345,13 @@ const startTurn = (sideChats: SideChatStore.SideChatMembershipShape) =>
 describe("upstream turn services carry side chat context", () => {
   it.effect("a thread turn's start carries an attached side chat", () =>
     Effect.gen(function* () {
-      const recorded: Array<RunId> = [];
-      assertCarriesSideChat(yield* startTurn(membership(recorded)));
-      assert.deepEqual(recorded, [RunId.make("side-run-1")]);
+      assertCarriesSideChat(yield* startTurn());
     }),
   );
 
   it.effect("a side chat turn's start carries the side chat rules", () =>
     Effect.gen(function* () {
-      const text = yield* startTurn({
-        ...membership([]),
-        isSideChat: (threadId) => threadId === THREAD,
-      });
+      const text = yield* startTurn({ sideChat: true });
       assert.isTrue(text?.startsWith(SIDE_CHAT_RULES));
     }),
   );
@@ -357,7 +359,6 @@ describe("upstream turn services carry side chat context", () => {
   it.effect("a message steered into a running thread turn", () =>
     Effect.gen(function* () {
       const projection = threadProjection();
-      const recorded: Array<RunId> = [];
       let sentText: string | undefined;
       const providerThread = projection.providerThreads[0]!;
       const runtime = {
@@ -374,6 +375,7 @@ describe("upstream turn services carry side chat context", () => {
           Layer.mergeAll(
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getThreadRecords: recordsFor(() => projection),
+              getThreadShell,
               getProviderControlContext: () =>
                 Effect.succeed({
                   providerThread,
@@ -396,7 +398,6 @@ describe("upstream turn services carry side chat context", () => {
             Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
               get: () => Effect.succeedSome(runtime),
             }),
-            Layer.succeed(SideChatStore.SideChatMembership, membership(recorded)),
           ),
         ),
       );
@@ -412,7 +413,6 @@ describe("upstream turn services carry side chat context", () => {
       }).pipe(Effect.provide(layer));
 
       assertCarriesSideChat(sentText);
-      assert.deepEqual(recorded, [RunId.make("side-run-1")]);
     }),
   );
 });

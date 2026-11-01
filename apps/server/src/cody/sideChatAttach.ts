@@ -1,116 +1,42 @@
 import type {
-  ComposerContextRecord,
   MessageId,
-  OrchestrationMessageContext,
   OrchestrationV2ConversationMessage,
-  OrchestrationV2ProviderTurn,
-  OrchestrationV2Run,
   OrchestrationV2TurnItem,
   RunId,
-  ThreadContextRecord,
   ThreadId,
 } from "@t3tools/contracts";
-import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { carriedThroughRunId, newerFinishedRuns } from "@t3tools/shared/codySideChats";
 import * as Effect from "effect/Effect";
 
 import type { ProjectionStoreV2Shape } from "../orchestration-v2/ProjectionStore.ts";
 import { ACTIVITY_ITEM_TYPES, digestTurns, renderDigest } from "./conversationDigest.ts";
-import { sideChatMainRuns } from "./sideChatMainUpdate.ts";
-
-/** Side chats attached to a thread message: their chips that the text still links to. */
-export function attachedSideChatRecords(
-  message: { readonly text: string; readonly context?: OrchestrationMessageContext | undefined },
-  isSideChat: (threadId: ThreadId) => boolean,
-): ReadonlyArray<ThreadContextRecord> {
-  const linked = new Set(
-    collectComposerContextReferences(message.text).map((ref) => ref.contextId),
-  );
-  return (message.context?.records ?? []).filter(
-    (candidate: ComposerContextRecord): candidate is ThreadContextRecord =>
-      candidate.kind === "thread" &&
-      "threadId" in candidate &&
-      linked.has(candidate.contextId) &&
-      isSideChat(candidate.threadId),
-  );
-}
-
-const STARTED_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
-  "running",
-  "waiting",
-  "completed",
-]);
 
 /**
- * The newest side chat run the thread has received. A message that started
- * its own run counts once its provider took the turn; one steered into a
- * running turn is recorded only after the steer landed. Neither counts once
- * the thread rolls its run back, which drops it from the provider's context.
+ * What a thread has received of one of its side chats, and what the side chat
+ * finished since. Each thread message carrying the side chat's chip covered
+ * the side chat runs that had finished when it was delivered.
  */
-export function sideChatSentThrough(input: {
-  readonly sent: Readonly<Record<MessageId, RunId>>;
-  readonly messages: ReadonlyArray<Pick<OrchestrationV2ConversationMessage, "id" | "runId">>;
-  readonly runs: ReadonlyArray<
-    Pick<OrchestrationV2Run, "id" | "status" | "userMessageId" | "activeAttemptId">
-  >;
-  readonly providerTurns: ReadonlyArray<
-    Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "nativeTurnRef">
-  >;
-  readonly sideChatRuns: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "ordinal">>;
-  /** The message being sent now, which can't count as received yet. */
-  readonly excludeMessageId?: MessageId | undefined;
-}): RunId | null {
-  const accepted = new Set(
-    input.providerTurns.flatMap((turn) =>
-      turn.nativeTurnRef !== null && turn.runAttemptId !== null ? [turn.runAttemptId] : [],
-    ),
-  );
-  const ordinals = new Map(input.sideChatRuns.map((run) => [run.id, run.ordinal]));
-  let newest: { readonly runId: RunId; readonly ordinal: number } | null = null;
-  for (const message of input.messages) {
-    const covered = input.sent[message.id];
-    if (covered === undefined || message.id === input.excludeMessageId) continue;
-    const run = input.runs.find((candidate) => candidate.id === message.runId);
-    if (run === undefined || run.status === "rolled_back") continue;
-    const received =
-      run.userMessageId !== message.id ||
-      STARTED_STATUSES.has(run.status) ||
-      (run.activeAttemptId !== null && accepted.has(run.activeAttemptId));
-    const ordinal = ordinals.get(covered);
-    if (received && ordinal !== undefined && (newest === null || ordinal > newest.ordinal)) {
-      newest = { runId: covered, ordinal };
-    }
-  }
-  return newest?.runId ?? null;
-}
-
-/** What a thread has received of a side chat, and what the side chat finished since. */
-export const readSideChatSentState = Effect.fn("SideChat.readSentState")(function* (input: {
+const readSideChatSentState = Effect.fn("SideChat.readSentState")(function* (input: {
   readonly projectionStore: ProjectionStoreV2Shape;
   readonly sideChatId: ThreadId;
   readonly threadId: ThreadId;
-  readonly sent: Readonly<Record<MessageId, RunId>>;
   readonly excludeMessageId?: MessageId | undefined;
 }) {
   const { projectionStore } = input;
-  const messageIds = Object.keys(input.sent) as Array<MessageId>;
-  const thread =
-    messageIds.length === 0
-      ? { messages: [], runs: [], providerTurns: [] }
-      : yield* projectionStore.getThreadRecords(
-          input.threadId,
-          ["messages", "runs", "providerTurns"],
-          { messageIds },
-        );
+  const thread = yield* projectionStore.getThreadRecords(
+    input.threadId,
+    ["messages", "runs", "providerTurns"],
+    { messageRoles: ["user"] },
+  );
   const sideChat = yield* projectionStore.getThreadRecords(input.sideChatId, ["runs"]);
-  const seenRunId = sideChatSentThrough({
-    sent: input.sent,
-    messages: thread.messages,
-    runs: thread.runs,
-    providerTurns: thread.providerTurns,
-    sideChatRuns: sideChat.runs,
+  const seenRunId = carriedThroughRunId({
+    startRunId: null,
+    sourceThreadId: input.sideChatId,
+    sourceRuns: sideChat.runs,
+    carrier: thread,
     excludeMessageId: input.excludeMessageId,
   });
-  return { title: sideChat.thread.title, ...sideChatMainRuns(seenRunId, sideChat.runs) };
+  return { title: sideChat.thread.title, ...newerFinishedRuns(seenRunId, sideChat.runs) };
 });
 
 const TAG = "side-chat-context";
@@ -160,13 +86,12 @@ function renderSideChatAttachment(input: {
   });
 }
 
-/** One attached side chat's block, and the side chat run it covers through. */
+/** One attached side chat's block: what it said since the thread last received it. */
 export const sideChatAttachmentText = Effect.fn("SideChat.attachmentText")(function* (input: {
   readonly projectionStore: ProjectionStoreV2Shape;
   readonly sideChatId: ThreadId;
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
-  readonly sent: Readonly<Record<MessageId, RunId>>;
   readonly withoutQuestion: boolean;
 }) {
   const { projectionStore, sideChatId } = input;
@@ -174,7 +99,6 @@ export const sideChatAttachmentText = Effect.fn("SideChat.attachmentText")(funct
     projectionStore,
     sideChatId,
     threadId: input.threadId,
-    sent: input.sent,
     excludeMessageId: input.messageId,
   });
   const runIds = state.newRuns.map((run) => run.id);
@@ -196,5 +120,5 @@ export const sideChatAttachmentText = Effect.fn("SideChat.attachmentText")(funct
     wentBack: state.wentBack,
     withoutQuestion: input.withoutQuestion,
   });
-  return { text, coveredRunId: state.newRuns.at(-1)?.id ?? state.seen?.id ?? null };
+  return text;
 });

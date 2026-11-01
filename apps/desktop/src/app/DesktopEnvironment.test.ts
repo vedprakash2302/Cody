@@ -77,7 +77,6 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.vedpandey.cody.dev");
-      assert.equal(environment.linuxWmClass, "cody-dev");
       assert.equal(environment.linuxDesktopEntryName, "com.vedpandey.cody.dev.desktop");
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),

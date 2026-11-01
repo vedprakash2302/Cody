@@ -17,7 +17,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-import * as SideChatStore from "../cody/SideChatStore.ts";
 import { codySteerText } from "../cody/sideChatProviderText.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -94,7 +93,6 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
-    const sideChats = yield* SideChatStore.SideChatMembership;
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -371,7 +369,6 @@ export const layer: Layer.Layer<
           }
           const codyText = yield* codySteerText({
             projectionStore: projections,
-            sideChats,
             threadId: input.threadId,
             message,
           });
@@ -384,7 +381,7 @@ export const layer: Layer.Layer<
               message: {
                 messageId: message.id,
                 text:
-                  codyText?.text ??
+                  codyText ??
                   projectComposerContextForProvider({
                     text: message.text,
                     records: message.context?.records ?? [],
@@ -401,7 +398,6 @@ export const layer: Layer.Layer<
               },
             })
             .pipe(
-              Effect.tap(() => codyText?.record ?? Effect.void),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
                   const current = yield* projections.getProviderControlContext(

@@ -42,15 +42,26 @@ const mainRecord: ThreadContextRecord = {
 const chip = formatComposerContextReference(mainRecord);
 const withChip = { version: 1 as const, records: [mainRecord] };
 
-const mainRun = (ordinal: number, status: OrchestrationV2Run["status"]) =>
+const run = (
+  prefix: string,
+  ordinal: number,
+  status: OrchestrationV2Run["status"],
+  startedAt: number,
+) =>
   ({
-    id: RunId.make(`main-run-${ordinal}`),
+    id: RunId.make(`${prefix}-run-${ordinal}`),
     ordinal,
     status,
+    startedAt: at(startedAt),
+    requestedAt: at(startedAt),
     completedAt: status === "running" ? null : at(ordinal * 10 + 5),
-    userMessageId: MessageId.make(`main-message-${ordinal}`),
-    activeAttemptId: RunAttemptId.make(`main-attempt-${ordinal}`),
+    userMessageId: MessageId.make(`${prefix}-message-${ordinal}`),
+    activeAttemptId: RunAttemptId.make(`${prefix}-attempt-${ordinal}`),
   }) as OrchestrationV2Run;
+const mainRun = (ordinal: number, status: OrchestrationV2Run["status"], startedAt = ordinal * 10) =>
+  run("main", ordinal, status, startedAt);
+const sideRun = (ordinal: number, status: OrchestrationV2Run["status"], startedAt = ordinal * 10) =>
+  run("side", ordinal, status, startedAt);
 
 const message = (
   id: string,
@@ -58,13 +69,14 @@ const message = (
   text: string,
   runId: RunId | null,
   context?: OrchestrationV2ConversationMessage["context"],
+  createdAt = 0,
 ) =>
   ({
     id: MessageId.make(id),
     role,
     text,
     runId,
-    createdAt: at(0),
+    createdAt: at(createdAt),
     streaming: false,
     ...(context === undefined ? {} : { context }),
   }) as OrchestrationV2ConversationMessage;
@@ -87,16 +99,6 @@ const checkpoints = [
   { runId: mainRuns[2]!.id, files: [{ path: "src/login.ts" }] },
 ] as unknown as ReadonlyArray<OrchestrationV2Checkpoint>;
 
-const sideRun = (ordinal: number, status: OrchestrationV2Run["status"]) =>
-  ({
-    id: RunId.make(`side-run-${ordinal}`),
-    ordinal,
-    status,
-    completedAt: status === "running" ? null : at(ordinal * 10 + 5),
-    userMessageId: MessageId.make(`s${ordinal}`),
-    activeAttemptId: RunAttemptId.make(`side-attempt-${ordinal}`),
-  }) as OrchestrationV2Run;
-
 const sideMessages = [
   message("sm1", "user", "is retry safe?", RunId.make("side-run-1")),
   message("sm2", "assistant", "Yes, the call is idempotent.", RunId.make("side-run-1")),
@@ -114,15 +116,32 @@ const sideItems = [
   { type: "file_change", runId: RunId.make("side-run-2"), fileName: "src/retry.ts" },
 ] as unknown as ReadonlyArray<OrchestrationV2TurnItem>;
 
-/** Thread messages that carried the side chat: started, steered, and still queued. */
-const deliveries = [
-  message("main-message-2", "user", "x", mainRuns[1]!.id),
-  message("main-steered", "user", "x", mainRuns[2]!.id),
-  message("main-message-9", "user", "x", null),
-];
+const byFilter = (
+  entries: ReadonlyArray<OrchestrationV2ConversationMessage>,
+  filter: ProjectionRecordFilter | undefined,
+) =>
+  entries.filter(
+    (entry) =>
+      (filter?.messageRoles === undefined || filter.messageRoles.includes(entry.role)) &&
+      (filter?.messageRunIds === undefined ||
+        (entry.runId !== null && filter.messageRunIds.includes(entry.runId))),
+  );
 
-const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
+/** A projection store holding the main thread and its side chat. */
+const makeStore = (input: {
+  readonly sideChatRuns: ReadonlyArray<OrchestrationV2Run>;
+  /** The side chat's own user messages, read for its catch-ups. */
+  readonly sideChatTurns?: ReadonlyArray<OrchestrationV2ConversationMessage>;
+  /** The main thread's earlier user messages, read for what it received. */
+  readonly mainTurns?: ReadonlyArray<OrchestrationV2ConversationMessage>;
+}) =>
   ({
+    getThreadShell: (threadId: ThreadId) =>
+      Effect.succeed(
+        threadId === SIDE_CHAT
+          ? { id: SIDE_CHAT, lineage: { parentThreadId: MAIN, sideChat: true } }
+          : { id: threadId, lineage: { parentThreadId: null } },
+      ),
     getThreadRecords: (
       threadId: ThreadId,
       _fields: ReadonlyArray<string>,
@@ -131,64 +150,36 @@ const makeStore = (sideChatRuns: ReadonlyArray<OrchestrationV2Run>) =>
       Effect.succeed({
         thread: { id: threadId, title: threadId === MAIN ? "Fix login" : "Retry logic" },
         messages:
-          filter?.messageIds !== undefined
-            ? (threadId === MAIN ? deliveries : []).filter((entry) =>
-                filter.messageIds!.includes(entry.id),
-              )
-            : (threadId === MAIN ? mainMessages : sideMessages).filter(
-                (entry) =>
-                  filter?.messageRunIds === undefined ||
-                  (entry.runId !== null && filter.messageRunIds.includes(entry.runId)),
-              ),
+          threadId === MAIN
+            ? byFilter([...mainMessages, ...(input.mainTurns ?? [])], filter)
+            : filter?.messageRoles === undefined
+              ? byFilter(sideMessages, filter)
+              : (input.sideChatTurns ?? []),
         turnItems: (threadId === MAIN ? [] : sideItems).filter(
           (item) =>
             filter?.turnItemRunIds === undefined || filter.turnItemRunIds.includes(item.runId),
         ),
-        runs: threadId === MAIN ? mainRuns : sideChatRuns,
+        runs: threadId === MAIN ? mainRuns : input.sideChatRuns,
         providerTurns: [],
         checkpoints: threadId === MAIN ? checkpoints : [],
       }),
   }) as unknown as ProjectionStoreV2Shape;
 
-const makeSideChats = (
-  catchUps: Record<string, RunId> = {},
-  sentToThread: Record<string, RunId> = {},
-) => {
-  const recorded: Array<[MessageId, RunId]> = [];
-  const recordedSent: Array<[ThreadId, MessageId, RunId]> = [];
-  return {
-    recorded,
-    recordedSent,
-    sideChats: {
-      isSideChat: (threadId: ThreadId) => threadId === SIDE_CHAT,
-      catchUps: () => catchUps as Record<MessageId, RunId>,
-      recordCatchUp: (_threadId: ThreadId, messageId: MessageId, runId: RunId) =>
-        Effect.sync(() => void recorded.push([messageId, runId])),
-      sentToThread: () => sentToThread as Record<MessageId, RunId>,
-      recordSentToThread: (sideChatId: ThreadId, messageId: MessageId, runId: RunId) =>
-        Effect.sync(() => void recordedSent.push([sideChatId, messageId, runId])),
-    },
-  };
-};
-
 const sideChatThread = {
   id: SIDE_CHAT,
-  lineage: { parentThreadId: MAIN },
+  lineage: { parentThreadId: MAIN, sideChat: true },
   forkedFrom: { type: "run", threadId: MAIN, runId: mainRuns[0]!.id },
 } as unknown as Parameters<typeof sideChatProviderText>[0]["thread"];
 
 describe("sideChatProviderText", () => {
   it.effect("adds only the side chat rules to a message without main's chip", () =>
     Effect.gen(function* () {
-      const { sideChats, recorded } = makeSideChats();
       const text = yield* sideChatProviderText({
-        projectionStore: makeStore([]),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns: [] }),
         thread: sideChatThread,
         message: message("s1", "user", "why?", null),
       });
       assert.strictEqual(text, `${SIDE_CHAT_RULES}\n\nwhy?`);
-      assert.deepEqual(recorded, []);
 
       const quote = serializeAssistantCitation({
         version: 1,
@@ -203,8 +194,7 @@ describe("sideChatProviderText", () => {
       });
       for (const withMain of [false, true]) {
         const quoted = yield* sideChatProviderText({
-          projectionStore: makeStore([]),
-          sideChats,
+          projectionStore: makeStore({ sideChatRuns: [] }),
           thread: sideChatThread,
           message: withMain
             ? message("s2", "user", `${chip} ${quote}\n\nwhy?`, null, withChip)
@@ -218,30 +208,41 @@ describe("sideChatProviderText", () => {
 
   it.effect("puts main's finished turns since the fork ahead of the question", () =>
     Effect.gen(function* () {
-      const { sideChats, recorded } = makeSideChats();
+      const asking = message(
+        "side-message-1",
+        "user",
+        `${chip} is the fix safe?`,
+        RunId.make("side-run-1"),
+        withChip,
+      );
       const text = yield* sideChatProviderText({
-        projectionStore: makeStore([sideRun(1, "running")]),
-        sideChats,
+        projectionStore: makeStore({
+          sideChatRuns: [sideRun(1, "running", 40)],
+          sideChatTurns: [asking],
+        }),
         thread: sideChatThread,
-        message: message("s1", "user", `${chip} is the fix safe?`, null, withChip),
+        message: asking,
       });
       assert.include(text, "[Main turn 1]\nUser: add tests\nAssistant: Added tests.");
       assert.include(text, "Changed: src/login.ts");
       assert.notInclude(text, "User: start");
       assert.notInclude(text, "t3-context:");
       assert.isTrue(text.endsWith("</main-thread-update>\n\nis the fix safe?"));
-      assert.deepEqual(recorded, [[MessageId.make("s1"), mainRuns[2]!.id]]);
     }),
   );
 
   it.effect("covers only what main finished since the last delivered catch-up", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats({ s1: mainRuns[1]!.id });
+      const earlier = message("side-message-1", "user", chip, RunId.make("side-run-1"), withChip);
+      const asking = message("side-message-2", "user", chip, RunId.make("side-run-2"), withChip);
       const text = yield* sideChatProviderText({
-        projectionStore: makeStore([sideRun(1, "completed"), sideRun(2, "running")]),
-        sideChats,
+        // The earlier catch-up started after main's second turn finished, before its third.
+        projectionStore: makeStore({
+          sideChatRuns: [sideRun(1, "completed", 30), sideRun(2, "running", 40)],
+          sideChatTurns: [earlier, asking],
+        }),
         thread: sideChatThread,
-        message: message("s2", "user", chip, null, withChip),
+        message: asking,
       });
       assert.notInclude(text, "add tests");
       assert.include(text, "[Main turn 1]\nUser: fix the bug");
@@ -251,12 +252,15 @@ describe("sideChatProviderText", () => {
 
   it.effect("repeats an update whose catch-up was cancelled, and its own retried start", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats({ s1: mainRuns[2]!.id, s2: mainRuns[2]!.id });
+      const earlier = message("side-message-1", "user", chip, RunId.make("side-run-1"), withChip);
+      const asking = message("side-message-2", "user", chip, RunId.make("side-run-2"), withChip);
       const text = yield* sideChatProviderText({
-        projectionStore: makeStore([sideRun(1, "cancelled"), sideRun(2, "running")]),
-        sideChats,
+        projectionStore: makeStore({
+          sideChatRuns: [sideRun(1, "cancelled", 40), sideRun(2, "running", 40)],
+          sideChatTurns: [earlier, asking],
+        }),
         thread: sideChatThread,
-        message: message("s2", "user", chip, null, withChip),
+        message: asking,
       });
       assert.include(text, "User: add tests");
       assert.include(text, "User: fix the bug");
@@ -282,28 +286,43 @@ describe("codyProviderText for a thread message", () => {
     forkedFrom: null,
   } as unknown as Parameters<typeof codyProviderText>[0]["thread"];
   const sideChatRuns = [sideRun(1, "completed"), sideRun(2, "completed")];
+  const sending = (text: string) => message("main-message-5", "user", text, null, attached);
 
-  it.effect("leaves a message without an attached side chat to upstream", () =>
+  it.effect("leaves a message without a brought-back side chat to upstream", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats();
       const unlinked = yield* codyProviderText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns }),
         thread: mainThread,
-        message: message("main-message-4", "user", "ship it", null, attached),
+        message: sending("ship it"),
       });
       assert.isNull(unlinked);
+      // A chip to a thread that isn't this thread's side chat is upstream's too.
+      const otherRecord = {
+        ...mainRecord,
+        contextId: toKindScopedComposerContextId("thread", "other"),
+        threadId: ThreadId.make("other"),
+      };
+      const other = yield* codyProviderText({
+        projectionStore: makeStore({ sideChatRuns }),
+        thread: mainThread,
+        message: message(
+          "main-message-5",
+          "user",
+          `${formatComposerContextReference(otherRecord)} hi`,
+          null,
+          { version: 1, records: [otherRecord] },
+        ),
+      });
+      assert.isNull(other);
     }),
   );
 
   it.effect("puts the side chat's turns ahead of the message, without command output", () =>
     Effect.gen(function* () {
-      const { sideChats, recordedSent } = makeSideChats();
       const text = yield* codyProviderText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns }),
         thread: mainThread,
-        message: message("main-message-4", "user", `${sideChatChip} ship it`, null, attached),
+        message: sending(`${sideChatChip} ship it`),
       });
       assert.include(text, 'The user attached their side chat "Retry logic"');
       assert.include(
@@ -314,20 +333,17 @@ describe("codyProviderText for a thread message", () => {
       assert.notInclude(text, "SECRET OUTPUT");
       assert.include(text, `t3_thread_read (threadId "${SIDE_CHAT}")`);
       assert.isTrue(text?.endsWith("</side-chat-context>\n\nship it"));
-      assert.deepEqual(recordedSent, [
-        [SIDE_CHAT, MessageId.make("main-message-4"), RunId.make("side-run-2")],
-      ]);
     }),
   );
 
   it.effect("sends only what the side chat said since the thread last received it", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats({}, { "main-message-2": RunId.make("side-run-1") });
+      // Main's second turn brought the side chat back after its first turn finished.
+      const earlier = message("main-message-2", "user", sideChatChip, mainRuns[1]!.id, attached);
       const text = yield* codyProviderText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns, mainTurns: [earlier] }),
         thread: mainThread,
-        message: message("main-message-4", "user", sideChatChip, null, attached),
+        message: sending(sideChatChip),
       });
       assert.notInclude(text, "is retry safe?");
       assert.include(text, "[Side chat turn 1]\nUser: what about timeouts?");
@@ -337,12 +353,11 @@ describe("codyProviderText for a thread message", () => {
 
   it.effect("resends turns whose thread message was never delivered", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats({}, { "main-message-9": RunId.make("side-run-2") });
+      const queued = message("main-message-9", "user", sideChatChip, null, attached);
       const text = yield* codyProviderText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns, mainTurns: [queued] }),
         thread: mainThread,
-        message: message("main-message-5", "user", sideChatChip, null, attached),
+        message: sending(sideChatChip),
       });
       assert.include(text, "is retry safe?");
     }),
@@ -350,34 +365,26 @@ describe("codyProviderText for a thread message", () => {
 
   it.effect("counts a message steered into a running turn as received", () =>
     Effect.gen(function* () {
-      const { sideChats } = makeSideChats({}, { "main-steered": RunId.make("side-run-2") });
+      const steered = message("main-steered", "user", sideChatChip, mainRuns[2]!.id, attached, 30);
       const text = yield* codyProviderText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns, mainTurns: [steered] }),
         thread: mainThread,
-        message: message("main-message-4", "user", `${sideChatChip} and?`, null, attached),
+        message: sending(`${sideChatChip} and?`),
       });
       assert.include(text, "Nothing new was said there since you last saw it.");
       assert.notInclude(text, "is retry safe?");
     }),
   );
 
-  it.effect("records a steered attachment only when asked to, after the steer lands", () =>
+  it.effect("gives a steered message the side chat's turns too", () =>
     Effect.gen(function* () {
-      const { sideChats, recordedSent } = makeSideChats();
       const steer = yield* codySteerText({
-        projectionStore: makeStore(sideChatRuns),
-        sideChats,
+        projectionStore: makeStore({ sideChatRuns }),
         threadId: MAIN,
         message: message("main-steered", "user", `${sideChatChip} and?`, null, attached),
       });
-      assert.include(steer?.text, "[Side chat turn 2]\nUser: what about timeouts?");
-      assert.isTrue(steer?.text.endsWith("</side-chat-context>\n\nand?"));
-      assert.deepEqual(recordedSent, []);
-      yield* steer!.record;
-      assert.deepEqual(recordedSent, [
-        [SIDE_CHAT, MessageId.make("main-steered"), RunId.make("side-run-2")],
-      ]);
+      assert.include(steer, "[Side chat turn 2]\nUser: what about timeouts?");
+      assert.isTrue(steer?.endsWith("</side-chat-context>\n\nand?"));
     }),
   );
 });

@@ -70,7 +70,6 @@ describe("DesktopEarlyElectronStartup", () => {
 
     assert.deepEqual(options, {
       isDevelopment: true,
-      linuxWmClass: "cody-dev",
       linuxDesktopEntryName: "com.vedpandey.cody.dev.desktop",
       passwordStore: "gnome-libsecret",
     });

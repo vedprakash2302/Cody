@@ -37,7 +37,8 @@ lowest, and decrease wraps from the lowest level to the highest.
 
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to
-model search. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the
+model search. Right at the end of the search moves to the highlighted model's effort
+levels, and Left comes back. Choosing a model keeps the picker open on its effort. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the
 search. These provider shortcuts can also be changed in Settings.
 
 These shortcuts run inside the focused web or desktop client. `mod` uses Command
@@ -150,8 +151,8 @@ a shortcut.
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
 
-`thread.sideChat` (`mod+alt+s` by default) opens the focused thread's
-[side chat](./side-chats.md) on a Cody server.
+`thread.sideChat` (`mod+alt+s` by default) starts a new
+[side chat](./side-chats.md) from the focused thread.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
