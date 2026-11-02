@@ -87,6 +87,8 @@
   "apps/server/src/cody/sideChatProviderText.test.ts",
   "apps/server/src/cody/conversationDigest.test.ts",
   "apps/server/src/cody/sideChatTurnWiring.test.ts",
+  "apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts",
+  "apps/server/src/orchestration-v2/ThreadForkService.test.ts",
   "apps/server/src/cody/legacySideChats.test.ts",
   "packages/shared/src/codySideChats.test.ts",
   "apps/web/src/cody/sideChats.test.ts",

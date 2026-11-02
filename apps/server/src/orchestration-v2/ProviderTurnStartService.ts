@@ -701,15 +701,10 @@ export const layer: Layer.Layer<
       });
       const { isCurrentAttemptInStatus } = runControls;
 
-      // A side chat shares its parent's worktree; the turn that gets its context asks before acting.
+      // Cody: a side chat's first turn uses its own mode; upstream forces approval here.
       const resolvedPolicy = yield* runtimePolicy
         .resolve({
-          thread:
-            projection.thread.lineage.sideChat === true &&
-            (sideChatHandoff !== undefined ||
-              !projection.runs.some((previous) => previous.ordinal < run.ordinal))
-              ? { ...projection.thread, runtimeMode: "approval-required" }
-              : projection.thread,
+          thread: projection.thread,
           modelSelection: run.modelSelection,
         })
         .pipe(Effect.result);
