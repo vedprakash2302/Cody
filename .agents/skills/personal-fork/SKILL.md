@@ -157,6 +157,10 @@ These come from earlier syncs. Each run starts in a fresh thread, so anything le
   - Upstream's Bring back (`mergeBack`) is hidden behind `CODY_SIDE_CHAT_BAR` in `SideChatPane.tsx`, because it refuses while main runs. Upstream asks before acting on a side chat's first turn; Cody's `SIDE_CHAT_RULES` still go on every turn.
   - Cody's own side chats (0.1.6 and earlier) are archived once on server start by `apps/server/src/cody/legacySideChats.ts`, which reads `cody-side-chats.json` and deletes it after.
   - Quote in thread, Keep as thread, and Delete all are planned for a later release.
+- `buildRuntimeInstructions` has two returns since Antigravity skips PR linking (#28629). Cody's `<final_answer>` block sits inside `runtimeInfo` so both carry it.
+- Upstream's prepared server bytecode (#28572) reshaped `apps/desktop/src/compileCache.ts`. Keep upstream's flow with Cody's `cody/compile-cache` directory.
+- Desktop tests that stub `DesktopEnvironment` need `branding: { baseName: "Cody" }` wherever Cody's code reads it. Without it the startup recovery test hangs instead of failing. App-link tests use the `cody` scheme (`DesktopLifecycle.test.ts`).
+- Since the managed policy (#27197), a Windows desktop offers WSL only when it can read the machine's policy (the registry, through `ffi-rs`). A missing WSL backend or "Updates are off" message on Windows points there first.
 
 If resolving the merge would require uncertain product decisions, or a capability can only be confirmed by hand, leave `personal/main` unchanged. Push the checked merge to a new `sync/<date>` branch instead of discarding it, and explain the conflict and the decision or test needed.
 

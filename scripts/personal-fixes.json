@@ -57,6 +57,8 @@
   "apps/desktop/src/app/DesktopClerk.test.ts",
   "apps/desktop/src/app/DesktopLinuxUrlHandler.test.ts",
   "apps/desktop/src/window/DesktopWindow.test.ts",
+  "apps/desktop/src/app/DesktopLifecycle.test.ts",
+  "apps/desktop/src/app/DesktopStartupRecovery.test.ts",
   "scripts/build-desktop-artifact.test.ts",
   "scripts/merge-update-manifests.test.ts",
   "apps/desktop/src/updates/DesktopUpdates.test.ts",

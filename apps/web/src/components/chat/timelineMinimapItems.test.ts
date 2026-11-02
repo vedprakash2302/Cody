@@ -24,6 +24,7 @@ function rows(
     message,
     durationStart: message.createdAt,
     showAssistantMeta: false,
+    showAssistantTimestamp: false,
     showAssistantCopyButton: false,
     assistantCopyStreaming: false,
   }));
@@ -61,6 +62,7 @@ describe("deriveTimelineMinimapItems", () => {
           id: "image-only",
           createdAt: at,
           showAssistantMeta: false,
+          showAssistantTimestamp: false,
           showAssistantCopyButton: false,
           assistantCopyStreaming: false,
           message: {
