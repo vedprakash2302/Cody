@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CheckpointRef } from "@t3tools/contracts";
@@ -83,5 +84,5 @@ it.effect.each([
         assert(result.failure._tag === "VcsProcessTimeoutError");
         assert.strictEqual(result.failure.timeoutMs, elapsedMs);
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

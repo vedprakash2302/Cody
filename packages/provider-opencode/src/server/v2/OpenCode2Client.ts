@@ -167,9 +167,9 @@ const fillCompactionRecent = (message: unknown) =>
     : message;
 
 /**
- * OpenCode 2.1 dropped a compaction's `recent`, which the bundled 2.0.28 schema requires. Migrated
- * compactions keep it under `metadata.recent`; native 2.1 ones have none. T3 never reads it, so
- * filling the gap keeps history pages decodable while every other field still validates downstream.
+ * OpenCode 2.1 dropped a compaction's `recent`, which the bundled 2.0.28 schema requires.
+ * Migrated pre-2.1 compactions keep it under `metadata.recent`; native 2.1 ones have none.
+ * T3 never reads it, so fill the gap; every other field still validates downstream.
  */
 const fillCompactionRecents = HttpClient.transformResponse(
   Effect.fnUntraced(function* (

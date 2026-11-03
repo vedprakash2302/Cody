@@ -5,7 +5,7 @@ import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapTo
 import { WINDOWS_SSO_HELPER_ENV } from "@t3tools/shared/windowsSso";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -734,7 +734,7 @@ export const make = Effect.gen(function* () {
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const windowsSsoPath = yield* WindowsSsoPath.WindowsSsoPath;
   const clientSettings = yield* Effect.serviceOption(DesktopClientSettings.DesktopClientSettings);
   // Read at each launch, so toggling sign-in reaches WSL browser tabs when the backend next starts.
@@ -749,7 +749,7 @@ export const make = Effect.gen(function* () {
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
       onNone: () =>
-        crypto.randomBytes(32).pipe(
+        random.randomBytes(32).pipe(
           Effect.map((bytes) => {
             const secret = Hex.encode(bytes);
             return [secret, Option.some(secret)] as const;

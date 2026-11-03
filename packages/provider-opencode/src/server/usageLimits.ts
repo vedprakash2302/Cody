@@ -1,7 +1,7 @@
 import * as NodeSqlite from "node:sqlite";
 
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -225,9 +225,9 @@ const credentialFingerprint = Effect.fn("credentialFingerprint")(function* (inpu
   if (input.copilot) {
     material += `\0github-copilot\0${input.copilot.enterpriseUrl ?? ""}\0${input.copilot.refresh}`;
   }
-  const crypto = yield* Crypto.Crypto;
-  return yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(material))
+  const digest = yield* Digest.Digest;
+  return yield* digest
+    .digest(Digest.sha256, new TextEncoder().encode(material))
     .pipe(Effect.map(Hex.encode), Effect.orDie);
 });
 
