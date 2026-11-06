@@ -1060,7 +1060,9 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+// Cody builds Windows on Windows hosts, which add a prepared compile cache, node-pty's own
+// build and the sign-in helper to upstream's cross-built payload, about 16 more files.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 96;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
