@@ -1,3 +1,9 @@
+import {
+  scheduledTaskThreadMode,
+  type ScheduledTask,
+  type ScheduledTaskThreadMode,
+} from "@t3tools/contracts";
+
 import type { EnvironmentThreadShell } from "./state/models.ts";
 
 export interface ScheduledTaskThreadOption {
@@ -33,4 +39,49 @@ export function scheduledTaskThreadOptions(
     return [{ id: selectedThreadId, title: "Unavailable thread" }, ...options];
   }
   return options;
+}
+
+/**
+ * The "Post runs to" picker sits beside the Destination picker on servers with thread modes.
+ * Older servers have no modes, so the picker alone chooses between new threads and one thread.
+ */
+export function scheduledTaskShowsThreadPicker(
+  threadMode: ScheduledTaskThreadMode,
+  offersThreadModes: boolean,
+): boolean {
+  return !offersThreadModes || threadMode !== "new_thread";
+}
+
+/** Picking a thread for a new-thread task continues it; clearing it on an older server unbinds. */
+export function scheduledTaskModeAfterThreadChoice(
+  threadMode: ScheduledTaskThreadMode,
+  pickedThread: boolean,
+  offersThreadModes: boolean,
+): ScheduledTaskThreadMode {
+  if (pickedThread) return threadMode === "new_thread" ? "continue" : threadMode;
+  return offersThreadModes ? threadMode : "new_thread";
+}
+
+/** Runs go to the picked thread's checkout, so the workspace fields don't apply. */
+export function scheduledTaskPostsToThread(
+  threadId: string | null,
+  threadMode: ScheduledTaskThreadMode,
+): boolean {
+  return Boolean(threadId) && threadMode !== "new_thread";
+}
+
+/**
+ * Whether the picker can leave the thread empty. The server keeps a saved binding unless the
+ * task switches to new threads, so a bound one-thread task can only move to another thread.
+ */
+export function scheduledTaskCanClearThread(
+  savedTask: Pick<ScheduledTask, "threadId" | "threadMode"> | null,
+  offersThreadModes: boolean,
+): boolean {
+  return (
+    !offersThreadModes ||
+    savedTask === null ||
+    savedTask.threadId === null ||
+    scheduledTaskThreadMode(savedTask) === "new_thread"
+  );
 }

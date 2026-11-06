@@ -700,7 +700,6 @@ export const layer: Layer.Layer<
       });
       const { isCurrentAttemptInStatus } = runControls;
 
-      // Cody: a side chat's first turn uses its own mode; upstream forces approval here.
       const resolvedPolicy = yield* runtimePolicy
         .resolve({
           thread: projection.thread,

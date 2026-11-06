@@ -86,6 +86,13 @@ environment's time zone, which may differ from your phone's. Choose **Once**
 to run a task a single time at a date and time in your own time zone. If the
 environment is offline then, the task runs when it is back.
 
+Under **Destination**, choose where runs go. **New thread each run** keeps every
+run separate. The two one-thread choices start a thread on the first run and post
+later runs there: one continues the same conversation, the other starts each run
+in a fresh session that doesn't see earlier runs, so the thread stays readable
+without the agent's context growing. Moving such a task to another project starts
+a new thread there on its next run.
+
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
 
@@ -94,12 +101,13 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
-## Post scheduled runs to one thread
+## Post scheduled runs to an existing thread
 
-Each run of a scheduled task starts a new thread by default. Set **Post runs
-to** in the task's editor to send every run to one thread in the task's
-project instead. Runs then work in that thread's checkout and wait for its
-current turn to finish. Choose a new thread each run to go back.
+With a one-thread **Destination**, **Post runs to** picks the thread. Leave it
+on the thread the first run starts, or choose an existing thread in the task's
+project. Runs then work in that thread's checkout and wait for its current turn
+to finish. Once a task posts to a thread, choose another thread or switch
+**Destination** to **New thread each run** to move it.
 
 ## Webhook automations
 

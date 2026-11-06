@@ -20,6 +20,7 @@ import type {
   ScheduledTask,
   ScheduledTaskId,
   ScheduledTaskSchedule,
+  ScheduledTaskThreadMode,
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliverySummary,
   ThreadId,
@@ -32,13 +33,20 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
-import { scheduledTaskThreadOptions } from "@t3tools/client-runtime/scheduled-task-threads";
+import {
+  scheduledTaskCanClearThread,
+  scheduledTaskModeAfterThreadChoice,
+  scheduledTaskPostsToThread,
+  scheduledTaskShowsThreadPicker,
+  scheduledTaskThreadOptions,
+} from "@t3tools/client-runtime/scheduled-task-threads";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
+  scheduledTaskThreadMode,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -60,7 +68,13 @@ import {
   useEnvironmentHttpBaseUrl,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects, useThreadShell, useThreadShellsForProjectRefs } from "../../state/entities";
+import {
+  useProjects,
+  useQuietThreadShell,
+  useThreadShell,
+  useThreadShellsForProjectRefs,
+} from "../../state/entities";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { threadFamilies } from "../../state/threads";
@@ -132,8 +146,8 @@ const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
 
-/** Select value for "start a new thread each run", which stores no thread. */
-const NEW_THREAD_EACH_RUN = "new-thread";
+/** Select value for the "Post runs to" choice that stores no thread. */
+const NO_THREAD = "new-thread";
 
 const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   worktree: "Create a new worktree",
@@ -154,6 +168,7 @@ const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "main",
   startFromOrigin: true,
@@ -738,9 +753,6 @@ function ScheduledTaskRow({
   const isWebhook = task.schedule.type === "webhook";
   // The shell can leave out an older settled thread; its family read brings it back.
   useThreadFamily(environmentId, task.threadId);
-  const targetThread = useThreadShell(
-    task.threadId === null ? null : scopeThreadRef(environmentId, task.threadId),
-  );
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -792,11 +804,11 @@ function ScheduledTaskRow({
               "Not scheduled"
             )}
           </span>
-          {task.threadId !== null ? (
-            <span>Posts to {targetThread?.title ?? "an unavailable thread"}</span>
-          ) : null}
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
+          ) : null}
+          {task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread" ? (
+            <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
           ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
         </div>
@@ -855,6 +867,26 @@ function ScheduledTaskRow({
         </div>
       }
     />
+  );
+}
+
+function ScheduledTaskThreadLink({
+  environmentId,
+  threadId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const ref = scopeThreadRef(environmentId, threadId);
+  const title = useQuietThreadShell(ref)?.title.trim();
+  return (
+    <Link
+      to="/$environmentId/$threadId"
+      params={buildThreadRouteParams(ref)}
+      className="max-w-64 truncate underline underline-offset-2 hover:text-foreground"
+    >
+      {title || "Open thread"}
+    </Link>
   );
 }
 
@@ -1154,6 +1186,74 @@ function ScheduledTaskEditorDialog({
   );
 }
 
+const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
+  new_thread: "New thread each run",
+  continue: "One thread, continuing the conversation",
+  fresh_session: "One thread, fresh session each run",
+};
+
+function ScheduledTaskDestination({
+  environmentId,
+  threadId,
+  threadMode,
+  onThreadModeChange,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId | null;
+  readonly threadMode: ScheduledTaskThreadMode;
+  /** Absent on servers that predate thread modes. */
+  readonly onThreadModeChange: ((mode: ScheduledTaskThreadMode) => void) | undefined;
+}) {
+  const ref = threadId === null ? null : scopeThreadRef(environmentId, threadId);
+  const shell = useThreadShell(ref);
+  // The shell can omit older settled threads; their family read still carries the title.
+  const family = useEnvironmentQuery(
+    ref !== null && shell === null ? threadFamilies.familyAtom(environmentId, ref.threadId) : null,
+  );
+  const thread = shell ?? family.data?.threads.find((row) => row.id === threadId);
+  const bound = ref !== null && threadMode !== "new_thread";
+  const detail =
+    threadMode === "new_thread"
+      ? "Each run starts a new thread with the workspace and model below."
+      : !bound
+        ? threadMode === "continue"
+          ? "The first run starts a thread with the workspace and model below. Later runs continue that conversation."
+          : "The first run starts a thread with the workspace and model below. Later runs post there, each in a fresh session without earlier runs' context."
+        : threadMode === "continue"
+          ? "Each run continues this conversation, in its workspace and with its current model."
+          : "Each run starts a fresh session in this thread, without earlier runs' context.";
+  return (
+    <Field label="Destination" htmlFor="scheduled-task-destination">
+      {onThreadModeChange ? (
+        <Select
+          value={threadMode}
+          onValueChange={(value) => onThreadModeChange(value as ScheduledTaskThreadMode)}
+        >
+          <SelectTrigger size="sm" id="scheduled-task-destination">
+            <SelectValue>{THREAD_MODE_LABELS[threadMode]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {(Object.keys(THREAD_MODE_LABELS) as ScheduledTaskThreadMode[]).map((mode) => (
+              <SelectItem key={mode} value={mode}>
+                {THREAD_MODE_LABELS[mode]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      ) : null}
+      <div className="space-y-1 text-sm">
+        {bound ? (
+          <p className="wrap-anywhere">{thread?.title.trim() || `Thread ${ref.threadId}`}</p>
+        ) : null}
+        <p className="text-muted-foreground">{detail}</p>
+        {threadMode !== "new_thread" ? (
+          <p className="text-muted-foreground">Deleting the thread also deletes this task.</p>
+        ) : null}
+      </div>
+    </Field>
+  );
+}
+
 function ScheduledTaskEditorForm({
   initialEnvironmentId,
   task,
@@ -1174,6 +1274,8 @@ function ScheduledTaskEditorForm({
   const offersOnce =
     environment?.serverConfig?.environment.capabilities.oneTimeSchedules === true ||
     task?.schedule.type === "once";
+  const offersThreadModes =
+    environment?.serverConfig?.environment.capabilities.scheduledTaskThreadModes === true;
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   const tasksQuery = useEnvironmentQuery(
@@ -1238,6 +1340,10 @@ function ScheduledTaskEditorForm({
   const selectedThreadTitle =
     boundThreadFamily.data?.threads.find((row) => row.id === boundThreadId)?.title ??
     threadOptions.find((option) => option.id === draft.threadId)?.title;
+  const postsToThread = scheduledTaskPostsToThread(draft.threadId, draft.threadMode);
+  const noThreadLabel = offersThreadModes
+    ? "The thread its first run starts"
+    : "A new thread each run";
   const instanceEntries = providerInstanceEntriesFor(
     providers,
     settings,
@@ -1326,7 +1432,7 @@ function ScheduledTaskEditorForm({
       return;
     }
     if (
-      !draft.threadId &&
+      !postsToThread &&
       draft.workspaceMode === "existing_worktree" &&
       !draft.existingWorktreePath.trim()
     ) {
@@ -1343,7 +1449,7 @@ function ScheduledTaskEditorForm({
     // path may be blank, so store the project checkout rather than an invalid one.
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root" ||
-      (draft.threadId &&
+      (postsToThread &&
         draft.workspaceMode === "existing_worktree" &&
         !draft.existingWorktreePath.trim())
         ? { type: "root" }
@@ -1362,6 +1468,7 @@ function ScheduledTaskEditorForm({
       schedule,
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy,
       modelSelection,
       // Tasks have no mode picker; a mode above the administrator's ceiling would fail every run.
@@ -1486,6 +1593,17 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
+          <ScheduledTaskDestination
+            environmentId={environmentId}
+            threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            threadMode={draft.threadMode}
+            onThreadModeChange={
+              offersThreadModes
+                ? (threadMode) => setDraft((current) => ({ ...current, threadMode }))
+                : undefined
+            }
+          />
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Project" htmlFor="scheduled-task-project">
               <Select
@@ -1521,36 +1639,46 @@ function ScheduledTaskEditorForm({
               </Select>
             </Field>
 
-            <Field label="Post runs to" htmlFor="scheduled-task-thread">
-              <Select
-                value={draft.threadId || NEW_THREAD_EACH_RUN}
-                onValueChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    // Pin the fallback project so the thread can't outlive it.
-                    projectId: selectedProjectId,
-                    threadId: !value || value === NEW_THREAD_EACH_RUN ? "" : value,
-                  }))
-                }
-              >
-                <SelectTrigger size="sm" id="scheduled-task-thread">
-                  <SelectValue>
-                    {draft.threadId ? selectedThreadTitle : "A new thread each run"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value={NEW_THREAD_EACH_RUN}>A new thread each run</SelectItem>
-                  {threadOptions.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.title}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </Field>
+            {scheduledTaskShowsThreadPicker(draft.threadMode, offersThreadModes) ? (
+              <Field label="Post runs to" htmlFor="scheduled-task-thread">
+                <Select
+                  value={draft.threadId || NO_THREAD}
+                  onValueChange={(value) => {
+                    const picked = Boolean(value) && value !== NO_THREAD;
+                    setDraft((current) => ({
+                      ...current,
+                      // Pin the fallback project so the thread can't outlive it.
+                      projectId: selectedProjectId,
+                      threadId: picked && value ? value : "",
+                      threadMode: scheduledTaskModeAfterThreadChoice(
+                        current.threadMode,
+                        picked,
+                        offersThreadModes,
+                      ),
+                    }));
+                  }}
+                >
+                  <SelectTrigger size="sm" id="scheduled-task-thread">
+                    <SelectValue>
+                      {draft.threadId ? selectedThreadTitle : noThreadLabel}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {scheduledTaskCanClearThread(liveTask, offersThreadModes) ? (
+                      <SelectItem value={NO_THREAD}>{noThreadLabel}</SelectItem>
+                    ) : null}
+                    {threadOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.title}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </Field>
+            ) : null}
           </div>
 
-          {draft.threadId ? (
+          {postsToThread ? (
             <p className="text-xs text-muted-foreground">
               Each run is sent to this thread and works in its checkout. Runs wait for the thread's
               current turn to finish.
@@ -1575,7 +1703,7 @@ function ScheduledTaskEditorForm({
             </Field>
           )}
 
-          {!draft.threadId && draft.workspaceMode === "worktree" ? (
+          {!postsToThread && draft.workspaceMode === "worktree" ? (
             <Field label="Base branch" htmlFor="scheduled-task-base-ref">
               <WorktreeBaseBranchPicker
                 key={`${environmentId}:${selectedProjectId}`}
@@ -1592,7 +1720,7 @@ function ScheduledTaskEditorForm({
               />
             </Field>
           ) : null}
-          {!draft.threadId && draft.workspaceMode === "existing_worktree" ? (
+          {!postsToThread && draft.workspaceMode === "existing_worktree" ? (
             <Field label="Checkout path" htmlFor="scheduled-task-checkout">
               <Input
                 id="scheduled-task-checkout"

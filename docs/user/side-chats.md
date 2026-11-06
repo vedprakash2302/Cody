@@ -30,9 +30,6 @@ Choose the pencil in the side chat's header to rename it.
 
 ## Other differences
 
-A side chat starts in its thread's permission mode, and its first reply uses that mode too. T3 Code
-instead starts every side chat in approval required.
-
 A side chat is told not to change anything unless you ask, on every message, not only the first.
 
 Side chats made in Cody 0.1.6 and earlier move to **Archived** the first time a newer Cody server
