@@ -502,8 +502,8 @@ describe("DesktopWindow", () => {
         assert.equal(yield* Ref.get(createCount), 1);
         assert.equal(createdWindowOptions[0]?.width, 1100);
         assert.equal(createdWindowOptions[0]?.height, 780);
-        assert.equal(createdWindowOptions[0]?.minWidth, 840);
-        assert.equal(createdWindowOptions[0]?.minHeight, 620);
+        assert.equal(createdWindowOptions[0]?.minWidth, 400);
+        assert.equal(createdWindowOptions[0]?.minHeight, 360);
         assert.isUndefined(createdWindowOptions[0]?.x);
         assert.isUndefined(createdWindowOptions[0]?.y);
         assert.isTrue(createdWindowOptions[0]?.disableAutoHideCursor);
