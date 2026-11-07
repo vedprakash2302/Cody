@@ -90,11 +90,43 @@ describe("Windows browser SSO", () => {
         throw new Error("Session should not be accessed");
       },
     });
-    installWindowsSso(untouched, false, "win32", "C:\\helper.exe");
+    expect(installWindowsSso(untouched, false, "win32", "C:\\helper.exe")).toBe(false);
     installWindowsSso(untouched, true, "linux", "C:\\helper.exe");
     installWindowsSso(untouched, true, "darwin", "C:\\helper.exe");
     installWindowsSso(untouched, true, "win32", undefined);
     installWindowsSso(untouched, true, "win32", "relative.exe");
+  });
+  // Electron keeps one onBeforeSendHeaders listener per session, so a second
+  // registration, such as upstream's Teams User-Agent fix, would silently drop sign-in.
+  it("runs the session's other header rewrite inside its single listener", async () => {
+    const onBeforeSendHeaders = vi.fn();
+    const browserSession = {
+      webRequest: { onBeforeSendHeaders, onCompleted: vi.fn(), onErrorOccurred: vi.fn() },
+    } as unknown as Session;
+    const rewrite = (headers: Record<string, string>) => ({ ...headers, "User-Agent": "teams" });
+    expect(
+      installWindowsSso(browserSession, true, "win32", "C:\\helper.exe", async () => false, {
+        urls: ["https://teams.microsoft.com/*"],
+        rewrite,
+      }),
+    ).toBe(true);
+    expect(onBeforeSendHeaders).toHaveBeenCalledOnce();
+    const [filter, listener] = onBeforeSendHeaders.mock.calls[0]!;
+    expect(filter).toEqual({ urls: ["<all_urls>"] });
+    const send = (url: string, resourceType: string) =>
+      new Promise((resolve) =>
+        listener({ ...request(url, { "User-Agent": "electron" }), resourceType }, resolve),
+      );
+    expect(await send("https://teams.microsoft.com/v2/", "xhr")).toEqual({
+      requestHeaders: { "User-Agent": "teams" },
+    });
+    expect(await send("https://example.com/app.js", "script")).toEqual({});
+    expect(await send("https://teams.microsoft.com/v2/", "mainFrame")).toEqual({
+      requestHeaders: { "User-Agent": "teams" },
+    });
+    expect(await send("https://example.com/", "mainFrame")).toEqual({
+      requestHeaders: { "User-Agent": "electron" },
+    });
   });
   it("accepts only the exact HTTPS authority", () => {
     expect(isWindowsSsoUrl(login)).toBe(true);

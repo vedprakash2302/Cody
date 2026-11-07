@@ -33,6 +33,12 @@
       "icon": "configure"
     },
     {
+      "name": "Dev",
+      "command": "vp run dev",
+      "icon": "play",
+      "stopOnSettle": true
+    },
+    {
       "name": "Setup Worktree",
       "command": "node scripts/setup-worktree.ts",
       "icon": "configure",

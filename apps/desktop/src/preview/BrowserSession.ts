@@ -60,6 +60,20 @@ const externalProtocolPromptUrl = (rawUrl: string | undefined): string | null =>
   }
 };
 
+// Teams sends Electron User-Agents to an error page before sign-in. Electron allows one listener per session.
+const TEAMS_URL_PATTERNS = ["https://teams.cloud.microsoft/*", "https://teams.microsoft.com/*"];
+
+const teamsRequestHeaders = (
+  requestHeaders: Record<string, string>,
+): Record<string, string> | undefined => {
+  const userAgent = Object.entries(requestHeaders).find(
+    ([name]) => name.toLowerCase() === "user-agent",
+  );
+  if (userAgent === undefined) return undefined;
+  const [name, value] = userAgent;
+  return { ...requestHeaders, [name]: value.replace(/ Electron\/\S+/, "") };
+};
+
 const MAX_PROMPT_URL_LENGTH = 300;
 
 const truncateForPrompt = (text: string): string =>
@@ -302,7 +316,14 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
-          installWindowsSso(browserSession, persistent, platform, helper, ssoEnabled);
+          const ssoInstalled = installWindowsSso(
+            browserSession,
+            persistent,
+            platform,
+            helper,
+            ssoEnabled,
+            { urls: TEAMS_URL_PATTERNS, rewrite: teamsRequestHeaders },
+          );
           // Like Chrome, clipboard reads ask once per origin; both answers last for the session.
           const clipboardReadDecisions = new Map<string, boolean>();
           const confirmClipboardRead = (
@@ -359,6 +380,15 @@ export const make = Effect.gen(function* BrowserSessionMake() {
               ? clipboardReadDecisions.get(permissionOrigin(requestingOrigin) ?? "") === true
               : ALLOWED_PREVIEW_PERMISSIONS.has(permission),
           );
+          if (!ssoInstalled) {
+            browserSession.webRequest.onBeforeSendHeaders(
+              { urls: TEAMS_URL_PATTERNS },
+              ({ requestHeaders }, callback) => {
+                const next = teamsRequestHeaders(requestHeaders);
+                callback(next === undefined ? {} : { requestHeaders: next });
+              },
+            );
+          }
           const next = new Map(sessions);
           next.set(partition, browserSession);
           return [browserSession, next] as const;

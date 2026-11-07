@@ -81,22 +81,48 @@ export function createWindowsSsoHandler(
   return { handle, finish };
 }
 
-/** Incognito never uses the Windows account. Existing sessions read the current setting. */
+/** Another header rewrite for the session, such as upstream's Teams User-Agent fix. */
+export interface WindowsSsoSharedRewrite {
+  readonly urls: ReadonlyArray<string>;
+  readonly rewrite: (headers: Headers) => Headers | undefined;
+}
+
+/**
+ * Incognito never uses the Windows account. Existing sessions read the current setting.
+ * Electron keeps one onBeforeSendHeaders listener per session, so `shared` runs inside this
+ * one. Returns whether it installed, so the caller registers `shared` itself otherwise.
+ */
 export function installWindowsSso(
   browserSession: Session,
   persistent: boolean,
   platform: NodeJS.Platform,
   helper: string | undefined,
   enabled: () => Promise<boolean> = async () => false,
-): void {
-  if (platform !== "win32" || !persistent || !helper || !NodePath.win32.isAbsolute(helper)) return;
+  shared?: WindowsSsoSharedRewrite,
+): boolean {
+  if (platform !== "win32" || !persistent || !helper || !NodePath.win32.isAbsolute(helper))
+    return false;
   const handler = createWindowsSsoHandler((url) => readWindowsSsoAuth(helper, url), enabled);
-  // Match navigations in Chromium, avoiding blocking interception of assets.
+  // Match navigations in Chromium, avoiding blocking interception of assets unless `shared` needs them.
   // Keep all URLs so redirects away from Entra still remove attached proofs.
   const filter: WebRequestFilter = { urls: ["<all_urls>"], types: ["mainFrame", "subFrame"] };
-  browserSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    void handler.handle(details).then((requestHeaders) => callback({ requestHeaders }));
-  });
+  const sharedPrefixes = shared?.urls.map((url) => url.replace(/\*$/, "")) ?? [];
+  browserSession.webRequest.onBeforeSendHeaders(
+    shared ? { urls: ["<all_urls>"] } : filter,
+    (details, callback) => {
+      const rewritten = sharedPrefixes.some((prefix) => details.url.startsWith(prefix))
+        ? shared?.rewrite(details.requestHeaders)
+        : undefined;
+      if (details.resourceType !== "mainFrame" && details.resourceType !== "subFrame") {
+        callback(rewritten ? { requestHeaders: rewritten } : {});
+        return;
+      }
+      void handler
+        .handle({ ...details, requestHeaders: rewritten ?? details.requestHeaders })
+        .then((requestHeaders) => callback({ requestHeaders }));
+    },
+  );
   browserSession.webRequest.onCompleted(filter, (details) => handler.finish(details.id));
   browserSession.webRequest.onErrorOccurred(filter, (details) => handler.finish(details.id));
+  return true;
 }
