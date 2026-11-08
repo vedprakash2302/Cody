@@ -52,6 +52,12 @@ export function azureDevOpsScopeFromConfig(output: string, remoteName?: string) 
   return remote ? parseAzureDevOpsRemote(remote) : null;
 }
 
+/** Matches `--name value` and the joined `--name=value` form. */
+export const hasAzureDevOpsOption = (
+  args: ReadonlyArray<string>,
+  ...names: ReadonlyArray<string>
+) => args.some((arg) => names.some((name) => arg === name || arg.startsWith(`${name}=`)));
+
 export function scopeAzureDevOpsArgs(
   args: ReadonlyArray<string>,
   scope: NonNullable<ReturnType<typeof parseAzureDevOpsRemote>>,
@@ -67,14 +73,13 @@ export function scopeAzureDevOpsArgs(
     (args[1] === "show" ||
       args[1] === "create" ||
       (args[1] === "pr" && (args[2] === "list" || args[2] === "create")));
-  if (repositoryCommand && !args.includes("--project") && !args.includes("-p")) {
+  if (repositoryCommand && !hasAzureDevOpsOption(args, "--project", "-p")) {
     scoped.push("--project", scope.project);
   }
   if (
     repositoryCommand &&
     args[1] !== "create" &&
-    !args.includes("--repository") &&
-    !args.includes("-r")
+    !hasAzureDevOpsOption(args, "--repository", "-r")
   ) {
     scoped.push("--repository", scope.repository);
   }

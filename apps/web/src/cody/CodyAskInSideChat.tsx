@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { toastManager } from "../components/ui/toast";
 import { useQuietThreadShell } from "../state/entities";
 import { useSideChatsOffered } from "./sideChatPalette";
+import { readParentComposerSettings } from "./sideChatSettings";
 import { quoteInSideChat, sideChatInUse } from "./sideChats";
 
 /**
@@ -23,6 +24,7 @@ export function CodyAskInSideChat(props: {
   const offered = useSideChatsOffered(useQuietThreadShell(threadRef));
   const sideChat = useSideChat({
     threadRef: offered ? threadRef : null,
+    readSettings: () => readParentComposerSettings(threadRef),
     onError: (message) =>
       toastManager.add({
         type: "error",

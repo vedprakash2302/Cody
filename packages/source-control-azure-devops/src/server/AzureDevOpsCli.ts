@@ -19,7 +19,11 @@ import {
   type NormalizedAzureDevOpsPullRequestRecord,
 } from "./azureDevOpsPullRequests.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
-import { azureDevOpsScopeFromConfig, scopeAzureDevOpsArgs } from "./azureDevOpsScope.ts";
+import {
+  azureDevOpsScopeFromConfig,
+  hasAzureDevOpsOption,
+  scopeAzureDevOpsArgs,
+} from "./azureDevOpsScope.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -374,8 +378,7 @@ export const make = Effect.gen(function* () {
       if (
         args.includes("--detect") &&
         args[args.indexOf("--detect") + 1] === "true" &&
-        !args.includes("--organization") &&
-        !args.includes("--org")
+        !hasAzureDevOpsOption(args, "--organization", "--org")
       ) {
         // In WSL, az may be a Windows executable and cannot inspect the Linux checkout.
         // Read its remotes with the server's Git, including worktree-specific configuration.

@@ -73,5 +73,14 @@ describe("Azure DevOps checkout scope", () => {
     expect(args.filter((arg) => arg === "--repository")).toHaveLength(1);
     expect(args.filter((arg) => arg === "--project")).toHaveLength(1);
     expect(args).toContain("Other Project");
+
+    const joined = scopeAzureDevOpsArgs(
+      ["repos", "show", "--detect", "true", "--repository=Other", "--project", "Other Project"],
+      { organization: "https://dev.azure.com/acme", project: "Project", repository: "Repo" },
+    );
+    expect(joined).not.toContain("--repository");
+    expect(joined).not.toContain("Repo");
+    expect(joined.filter((arg) => arg === "--project")).toHaveLength(1);
+    expect(joined).toContain("--organization");
   });
 });

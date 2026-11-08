@@ -917,7 +917,7 @@ function DeviceIntegrationControls({
                   .finally(() => setPending(null));
               }}
             >
-              {pending === `update-${tool}` ? "Updating…" : `Update to v${version.requiredVersion}`}
+              {pending === `update-${tool}` ? "Updating…" : "Update"}
             </Button>
           ) : null}
           {state.supportsToolInspection ? (
@@ -1052,7 +1052,7 @@ function BrowserWindowsSsoSetting() {
   return (
     <SettingsRow
       {...searchableSetting("browser-windows-sso")}
-      description="Use this Windows device's work account for Microsoft sign-in, including agent browsing. Excludes incognito. Browser tabs on this device's WSL backend use it after Cody restarts. Turning this off does not sign out existing website sessions."
+      description="Use this Windows device's work account for Microsoft sign-in, including agent browsing and tabs on its WSL backend after Cody restarts. Not in incognito. Turning it off keeps existing sessions."
       control={
         <Switch
           disabled={saving}

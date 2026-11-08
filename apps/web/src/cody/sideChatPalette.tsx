@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  DEFAULT_RUNTIME_MODE,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { MessagesSquareIcon } from "lucide-react";
 import { Atom } from "effect/reactivity";
 
@@ -12,6 +16,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 import { useServerConfigs } from "../state/entities";
 import { useEnvironmentScope } from "../state/session";
 import { environmentThreadShells } from "../state/threads";
+import { readParentComposerSettings } from "./sideChatSettings";
 import { sideChatInUse } from "./sideChats";
 
 const NO_SIDE_CHATS = Atom.make<ReadonlyArray<unknown>>([]).pipe(
@@ -46,6 +51,10 @@ export function useCodySideChatPaletteItems(
     offered && thread != null ? scopeThreadRef(thread.environmentId, thread.id) : null;
   const sideChat = useSideChat({
     threadRef,
+    readSettings: () =>
+      threadRef === null
+        ? { runtimeMode: DEFAULT_RUNTIME_MODE, modelSelection: undefined }
+        : readParentComposerSettings(threadRef),
     onError: (message) =>
       toastManager.add({
         type: "error",
