@@ -21,6 +21,7 @@ vi.mock("../ipc/DesktopIpcHandlers.ts", () => ({
   installDesktopIpcHandlers: () => Effect.void,
 }));
 vi.mock("../updates/DesktopRemoteUpdates.ts", () => ({ listen: Effect.void }));
+vi.mock("../updates/DesktopAutoUpdate.ts", () => ({ listen: Effect.void }));
 vi.mock("./DesktopStartupRecovery.ts", () => ({ listen: Effect.void }));
 
 import * as DesktopApp from "./DesktopApp.ts";
