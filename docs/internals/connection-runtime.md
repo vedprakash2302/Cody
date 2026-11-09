@@ -49,7 +49,9 @@ Replacing a healthy socket for HTTP renewal would interrupt conversations and
 change the transport generation without a transport failure. Refresh failure
 belongs to the HTTP operation.
 
-The server closes a socket when its session is revoked or expires. T3 Connect
+The server closes a socket when its session is revoked or expires. A direct
+bearer socket instead renews its own session at expiry, because the client has
+no way to refresh that token. T3 Connect
 access tokens last one hour, so the driver renews a live socket's token in its
 last minute. The server then moves the socket to the newer session for the same
 DPoP key, subject, and scopes

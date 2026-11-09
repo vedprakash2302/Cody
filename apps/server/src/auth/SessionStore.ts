@@ -408,7 +408,7 @@ export class SessionStore extends Context.Service<
       SessionCredentialInternalError
     >;
     readonly streamChanges: Stream.Stream<SessionCredentialChange>;
-    /** Completes when a live socket's session is revoked or expires without a renewal for its DPoP key. */
+    /** Completes when a live socket's session is revoked or expires without a renewal. An open bearer socket renews its own session. */
     readonly awaitInvalidation: (
       sessionId: AuthSessionId,
       proofKeyThumbprint?: string,
@@ -427,6 +427,8 @@ export class SessionStore extends Context.Service<
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
+// Each renewal writes the row, so a bearer session renews at most this many times per lifetime.
+const BEARER_RENEWALS_PER_LIFETIME = 30;
 
 const SessionClaims = Schema.Struct({
   v: Schema.Literals([1, 2]),
@@ -503,6 +505,8 @@ const make = Effect.gen(function* () {
   // Newest session per DPoP key. A live socket moves to it at expiry, so a
   // client that renews its short-lived token keeps its socket.
   const latestSessionByProofKey = new Map<string, AuthSessionId>();
+  // Signed token lifetime per bearer session, so an open socket can renew without its token.
+  const bearerLifetimeMsBySession = new Map<AuthSessionId, number>();
   const cookieInput = {
     mode: serverConfig.mode,
     port: serverConfig.port,
@@ -639,6 +643,27 @@ const make = Effect.gen(function* () {
       ),
       Effect.withSpan("SessionStore.markDisconnected"),
     );
+
+  // Bearer clients cannot refresh their token, so use pushes the expiry out by its lifetime.
+  const renewBearerSession = Effect.fn("SessionStore.renewBearerSession")(
+    function* (row: AuthSessions.AuthSessionRecord, lifetimeMs: number) {
+      const now = yield* DateTime.now;
+      const renewedAtMs = row.expiresAt.epochMilliseconds - lifetimeMs;
+      if (now.epochMilliseconds - renewedAtMs < lifetimeMs / BEARER_RENEWALS_PER_LIFETIME) {
+        return row.expiresAt;
+      }
+      const expiresAt = DateTime.add(now, { milliseconds: lifetimeMs });
+      yield* authSessions.setExpiresAt({ sessionId: row.sessionId, expiresAt });
+      const session = yield* loadActiveSession(row.sessionId);
+      if (Option.isSome(session)) yield* emitUpsert(session.value);
+      return expiresAt;
+    },
+    (effect, row) =>
+      Effect.mapError(
+        effect,
+        (cause) => new SessionCredentialVerificationError({ sessionId: row.sessionId, cause }),
+      ),
+  );
 
   const encodeClaims = Schema.encodeEffect(Schema.fromJsonString(SessionClaims));
   const issue: SessionStore["Service"]["issue"] = Effect.fn("SessionStore.issue")(
@@ -808,7 +833,9 @@ const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      if (claims.exp <= observedAt.epochMilliseconds) {
+      // A bearer session's row holds its renewed expiry; the signed claim only holds the first one.
+      const bearer = claims.method === "bearer-access-token";
+      if (!bearer && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
           expiresAt: expiresAt.value,
@@ -826,11 +853,24 @@ const make = Effect.gen(function* () {
       if (Option.isNone(row)) {
         return yield* new UnknownSessionTokenError({ sessionId: claims.sid });
       }
+      if (bearer && row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds) {
+        return yield* new SessionTokenExpiredError({
+          sessionId: claims.sid,
+          expiresAt: row.value.expiresAt,
+          observedAt,
+        });
+      }
       if (row.value.revokedAt !== null) {
         return yield* new SessionTokenRevokedError({
           sessionId: claims.sid,
           revokedAt: row.value.revokedAt,
         });
+      }
+      let sessionExpiresAt = expiresAt.value;
+      if (bearer) {
+        const lifetimeMs = claims.exp - claims.iat;
+        bearerLifetimeMsBySession.set(claims.sid, lifetimeMs);
+        sessionExpiresAt = yield* renewBearerSession(row.value, lifetimeMs);
       }
 
       return {
@@ -838,7 +878,7 @@ const make = Effect.gen(function* () {
         token,
         method: claims.method,
         client: toClientMetadata(row.value.client),
-        expiresAt: expiresAt.value,
+        expiresAt: sessionExpiresAt,
         subject: claims.sub,
         scopes: row.value.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
@@ -1070,11 +1110,20 @@ const make = Effect.gen(function* () {
         let current = original.value;
         while (true) {
           const rows = yield* Effect.forEach(chain, readRow);
-          if (rows.some((row) => Option.isNone(row) || row.value.revokedAt !== null)) return;
+          const live = rows.flatMap((row) =>
+            Option.isSome(row) && row.value.revokedAt === null ? [row.value] : [],
+          );
+          if (live.length < chain.length) return;
+          current = live.at(-1) ?? current;
           const now = yield* DateTime.now;
           const remaining = current.expiresAt.epochMilliseconds - now.epochMilliseconds;
           if (remaining > 0) {
             yield* Effect.raceFirst(nextRemoval, Effect.sleep(Duration.millis(remaining)));
+            continue;
+          }
+          const bearerLifetimeMs = bearerLifetimeMsBySession.get(current.sessionId);
+          if (current.method === "bearer-access-token" && bearerLifetimeMs !== undefined) {
+            yield* renewBearerSession(current, bearerLifetimeMs);
             continue;
           }
           const successorId =

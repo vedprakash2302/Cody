@@ -532,6 +532,57 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
     }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 
+  it.effect.each([
+    { method: "bearer-access-token", renews: true },
+    { method: "dpop-access-token", renews: false },
+    { method: "browser-session-cookie", renews: false },
+  ] as const)("renews a $method session on use: $renews", ({ method, renews }) =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const issued = yield* sessions.issue({
+        method,
+        subject: "remote-client",
+        ttl: Duration.hours(1),
+      });
+      yield* TestClock.adjust(Duration.minutes(50));
+      const used = yield* sessions.verify(issued.token);
+      expect(used.expiresAt?.epochMilliseconds).toBe(
+        issued.expiresAt.epochMilliseconds + (renews ? 50 * 60_000 : 0),
+      );
+      yield* TestClock.adjust(Duration.minutes(50));
+      const pastFirstExpiry = yield* Effect.exit(sessions.verify(issued.token));
+      expect(pastFirstExpiry._tag).toBe(renews ? "Success" : "Failure");
+      yield* TestClock.adjust(Duration.minutes(61));
+      const error = yield* Effect.flip(sessions.verify(issued.token));
+      expect(error._tag).toBe("SessionTokenExpiredError");
+    }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("keeps an open bearer socket and its token alive past the session's expiry", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const issued = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "remote-client",
+        ttl: Duration.hours(1),
+      });
+      yield* sessions.verify(issued.token);
+      yield* sessions.markConnected(issued.sessionId);
+      const invalidated = yield* Deferred.make<void>();
+      const watcher = yield* sessions
+        .awaitInvalidation(issued.sessionId)
+        .pipe(
+          Effect.andThen(Deferred.succeed(invalidated, undefined)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+      yield* TestClock.adjust(Duration.hours(3));
+      expect(yield* Deferred.isDone(invalidated)).toBe(false);
+      yield* sessions.verify(issued.token);
+      yield* sessions.revoke(issued.sessionId);
+      yield* Fiber.join(watcher);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
   it.effect("lists active sessions, tracks connectivity, and revokes other sessions", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStore.SessionStore;

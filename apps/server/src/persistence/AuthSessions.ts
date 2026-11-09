@@ -92,6 +92,12 @@ export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
 });
 export type SetAuthSessionLastConnectedAtInput = typeof SetAuthSessionLastConnectedAtInput.Type;
 
+export const SetAuthSessionExpiresAtInput = Schema.Struct({
+  sessionId: AuthSessionId,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type SetAuthSessionExpiresAtInput = typeof SetAuthSessionExpiresAtInput.Type;
+
 export class AuthSessionRepository extends Context.Service<
   AuthSessionRepository,
   {
@@ -118,6 +124,9 @@ export class AuthSessionRepository extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     readonly setLastConnectedAt: (
       input: SetAuthSessionLastConnectedAtInput,
+    ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    readonly setExpiresAt: (
+      input: SetAuthSessionExpiresAtInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
   }
 >()("t3/persistence/AuthSessions/AuthSessionRepository") {}
@@ -321,6 +330,17 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const setExpiresAtRow = SqlSchema.void({
+    Request: SetAuthSessionExpiresAtInput,
+    execute: ({ sessionId, expiresAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET expires_at = ${expiresAt}
+        WHERE session_id = ${sessionId}
+          AND revoked_at IS NULL
+      `,
+  });
+
   const revokeSessionRows = SqlSchema.findAll({
     Request: RevokeAuthSessionInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
@@ -480,6 +500,17 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const setExpiresAt: AuthSessionRepository["Service"]["setExpiresAt"] = (input) =>
+    setExpiresAtRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.setExpiresAt:query",
+          "AuthSessionRepository.setExpiresAt:encodeRequest",
+          { sessionId: input.sessionId },
+        ),
+      ),
+    );
+
   return {
     create,
     createReplacingActive,
@@ -489,6 +520,7 @@ export const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     setLastConnectedAt,
+    setExpiresAt,
   } satisfies AuthSessionRepository["Service"];
 });
 

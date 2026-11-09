@@ -27,6 +27,12 @@ model. DPoP binds a token to a client's proof key; an invalid proof must fail
 rather than fall back to bearer authentication. The OAuth token-exchange
 vocabulary gives these grants a familiar meaning.
 
+Bearer clients, such as directly paired apps and MCP clients, cannot refresh
+their token, so the server renews a bearer session whenever it is used. Each
+renewal moves the session row's expiry to the token's signed lifetime from now.
+For bearer tokens the row's expiry is authoritative and the signed `exp` is only
+the first one. Cookie and DPoP sessions keep fixed expiries.
+
 ### Guest links are not sessions
 
 A [guest link](../user/guest-links.md) gives one browser read access to one
