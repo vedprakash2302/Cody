@@ -90,8 +90,9 @@ Under **Destination**, choose where runs go. **New thread each run** keeps every
 run separate. The two one-thread choices start a thread on the first run and post
 later runs there: one continues the same conversation, the other starts each run
 in a fresh session that doesn't see earlier runs, so the thread stays readable
-without the agent's context growing. Moving such a task to another project starts
-a new thread there on its next run.
+without the agent's context growing. To move a one-thread task, pick another
+thread in its project under **Destination**. Moving such a task to another
+project starts a new thread there on its next run.
 
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
@@ -100,14 +101,6 @@ You can edit, pause, resume, run immediately, or delete a task from the list.
 Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
-
-## Post scheduled runs to an existing thread
-
-With a one-thread **Destination**, **Post runs to** picks the thread. Leave it
-on the thread the first run starts, or choose an existing thread in the task's
-project. Runs then work in that thread's checkout and wait for its current turn
-to finish. Once a task posts to a thread, choose another thread or switch
-**Destination** to **New thread each run** to move it.
 
 ## Webhook automations
 
@@ -207,6 +200,19 @@ New worktrees go in the `worktrees` folder of the T3 home directory. To put them
 such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
+
+## Fast worktree checkout on macOS
+
+Fast worktree checkout is a beta. Turn it on for each Mac in **Settings → Labs → Fast worktree
+checkout**. T3 Code then keeps a few recent checkouts of each repository in the `caches` folder of
+the T3 home directory. A new worktree is cloned from one of them with APFS copy-on-write, which is
+about twice as fast as writing every file and makes the first `git status` in it fast as well.
+Turning it off deletes the cache.
+
+The first worktree of a repository uses Git's normal checkout and fills the cache. It needs Git 2.42
+or newer. Git's normal checkout is also used for worktrees on a different drive from the T3 home
+directory, sparse checkouts, repositories whose attributes use filters such as Git LFS, and
+repositories whose checkout settings changed.
 
 ## Storage cleanup
 

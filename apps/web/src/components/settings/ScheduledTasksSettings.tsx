@@ -2,9 +2,11 @@ import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import { AsyncResult } from "effect/reactivity";
 import {
+  ChevronDownIcon,
   Clock3Icon,
   CopyIcon,
   InboxIcon,
+  MessageSquareIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlayIcon,
@@ -33,13 +35,6 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
-import {
-  scheduledTaskCanClearThread,
-  scheduledTaskModeAfterThreadChoice,
-  scheduledTaskPostsToThread,
-  scheduledTaskShowsThreadPicker,
-  scheduledTaskThreadOptions,
-} from "@t3tools/client-runtime/scheduled-task-threads";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
@@ -72,15 +67,16 @@ import {
   useProjects,
   useQuietThreadShell,
   useThreadShell,
-  useThreadShellsForProjectRefs,
+  useVisibleThreadShells,
 } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
-import { threadFamilies } from "../../state/threads";
-import { useThreadFamily } from "../../cody/useThreadFamily";
+import { useThreadSearch } from "../../state/queries";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { threadFamilies } from "../../state/threads";
+import { useThreadFamily } from "../../cody/useThreadFamily";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
@@ -100,7 +96,10 @@ import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
   WEBHOOK_SIGNATURE_DEFAULTS,
+  changeDraftProject,
+  moveDraftToThread,
   scheduleDraftErrors,
+  scheduledTaskDestinationThreads,
   toDateTimeLocalValue,
   webhookDeliveryLabel,
   defaultScheduledTaskProjectId,
@@ -108,6 +107,7 @@ import {
   scheduleFromDraft,
   scheduledTaskDefaultModel,
   taskToDraft,
+  unbindDraftFromThread,
   type DraftState,
   type ScheduleMode,
   type WorkspaceMode,
@@ -119,6 +119,15 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "..
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxSearchInput,
+  ComboboxTrigger,
+} from "../ui/combobox";
 import {
   Dialog,
   DialogClose,
@@ -146,8 +155,8 @@ const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
 
-/** Select value for the "Post runs to" choice that stores no thread. */
-const NO_THREAD = "new-thread";
+// Thread ids are trimmed, so the leading space keeps this from matching one.
+const NEW_THREAD_DESTINATION = " new-thread";
 
 const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   worktree: "Create a new worktree",
@@ -1194,16 +1203,24 @@ const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
 
 function ScheduledTaskDestination({
   environmentId,
+  projectId,
   threadId,
   threadMode,
+  disabled,
+  onSelect,
   onThreadModeChange,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly projectId: string;
   readonly threadId: ThreadId | null;
   readonly threadMode: ScheduledTaskThreadMode;
+  readonly disabled: boolean;
+  readonly onSelect: (thread: { id: ThreadId; projectId: ProjectId } | null) => void;
   /** Absent on servers that predate thread modes. */
   readonly onThreadModeChange: ((mode: ScheduledTaskThreadMode) => void) | undefined;
 }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const ref = threadId === null ? null : scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(ref);
   // The shell can omit older settled threads; their family read still carries the title.
@@ -1211,11 +1228,38 @@ function ScheduledTaskDestination({
     ref !== null && shell === null ? threadFamilies.familyAtom(environmentId, ref.threadId) : null,
   );
   const thread = shell ?? family.data?.threads.find((row) => row.id === threadId);
-  const bound = ref !== null && threadMode !== "new_thread";
+  const currentLabel =
+    ref !== null
+      ? thread?.title.trim() || `Thread ${ref.threadId}`
+      : threadMode === "new_thread"
+        ? "New thread each run"
+        : "Started by the first run";
+  const shells = useVisibleThreadShells(open);
+  // Mounts older settled threads matching the query, which shells may leave out.
+  useThreadSearch(open && projectId ? [environmentId] : [], query, {
+    titlesOnly: true,
+    projectIds: [projectId as ProjectId],
+  });
+  const threads = scheduledTaskDestinationThreads(shells, {
+    environmentId,
+    projectId,
+    currentThreadId: threadId,
+    query,
+  });
+  const search = query.trim().toLocaleLowerCase();
+  const items: ReadonlyArray<string> = [
+    ...(search ? [] : [NEW_THREAD_DESTINATION]),
+    ...(threadId !== null && currentLabel.toLocaleLowerCase().includes(search) ? [threadId] : []),
+    ...threads.map((row) => row.id),
+  ];
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setQuery("");
+  };
   const detail =
     threadMode === "new_thread"
       ? "Each run starts a new thread with the workspace and model below."
-      : !bound
+      : ref === null
         ? threadMode === "continue"
           ? "The first run starts a thread with the workspace and model below. Later runs continue that conversation."
           : "The first run starts a thread with the workspace and model below. Later runs post there, each in a fresh session without earlier runs' context."
@@ -1241,10 +1285,66 @@ function ScheduledTaskDestination({
           </SelectPopup>
         </Select>
       ) : null}
+      {!onThreadModeChange || threadMode !== "new_thread" ? (
+        <Combobox
+          items={items}
+          filteredItems={items}
+          filter={null}
+          autoHighlight
+          open={open && !disabled}
+          onOpenChange={handleOpenChange}
+          value={threadId ?? (threadMode === "new_thread" ? NEW_THREAD_DESTINATION : null)}
+          onValueChange={(value) => {
+            if (value === NEW_THREAD_DESTINATION) {
+              onSelect(null);
+              handleOpenChange(false);
+              return;
+            }
+            const picked = threads.find((row) => row.id === value);
+            if (picked) onSelect(picked);
+            handleOpenChange(false);
+          }}
+        >
+          <ComboboxTrigger
+            id={
+              onThreadModeChange
+                ? "scheduled-task-destination-thread"
+                : "scheduled-task-destination"
+            }
+            aria-label={onThreadModeChange ? "Destination thread" : undefined}
+            disabled={disabled}
+            render={<Button variant="outline" size="sm" />}
+            className="w-full justify-between"
+          >
+            <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-left">{currentLabel}</span>
+            <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          </ComboboxTrigger>
+          <ComboboxPopup align="start" side="bottom" className="w-80">
+            <ComboboxSearchInput
+              aria-label="Search threads"
+              placeholder="Search all threads..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <ComboboxEmpty>No threads found.</ComboboxEmpty>
+            <ComboboxList className="max-h-72">
+              {items.map((value, index) => (
+                <ComboboxItem key={value} index={index} value={value}>
+                  <span className="block truncate">
+                    {value === NEW_THREAD_DESTINATION
+                      ? "New thread each run"
+                      : value === threadId
+                        ? currentLabel
+                        : threads.find((row) => row.id === value)?.title || "Untitled thread"}
+                  </span>
+                </ComboboxItem>
+              ))}
+            </ComboboxList>
+          </ComboboxPopup>
+        </Combobox>
+      ) : null}
       <div className="space-y-1 text-sm">
-        {bound ? (
-          <p className="wrap-anywhere">{thread?.title.trim() || `Thread ${ref.threadId}`}</p>
-        ) : null}
         <p className="text-muted-foreground">{detail}</p>
         {threadMode !== "new_thread" ? (
           <p className="text-muted-foreground">Deleting the thread also deletes this task.</p>
@@ -1324,26 +1424,6 @@ function ScheduledTaskEditorForm({
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
-  const selectedProjectRefs = selectedProjectId
-    ? [scopeProjectRef(environmentId, selectedProjectId as ProjectId)]
-    : [];
-  const boundThreadId = draft.threadId ? (draft.threadId as ThreadId) : null;
-  useThreadFamily(environmentId, boundThreadId);
-  const projectThreads = useThreadShellsForProjectRefs(selectedProjectRefs);
-  // The shell can omit older settled threads; their family read still carries the title.
-  const boundThreadFamily = useEnvironmentQuery(
-    boundThreadId !== null && !projectThreads.some((thread) => thread.id === boundThreadId)
-      ? threadFamilies.familyAtom(environmentId, boundThreadId)
-      : null,
-  );
-  const threadOptions = scheduledTaskThreadOptions(projectThreads, draft.threadId);
-  const selectedThreadTitle =
-    boundThreadFamily.data?.threads.find((row) => row.id === boundThreadId)?.title ??
-    threadOptions.find((option) => option.id === draft.threadId)?.title;
-  const postsToThread = scheduledTaskPostsToThread(draft.threadId, draft.threadMode);
-  const noThreadLabel = offersThreadModes
-    ? "The thread its first run starts"
-    : "A new thread each run";
   const instanceEntries = providerInstanceEntriesFor(
     providers,
     settings,
@@ -1431,11 +1511,7 @@ function ScheduledTaskEditorForm({
       );
       return;
     }
-    if (
-      !postsToThread &&
-      draft.workspaceMode === "existing_worktree" &&
-      !draft.existingWorktreePath.trim()
-    ) {
+    if (draft.workspaceMode === "existing_worktree" && !draft.existingWorktreePath.trim()) {
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
@@ -1445,13 +1521,8 @@ function ScheduledTaskEditorForm({
       draft.baseModelSelection.model === selection.model
         ? draft.baseModelSelection
         : selection;
-    // A task that posts to a thread never launches one, and its hidden checkout
-    // path may be blank, so store the project checkout rather than an invalid one.
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
-      draft.workspaceMode === "root" ||
-      (postsToThread &&
-        draft.workspaceMode === "existing_worktree" &&
-        !draft.existingWorktreePath.trim())
+      draft.workspaceMode === "root"
         ? { type: "root" }
         : draft.workspaceMode === "existing_worktree"
           ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
@@ -1518,9 +1589,8 @@ function ScheduledTaskEditorForm({
                 if (!next) return;
                 setEnvironmentId(next.environmentId);
                 setDraft((current) => ({
-                  ...current,
+                  ...unbindDraftFromThread(current),
                   projectId: defaultScheduledTaskProjectId(projectsOn(next.environmentId), scope),
-                  threadId: "",
                   modelKey: "",
                   baseModelSelection: null,
                   baseRef: "main",
@@ -1595,11 +1665,24 @@ function ScheduledTaskEditorForm({
 
           <ScheduledTaskDestination
             environmentId={environmentId}
+            projectId={selectedProjectId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
             threadMode={draft.threadMode}
+            disabled={saving || !connected}
+            onSelect={(thread) =>
+              setDraft((current) =>
+                thread === null
+                  ? { ...unbindDraftFromThread(current), threadMode: "new_thread" }
+                  : moveDraftToThread(current, thread),
+              )
+            }
             onThreadModeChange={
               offersThreadModes
-                ? (threadMode) => setDraft((current) => ({ ...current, threadMode }))
+                ? (threadMode) =>
+                    setDraft((current) => ({
+                      ...(threadMode === "new_thread" ? unbindDraftFromThread(current) : current),
+                      threadMode,
+                    }))
                 : undefined
             }
           />
@@ -1609,11 +1692,7 @@ function ScheduledTaskEditorForm({
               <Select
                 value={selectedProjectId}
                 onValueChange={(projectId) =>
-                  setDraft((current) =>
-                    projectId === (current.projectId || projects[0]?.id)
-                      ? current
-                      : { ...current, projectId: projectId ?? "", threadId: "" },
-                  )
+                  setDraft((current) => changeDraftProject(current, projectId ?? ""))
                 }
               >
                 <SelectTrigger size="sm" id="scheduled-task-project">
@@ -1639,51 +1718,6 @@ function ScheduledTaskEditorForm({
               </Select>
             </Field>
 
-            {scheduledTaskShowsThreadPicker(draft.threadMode, offersThreadModes) ? (
-              <Field label="Post runs to" htmlFor="scheduled-task-thread">
-                <Select
-                  value={draft.threadId || NO_THREAD}
-                  onValueChange={(value) => {
-                    const picked = Boolean(value) && value !== NO_THREAD;
-                    setDraft((current) => ({
-                      ...current,
-                      // Pin the fallback project so the thread can't outlive it.
-                      projectId: selectedProjectId,
-                      threadId: picked && value ? value : "",
-                      threadMode: scheduledTaskModeAfterThreadChoice(
-                        current.threadMode,
-                        picked,
-                        offersThreadModes,
-                      ),
-                    }));
-                  }}
-                >
-                  <SelectTrigger size="sm" id="scheduled-task-thread">
-                    <SelectValue>
-                      {draft.threadId ? selectedThreadTitle : noThreadLabel}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup>
-                    {scheduledTaskCanClearThread(liveTask, offersThreadModes) ? (
-                      <SelectItem value={NO_THREAD}>{noThreadLabel}</SelectItem>
-                    ) : null}
-                    {threadOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        {option.title}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              </Field>
-            ) : null}
-          </div>
-
-          {postsToThread ? (
-            <p className="text-xs text-muted-foreground">
-              Each run is sent to this thread and works in its checkout. Runs wait for the thread's
-              current turn to finish.
-            </p>
-          ) : (
             <Field label="Workspace" htmlFor="scheduled-task-workspace">
               <Select
                 value={draft.workspaceMode}
@@ -1701,9 +1735,9 @@ function ScheduledTaskEditorForm({
                 </SelectPopup>
               </Select>
             </Field>
-          )}
+          </div>
 
-          {!postsToThread && draft.workspaceMode === "worktree" ? (
+          {draft.workspaceMode === "worktree" ? (
             <Field label="Base branch" htmlFor="scheduled-task-base-ref">
               <WorktreeBaseBranchPicker
                 key={`${environmentId}:${selectedProjectId}`}
@@ -1720,7 +1754,7 @@ function ScheduledTaskEditorForm({
               />
             </Field>
           ) : null}
-          {!postsToThread && draft.workspaceMode === "existing_worktree" ? (
+          {draft.workspaceMode === "existing_worktree" ? (
             <Field label="Checkout path" htmlFor="scheduled-task-checkout">
               <Input
                 id="scheduled-task-checkout"

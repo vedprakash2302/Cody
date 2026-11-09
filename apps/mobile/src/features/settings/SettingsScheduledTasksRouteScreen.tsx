@@ -61,20 +61,8 @@ import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
-import {
-  useProjects,
-  useEnvironmentServerConfig,
-  useThreadShell,
-  useThreadShellsForProjectRefs,
-} from "../../state/entities";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  scheduledTaskCanClearThread,
-  scheduledTaskModeAfterThreadChoice,
-  scheduledTaskPostsToThread,
-  scheduledTaskShowsThreadPicker,
-  scheduledTaskThreadOptions,
-} from "@t3tools/client-runtime/scheduled-task-threads";
+import { useProjects, useEnvironmentServerConfig, useThreadShell } from "../../state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -86,14 +74,16 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
+  changeDraftProject,
   editDraft,
   parseIntervalMinutes,
   scheduledTaskDefaultModel,
   scheduleFromDraft,
+  unbindDraftFromThread,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
-import { useScheduledTaskEditor } from "./scheduled-task-editor";
+import { useScheduledTaskDestinationLabel, useScheduledTaskEditor } from "./scheduled-task-editor";
 import {
   discardScheduledTaskEditor,
   markScheduledTaskEditorSaved,
@@ -111,6 +101,7 @@ type ScheduledTaskRoutes = {
   SettingsScheduledTaskEdit: undefined;
   SettingsScheduledTaskModel: undefined;
   SettingsScheduledTaskBranch: undefined;
+  SettingsScheduledTaskThread: undefined;
 };
 
 const DAYS = [
@@ -122,9 +113,6 @@ const DAYS = [
   { index: 6, label: "Sat" },
   { index: 0, label: "Sun" },
 ] as const;
-
-/** Menu id for the "Post runs to" choice that stores no thread. */
-const NO_THREAD = "new-thread";
 
 function ScheduledTaskThreadLabel(props: {
   readonly environmentId: EnvironmentId;
@@ -695,11 +683,8 @@ function TaskForm({
     )
     .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
   const config = useEnvironmentServerConfig(environmentId);
+  const destinationLabel = useScheduledTaskDestinationLabel(environmentId, draft.threadId);
   const modelOptions = buildModelOptions(config, null, undefined, draft.projectId);
-  const projectRefs = draft.projectId ? [scopeProjectRef(environmentId, draft.projectId)] : [];
-  useThreadFamily(environmentId, draft.threadId);
-  const projectThreads = useThreadShellsForProjectRefs(projectRefs);
-  const threadOptions = scheduledTaskThreadOptions(projectThreads, draft.threadId);
   // Existing webhook tasks keep the option so they can still switch to a timer.
   const webhookDenial = managedCapabilityDenial(config?.managedPolicy, "webhookTasks");
   const canOperate = useAtomValue(
@@ -730,10 +715,6 @@ function TaskForm({
     config?.environment.capabilities.oneTimeSchedules === true ||
     draft.task?.schedule.type === "once";
   const offersThreadModes = config?.environment.capabilities.scheduledTaskThreadModes === true;
-  const postsToThread = scheduledTaskPostsToThread(draft.threadId, draft.threadMode);
-  const showsThreadPicker = scheduledTaskShowsThreadPicker(draft.threadMode, offersThreadModes);
-  const noThreadLabel = offersThreadModes ? "Thread its first run starts" : "New thread each run";
-  const savedTask = tasks.data?.tasks.find((task) => task.id === draft.task?.id) ?? draft.task;
   const save = async () => {
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
@@ -786,7 +767,7 @@ function TaskForm({
       !draft.projectId ||
       !draft.modelSelection ||
       !schedule ||
-      (!postsToThread && draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
+      (draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
     ) {
       Dialog.alert(
         "Incomplete task",
@@ -808,11 +789,8 @@ function TaskForm({
       enabled: draft.enabled,
       threadId: draft.threadId,
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
-      // A task that posts to a thread never launches one, and its hidden checkout
-      // path may be blank, so store the project checkout rather than an invalid one.
       workspaceStrategy:
-        draft.workspace === "root" ||
-        (postsToThread && draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
+        draft.workspace === "root"
           ? { type: "root" }
           : draft.workspace === "existing_worktree"
             ? { type: "existing_worktree", worktreePath: draft.checkoutPath.trim() }
@@ -922,9 +900,7 @@ function TaskForm({
                     draft.modelSelection.instanceId,
                   ));
               setDraft({
-                ...draft,
-                projectId: project.id,
-                threadId: project.id === draft.projectId ? draft.threadId : null,
+                ...changeDraftProject(draft, project.id),
                 modelSelection: keepsExplicitModel
                   ? draft.modelSelection
                   : scheduledTaskDefaultModel(config, project),
@@ -949,19 +925,21 @@ function TaskForm({
           />
         </SettingsSection>
 
-        {offersThreadModes ? (
-          <SettingsSection
-            title="Destination"
-            footer={
-              draft.threadMode === "new_thread"
-                ? "Each run starts a new thread."
-                : `${
-                    draft.threadMode === "continue"
-                      ? "Runs continue one conversation."
-                      : "Runs share one thread, each in a fresh session without earlier runs' context."
-                  } ${draft.threadId ? "" : "The first run starts the thread. "}Deleting it also deletes this task.`
-            }
-          >
+        <SettingsSection
+          title="Destination"
+          footer={
+            draft.threadMode === "new_thread"
+              ? "Each run starts a new thread."
+              : `${
+                  draft.threadMode === "continue"
+                    ? "Runs continue one conversation."
+                    : "Runs share one thread, each in a fresh session without earlier runs' context."
+                }${
+                  draft.threadId === null ? " The first run starts the thread." : ""
+                } Deleting it also deletes this task.`
+          }
+        >
+          {offersThreadModes ? (
             <SelectRow
               label="Runs go to"
               value={THREAD_MODE_LABELS[draft.threadMode]}
@@ -973,92 +951,61 @@ function TaskForm({
                 }),
               )}
               onSelect={(id) => {
-                if (id === "new_thread" || id === "continue" || id === "fresh_session")
+                if (id === "new_thread")
+                  setDraft({ ...unbindDraftFromThread(draft), threadMode: id });
+                else if (id === "continue" || id === "fresh_session")
                   setDraft({ ...draft, threadMode: id });
               }}
             />
-          </SettingsSection>
-        ) : null}
-
-        <SettingsSection title="Workspace">
-          {showsThreadPicker ? (
-            <SelectRow
-              label="Post runs to"
+          ) : null}
+          {!offersThreadModes || draft.threadMode !== "new_thread" ? (
+            <PickerRow
+              label="Thread"
+              borderTop={offersThreadModes}
               value={
-                draft.threadId
-                  ? (threadOptions.find((option) => option.id === draft.threadId)?.title ??
-                    "Unavailable thread")
-                  : noThreadLabel
+                draft.threadId === null && draft.threadMode !== "new_thread"
+                  ? "Started by the first run"
+                  : destinationLabel
               }
-              actions={[
-                ...(scheduledTaskCanClearThread(savedTask, offersThreadModes)
-                  ? [
-                      {
-                        id: NO_THREAD,
-                        title: noThreadLabel,
-                        state: draft.threadId === null ? ("on" as const) : undefined,
-                      },
-                    ]
-                  : []),
-                ...threadOptions.map((option) => ({
-                  id: option.id,
-                  title: option.title,
-                  state: option.id === draft.threadId ? ("on" as const) : undefined,
-                })),
-              ]}
-              onSelect={(id) =>
-                setDraft({
-                  ...draft,
-                  threadId: id === NO_THREAD ? null : (id as ThreadId),
-                  threadMode: scheduledTaskModeAfterThreadChoice(
-                    draft.threadMode,
-                    id !== NO_THREAD,
-                    offersThreadModes,
-                  ),
-                })
-              }
+              onPress={() => navigation.navigate("SettingsScheduledTaskThread")}
+              disabled={!draft.projectId || saving || dictationPending || environmentUnavailable}
             />
           ) : null}
-          {postsToThread ? (
-            <Text className="border-t border-border-subtle px-4 py-3 text-sm text-foreground-muted">
-              Each run is sent to this thread and works in its checkout. Runs wait for the thread's
-              current turn to finish.
-            </Text>
-          ) : (
-            <SelectRow
-              label="Run in"
-              borderTop={showsThreadPicker}
-              value={
-                draft.workspace === "worktree"
-                  ? "New worktree"
-                  : draft.workspace === "root"
-                    ? "Project checkout"
-                    : "Specific checkout"
-              }
-              actions={[
-                {
-                  id: "worktree",
-                  title: "New worktree",
-                  state: draft.workspace === "worktree" ? "on" : undefined,
-                },
-                {
-                  id: "root",
-                  title: "Project checkout",
-                  state: draft.workspace === "root" ? "on" : undefined,
-                },
-                {
-                  id: "existing_worktree",
-                  title: "Specific checkout",
-                  state: draft.workspace === "existing_worktree" ? "on" : undefined,
-                },
-              ]}
-              onSelect={(id) => {
-                if (id === "worktree" || id === "root" || id === "existing_worktree")
-                  setDraft({ ...draft, workspace: id });
-              }}
-            />
-          )}
-          {!postsToThread && draft.workspace === "worktree" ? (
+        </SettingsSection>
+
+        <SettingsSection title="Workspace">
+          <SelectRow
+            label="Run in"
+            value={
+              draft.workspace === "worktree"
+                ? "New worktree"
+                : draft.workspace === "root"
+                  ? "Project checkout"
+                  : "Specific checkout"
+            }
+            actions={[
+              {
+                id: "worktree",
+                title: "New worktree",
+                state: draft.workspace === "worktree" ? "on" : undefined,
+              },
+              {
+                id: "root",
+                title: "Project checkout",
+                state: draft.workspace === "root" ? "on" : undefined,
+              },
+              {
+                id: "existing_worktree",
+                title: "Specific checkout",
+                state: draft.workspace === "existing_worktree" ? "on" : undefined,
+              },
+            ]}
+            onSelect={(id) => {
+              if (id === "worktree" || id === "root" || id === "existing_worktree")
+                setDraft({ ...draft, workspace: id });
+            }}
+          />
+          {draft.workspace === "worktree" ? (
             <PickerRow
               label="Base branch"
               value={resolveNewTaskBranchLabel({
@@ -1071,7 +1018,7 @@ function TaskForm({
               onPress={() => navigation.navigate("SettingsScheduledTaskBranch")}
             />
           ) : null}
-          {!postsToThread && draft.workspace === "existing_worktree" ? (
+          {draft.workspace === "existing_worktree" ? (
             <FormField
               label="Checkout path"
               disabled={saving}

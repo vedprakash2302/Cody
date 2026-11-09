@@ -6,8 +6,8 @@ import { threadFamilies } from "../state/threads";
 
 /**
  * Keeps `rootThreadId`'s family in the thread list while the caller shows it.
- * The shell can leave out older settled threads; a scheduled task's "Post runs
- * to" thread still needs its title. Upstream no longer ships this hook.
+ * The shell can leave out older settled threads; a scheduled task row still
+ * shows its thread's title. Upstream no longer ships this hook.
  */
 export function useThreadFamily(
   environmentId: EnvironmentId | null,
