@@ -78,6 +78,7 @@
   "apps/web/src/components/settings/pairingUrls.test.ts",
   "packages/shared/src/promptLinks.test.ts",
   "apps/server/src/auth/EnvironmentAuth.test.ts",
+  "apps/server/src/auth/SessionStore.test.ts",
   "apps/server/src/orchestration-v2/testkit/MuseReplayFixtures.integration.test.ts",
   "apps/server/src/orchestration-v2/testkit/KiroReplayFixtures.integration.test.ts",
   "apps/mobile/src/features/threads/new-task-context-presentation.test.ts",
