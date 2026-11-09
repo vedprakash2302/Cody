@@ -216,6 +216,10 @@ function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: strin
 const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
+// Cody leaves a long reply unfolded when a short wrap-up follows it, so the
+// final reply must be long for the progress before it to fold.
+const FINAL_ANSWER = "The final answer. ".repeat(20);
+
 describe("MessagesTimeline work rows", () => {
   it("keeps the worked-for heading in place when expanded at the bottom", async () => {
     const props = baseProps();
@@ -232,7 +236,7 @@ describe("MessagesTimeline work rows", () => {
             message(`Earlier context ${index}`, {}, `context-${index}`),
           ),
           message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
-          message("Done", { role: "assistant", runId }, "final"),
+          message(FINAL_ANSWER, { role: "assistant", runId }, "final"),
         ]}
       />,
       { container },
@@ -273,7 +277,7 @@ describe("MessagesTimeline work rows", () => {
         message(`Earlier context ${index}`, {}, `context-${index}`),
       ),
       message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
-      message("Done", { role: "assistant", runId }, "final"),
+      message(FINAL_ANSWER, { role: "assistant", runId }, "final"),
     ];
     await using screen = await render(<MessagesTimeline {...props} timelineEntries={entries} />, {
       container,
