@@ -487,8 +487,9 @@ const make = Effect.gen(function* () {
 });
 
 /**
- * Origin answers from a few hundred milliseconds away, so idle connections stay open for reuse.
- * Cody: node:http, not undici. The CLI executable cannot load undici through an ESM import.
+ * Origin answers from a few hundred milliseconds away, so a new TLS connection doubles a request.
+ * A keep-alive agent holds idle connections until Origin closes them. Undici would add HTTP/2, but
+ * the single-executable CLI cannot resolve its static import.
  */
 const httpClientLayer = NodeHttpClient.layerNodeHttpOptions({ keepAlive: true });
 
