@@ -39,6 +39,7 @@ import * as ProviderTurnControl from "../orchestration-v2/ProviderTurnControlSer
 import * as ProviderTurnStart from "../orchestration-v2/ProviderTurnStartService.ts";
 import * as RunExecutionService from "../orchestration-v2/RunExecutionService.ts";
 import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
+import * as TurnItemPositionStore from "../orchestration-v2/TurnItemPositionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -306,6 +307,8 @@ const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
             getThreadShell,
             getTurnStartContext: turnStartContext,
             getRuntimeRecoveryProjection: turnStartContext,
+            getRun: (_threadId, id) =>
+              Effect.sync(() => projection.runs.find((candidate) => candidate.id === id)),
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             open: () =>
@@ -329,6 +332,7 @@ const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({
             resolve: () => Effect.succeed({ cwd: "/tmp/side-chat-wiring" } as never),
           }),
+          Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         ),
       ),
     );
