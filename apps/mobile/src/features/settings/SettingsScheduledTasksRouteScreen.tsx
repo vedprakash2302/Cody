@@ -89,9 +89,7 @@ import { useScheduledTaskDestinationLabel, useScheduledTaskEditor } from "./sche
 import {
   discardScheduledTaskEditor,
   markScheduledTaskEditorSaved,
-  scheduledTaskEditorSessionAtom,
 } from "./scheduled-task-editor-state";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { useThreadFamily } from "../../cody/useThreadFamily";
 import {
   formatNextScheduledTaskRun,
@@ -536,8 +534,6 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
   const voiceInput = useVoiceInputController({
     ownerKey,
     label: editor?.draft.title.trim() || title,
-    subscribeToDraftChanges: (onChange) =>
-      appAtomRegistry.subscribe(scheduledTaskEditorSessionAtom, onChange),
     selection,
     readDraftMessage: () => {
       const current = readEditor();

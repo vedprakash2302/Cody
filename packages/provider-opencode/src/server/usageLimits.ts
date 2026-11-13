@@ -1,6 +1,6 @@
 import * as NodeSqlite from "node:sqlite";
 
-import type { ServerProviderUsageWindow } from "@t3tools/contracts";
+import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -258,6 +258,8 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
   readonly enabled: boolean;
   readonly serverUrl: string;
   readonly environment: NodeJS.ProcessEnv;
+  /** OpenCode 2 servers that report usage cover Go themselves. */
+  readonly copilotOnly?: boolean;
 }) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const unsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
@@ -306,7 +308,9 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
 
     const probes = yield* Effect.all(
       {
-        "OpenCode Go": guardProbe(readGoWindows(goKeys)),
+        "OpenCode Go": input.copilotOnly
+          ? Effect.succeed("unsupported" as const)
+          : guardProbe(readGoWindows(goKeys)),
         "GitHub Copilot": Option.isSome(copilotAuth)
           ? guardProbe(readCopilotWindows(copilotAuth.value))
           : Effect.succeed("unsupported" as const),
@@ -349,3 +353,16 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
     ),
   );
 });
+
+/** Adds Cody's GitHub Copilot windows to the limits an OpenCode 2 server reports. */
+export const withCopilotUsageWindows = (
+  server: ServerProviderUsageLimits,
+  local: ServerProviderUsageLimits,
+): ServerProviderUsageLimits => {
+  const copilot = local.windows.filter((window) => window.id.startsWith("copilot_"));
+  if (copilot.length === 0) return server;
+  return {
+    ...makeUsageLimits({ checkedAt: server.checkedAt, windows: [...server.windows, ...copilot] }),
+    ...(server.externalUsage === undefined ? {} : { externalUsage: server.externalUsage }),
+  };
+};

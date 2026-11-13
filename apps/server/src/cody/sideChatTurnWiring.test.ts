@@ -402,6 +402,7 @@ describe("upstream turn services carry side chat context", () => {
             Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
               get: () => Effect.succeedSome(runtime),
             }),
+            Layer.mock(EventSink.EventSinkV2)({}),
           ),
         ),
       );
