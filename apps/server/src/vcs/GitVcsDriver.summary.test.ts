@@ -27,27 +27,35 @@ it.effect.each([
       const started = yield* Deferred.make<void>();
       const finish = yield* Deferred.make<void>();
       const stopped = yield* Deferred.make<void>();
-      const spawner = ChildProcessSpawner.make(() =>
+      const handle = (stdout: Stream.Stream<Uint8Array>) =>
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      const spawner = ChildProcessSpawner.make((command) =>
         Effect.gen(function* () {
+          // Diffs first look up where the turn started; only the timed command is held.
+          if (command._tag === "StandardCommand" && command.args.includes("log")) {
+            return handle(Stream.empty);
+          }
           yield* Effect.addFinalizer(() => Deferred.succeed(stopped, undefined));
           yield* Deferred.succeed(started, undefined);
-          return ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(1),
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-            isRunning: Effect.succeed(true),
-            kill: () => Effect.void,
-            unref: Effect.succeed(Effect.void),
-            stdin: Sink.drain,
-            stdout: Stream.fromEffect(
+          return handle(
+            Stream.fromEffect(
               Deferred.await(finish).pipe(
                 Effect.as(new TextEncoder().encode("12\t3\tfirst.ts\x007\t2\tlast.ts\0")),
               ),
             ),
-            stderr: Stream.empty,
-            all: Stream.empty,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.empty,
-          });
+          );
         }),
       );
       const layer = VcsProcess.layer.pipe(

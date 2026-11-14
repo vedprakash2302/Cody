@@ -324,6 +324,7 @@ const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
             tryHandlePromptCommand: () => Effect.succeed(false),
           }),
           Layer.mock(RunExecutionService.RunExecutionServiceV2)({
+            forkBaseline: () => Effect.succeed(Effect.void),
             startRootRun: (input) =>
               Effect.sync(() => {
                 sentText = input.message.text;
