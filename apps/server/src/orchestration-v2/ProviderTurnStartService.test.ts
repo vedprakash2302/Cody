@@ -1527,7 +1527,9 @@ effectIt.effect("sends new steering text when restarting a manual continuation",
       sideChat: { contextRun: "delivered" },
     });
     yield* harness.start;
-    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toBe("New steering instruction");
+    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toBe(
+      withSideChatRules("New steering instruction"),
+    );
     expect(harness.startRootRun.mock.calls[0]?.[0].resume).toBe(false);
   }),
 );
@@ -1601,21 +1603,22 @@ effectIt.effect.each([
       });
 
       yield* harness.start;
+      const resumed =
+        context === "" && (!("unsentResume" in sideChat) || "acceptedResume" in sideChat);
 
       expect(harness.open).toHaveBeenCalledWith(
         expect.objectContaining({ runtimePolicy: expect.objectContaining({ runtimeMode }) }),
       );
       expect(harness.startTurn.mock.calls.map(([turn]) => turn.message.text)).toEqual([
-        withInlineContext(
-          context,
-          withSideChatRules(
-            "unsentResume" in sideChat && !("acceptedResume" in sideChat) ? "Original request" : "",
-          ),
-        ),
+        // A native resume sends no prompt, so Cody's side chat rules have nothing to ride on.
+        resumed
+          ? ""
+          : withInlineContext(
+              context,
+              withSideChatRules("unsentResume" in sideChat ? "Original request" : ""),
+            ),
       ]);
-      expect(harness.startTurn.mock.calls[0]?.[0].resume === true).toBe(
-        context === "" && (!("unsentResume" in sideChat) || "acceptedResume" in sideChat),
-      );
+      expect(harness.startTurn.mock.calls[0]?.[0].resume === true).toBe(resumed);
       expect(harness.projection().contextHandoffs).toMatchObject([
         {
           id: "side-chat-context",
