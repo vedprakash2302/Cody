@@ -17,7 +17,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { beforeEach } from "vite-plus/test";
 import { buildProviderOptionSelectionsFromDescriptors } from "@t3tools/shared/model";
-import { settingsSecretLiteral } from "@t3tools/contracts";
+import { settingsSecretLiteral, type ServerProviderUsageLimits } from "@t3tools/contracts";
 
 import { OpenCodeSettings } from "../settings.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -29,7 +29,7 @@ import {
   type OpenCode2Model,
   type OpenCode2Workspace,
 } from "./status.ts";
-import { readOpenCodeUsageLimits } from "./usageLimits.ts";
+import { readOpenCodeUsageLimits, withCopilotUsageWindows } from "./usageLimits.ts";
 import { probeOpenCodeRuntime } from "./versionProbe.ts";
 import {
   OPENCODE_1_RESPONSES,
@@ -468,13 +468,19 @@ it.effect("skips Copilot snapshots it cannot use instead of failing the probe", 
 
 it.effect("shows the accounts that answered when another OpenCode login fails", () =>
   Effect.gen(function* () {
-    const auth =
-      '{"opencode-go":{"type":"api","key":"go-key"},"github-copilot":{"type":"oauth","refresh":"gho_token"}}';
-    const probe = (failing: "none" | "go" | "copilot" | "both" | "copilotUnlimited") =>
+    const probe = (
+      failing: "none" | "go" | "copilot" | "both" | "copilotUnlimited",
+      { token = "gho_token", accountId = 7, go = true } = {},
+    ) =>
       readOpenCodeUsageLimits({
         enabled: true,
         serverUrl: "",
-        environment: { OPENCODE_AUTH_CONTENT: auth },
+        environment: {
+          OPENCODE_AUTH_CONTENT: JSON.stringify({
+            ...(go ? { "opencode-go": { type: "api", key: "go-key" } } : {}),
+            "github-copilot": { type: "oauth", refresh: token },
+          }),
+        },
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
         Effect.provideService(
@@ -499,13 +505,16 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
                         monthly: { percent: 5, resetsAt },
                       },
                     })
-                  : copilotUser({
-                      premium_interactions: {
-                        percent_remaining: 50,
-                        unlimited: failing === "copilotUnlimited",
-                        entitlement: 300,
+                  : copilotUser(
+                      {
+                        premium_interactions: {
+                          percent_remaining: 50,
+                          unlimited: failing === "copilotUnlimited",
+                          entitlement: 300,
+                        },
                       },
-                    }),
+                      { id: accountId },
+                    ),
               ),
             );
           }),
@@ -547,6 +556,21 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
     ]);
     NodeAssert.equal(fingerprints.size, 3);
     NodeAssert.equal(bothFailed.credentialFingerprint, undefined);
+
+    // Each machine signs in to Copilot with its own token; one GitHub account is one pool.
+    const copilotOnly = yield* probe("none", { go: false });
+    const otherMachine = yield* probe("none", { go: false, token: "gho_other_machine" });
+    const otherAccount = yield* probe("none", { go: false, accountId: 8 });
+    NodeAssert.ok(copilotOnly.credentialFingerprint);
+    NodeAssert.equal(otherMachine.credentialFingerprint, copilotOnly.credentialFingerprint);
+    NodeAssert.notEqual(otherAccount.credentialFingerprint, copilotOnly.credentialFingerprint);
+    const overServer = (server: ServerProviderUsageLimits) =>
+      withCopilotUsageWindows(server, copilotOnly).credentialFingerprint;
+    NodeAssert.equal(
+      overServer({ checkedAt: copilotOnly.checkedAt, windows: [] }),
+      copilotOnly.credentialFingerprint,
+    );
+    NodeAssert.equal(overServer({ ...copilotFailed, credentialFingerprint: undefined }), undefined);
   }),
 );
 
