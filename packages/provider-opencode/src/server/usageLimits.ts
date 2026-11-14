@@ -105,6 +105,7 @@ const CopilotQuota = Schema.Struct({
 const decodeCopilotQuota = Schema.decodeUnknownOption(CopilotQuota);
 const COPILOT_QUOTA_IDS = ["premium_interactions", "chat", "completions"] as const;
 const CopilotUserResponse = Schema.Struct({
+  id: Schema.optionalKey(Schema.Finite),
   quota_reset_date_utc: Schema.optionalKey(Schema.DateTimeUtcFromString),
   token_based_billing: Schema.optionalKey(Schema.Boolean),
   quota_snapshots: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -221,21 +222,25 @@ const readCopilotWindows = Effect.fn("readCopilotWindows")(function* (
       ...(resetsAt ? { resetsAt } : {}),
     });
   }
-  return windows.length > 0 ? windows : ("unsupported" as const);
+  return windows.length > 0 ? { windows, accountId: body.id } : ("unsupported" as const);
 });
 
 /**
- * Identifies the credentials behind the windows; neither response has an account ID. Unkeyed hashes
- * match across environments; random Go keys and GitHub OAuth tokens resist offline guessing. Go-only
- * limits hash as upstream does, so they pool with environments running upstream T3 Code.
+ * Identifies the account behind the windows. Each machine signs in to Copilot with its own token,
+ * so Copilot hashes GitHub's public account id, falling back to the token. Random Go keys resist
+ * offline guessing. Go-only limits hash as upstream does, so they pool with upstream T3 Code.
  */
 const credentialFingerprint = Effect.fn("credentialFingerprint")(function* (input: {
   readonly goKey: string | undefined;
-  readonly copilot: typeof CopilotAuth.Type | undefined;
+  readonly copilot:
+    | { readonly auth: typeof CopilotAuth.Type; readonly accountId: number | undefined }
+    | undefined;
 }) {
   let material = input.goKey ? `opencode-go\0${input.goKey}` : "";
   if (input.copilot) {
-    material += `\0github-copilot\0${input.copilot.enterpriseUrl ?? ""}\0${input.copilot.refresh}`;
+    const { auth, accountId } = input.copilot;
+    const account = accountId === undefined ? auth.refresh : `account:${accountId}`;
+    material += `\0github-copilot\0${auth.enterpriseUrl ?? ""}\0${account}`;
   }
   const digest = yield* Digest.Digest;
   return yield* digest
@@ -321,14 +326,17 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
     const copilot = probes["GitHub Copilot"];
     const windows = [
       ...(typeof go === "string" ? [] : go.windows),
-      ...(typeof copilot === "string" ? [] : copilot),
+      ...(typeof copilot === "string" ? [] : copilot.windows),
     ];
     if (windows.length > 0) {
       return {
         ...makeUsageLimits({ checkedAt, windows }),
         credentialFingerprint: yield* credentialFingerprint({
           goKey: typeof go === "string" ? undefined : go.apiKey,
-          copilot: typeof copilot === "string" ? undefined : Option.getOrUndefined(copilotAuth),
+          copilot:
+            typeof copilot === "string" || Option.isNone(copilotAuth)
+              ? undefined
+              : { auth: copilotAuth.value, accountId: copilot.accountId },
         }),
       };
     }
@@ -354,7 +362,10 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
   );
 });
 
-/** Adds Cody's GitHub Copilot windows to the limits an OpenCode 2 server reports. */
+/**
+ * Adds Cody's GitHub Copilot windows to the limits an OpenCode 2 server reports. The Copilot
+ * fingerprint names the account only when the server shows no windows of its own.
+ */
 export const withCopilotUsageWindows = (
   server: ServerProviderUsageLimits,
   local: ServerProviderUsageLimits,
@@ -364,5 +375,8 @@ export const withCopilotUsageWindows = (
   return {
     ...makeUsageLimits({ checkedAt: server.checkedAt, windows: [...server.windows, ...copilot] }),
     ...(server.externalUsage === undefined ? {} : { externalUsage: server.externalUsage }),
+    ...(server.windows.length === 0 && local.credentialFingerprint !== undefined
+      ? { credentialFingerprint: local.credentialFingerprint }
+      : {}),
   };
 };
