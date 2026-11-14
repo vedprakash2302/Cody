@@ -11,10 +11,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
-import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { OpenCodeSettings } from "../settings.ts";
+import { OpenCodeUsageCache, type OpenCodeCachedRow, type OpenCodeRowCache } from "./usageCache.ts";
 
 function object(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -92,19 +92,9 @@ export interface OpenCodeUsageReadResult {
   readonly files: readonly { readonly path: string; readonly records: readonly UsageRecord[] }[];
   readonly missing: boolean;
   readonly error: boolean;
+  /** Whether `rowCache` changed and should be saved. */
+  readonly cacheChanged: boolean;
 }
-
-interface CachedRow {
-  readonly updated: unknown;
-  readonly size: unknown;
-  readonly created: unknown;
-  readonly record: UsageRecord | null;
-}
-
-// Parsed rows by `${databasePath}\0${table}`, then rowid, so unchanged rows are not read again.
-const rowCache = new Map<string, { version: string; rows: Map<number, CachedRow> }>();
-// Concurrent scans of the same database would each read every uncached row.
-const scanLock = Semaphore.makeUnsafe(1);
 
 const isNotFound = (cause: PlatformError.PlatformError) => cause.reason._tag === "NotFound";
 const MESSAGE_PAGE_SIZE = 64;
@@ -130,6 +120,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
   root: string,
   sinceMs: number,
   retentionCutoffMs = sinceMs,
+  rowCache: OpenCodeRowCache = new Map(),
 ): Effect.fn.Return<OpenCodeUsageReadResult, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -137,6 +128,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
   const seen = new Set<string>();
   let found = false;
   let error = false;
+  let cacheChanged = false;
   let databaseRows = 0;
   let databasePages = 0;
   const append = (records: UsageRecord[], record: UsageRecord | null) => {
@@ -169,12 +161,26 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
     ),
     Effect.catchTags({
       PlatformError: (cause) => {
-        if (!isNotFound(cause)) error = true;
-        return Effect.succeed([]);
+        if (isNotFound(cause)) return Effect.succeed<ReadonlyArray<string> | null>([]);
+        error = true;
+        return Effect.succeed(null);
       },
     }),
   );
-  for (const name of databases) {
+  // Forget databases that were deleted, unless the directory could not be read.
+  if (databases !== null) {
+    for (const key of rowCache.keys()) {
+      const databasePath = key.slice(0, key.indexOf("\0"));
+      if (
+        path.join(root, path.basename(databasePath)) === databasePath &&
+        !databases.includes(path.basename(databasePath))
+      ) {
+        rowCache.delete(key);
+        cacheChanged = true;
+      }
+    }
+  }
+  for (const name of databases ?? []) {
     found = true;
     const file = { path: path.join(root, name), records: [] as UsageRecord[] };
     files.push(file);
@@ -187,12 +193,11 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         onNone: () => "none",
         onSome: (stat) => `${stat.size}:${Option.getOrNull(stat.mtime)?.getTime()}`,
       });
-    // A replaced or restored database can repeat rowids and change markers, so every key includes
-    // the main file; WAL commits leave it alone until a checkpoint.
+    // A replaced database can repeat rowids and change markers, so every key includes its file.
     const identity = Option.match(main!, {
       onNone: () => "none",
       onSome: (stat) =>
-        `${stat.dev}:${Option.getOrNull(stat.ino)}:${Option.getOrNull(stat.birthtime)?.getTime()}/${stamp(main!)}`,
+        `${stat.dev}:${Option.getOrNull(stat.ino)}:${Option.getOrNull(stat.birthtime)?.getTime()}`,
     });
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -273,8 +278,10 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const updated = columns.has("time_updated") ? "time_updated" : "NULL";
         const lineage =
           table === "session_message" && forks.size > 0 && columns.has("seq") ? "seq" : "NULL";
-        // Without time_updated an in-place edit can keep the length, so any database write counts.
-        const version = updated === "NULL" ? `${identity}/${stamp(wal!)}` : identity;
+        // OpenCode moves time_updated on every write, so checkpoints that rewrite the main file
+        // keep rows. Without it an in-place edit can keep the length, so any write counts.
+        const version =
+          updated === "NULL" ? `${identity}/${stamp(main!)}/${stamp(wal!)}` : identity;
         const predicates = table === "session_message" ? ["type = 'assistant'"] : [];
         if (timestamp !== "NULL") predicates.push("time_created >= ?");
         // List rowids and change markers so SQLite can use time indexes without reading message
@@ -296,7 +303,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const key = `${file.path}\0${table}`;
         const previous = rowCache.get(key);
         const reusable = previous?.version === version ? previous.rows : undefined;
-        const cached = new Map<number, CachedRow>();
+        const cached = new Map<number, OpenCodeCachedRow>();
         const misses: typeof listed = [];
         for (const row of listed) {
           const hit = reusable?.get(row.row_id);
@@ -368,6 +375,12 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
           if (typeof created === "number" && created < sinceMs && created >= retentionCutoffMs)
             cached.set(rowId, entry);
         }
+        if (
+          misses.length > 0 ||
+          previous?.version !== version ||
+          previous.rows.size !== cached.size
+        )
+          cacheChanged = true;
         rowCache.set(key, { version, rows: cached });
       }
     }).pipe(
@@ -455,8 +468,8 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
     "usage.database_rows": databaseRows,
     "usage.database_pages": databasePages,
   });
-  return { files, missing: !found && !error, error };
-}, scanLock.withPermit);
+  return { files, missing: !found && !error, error, cacheChanged };
+});
 
 const resolveOpenCodeDataDirs = Effect.fn("resolveOpenCodeDataDirs")(function* (
   environment: NodeJS.ProcessEnv,
@@ -485,7 +498,7 @@ const resolveOpenCodeDataDirs = Effect.fn("resolveOpenCodeDataDirs")(function* (
   return [...canonical];
 });
 
-export type OpenCodeUsageReaderEnv = FileSystem.FileSystem | Path.Path;
+export type OpenCodeUsageReaderEnv = FileSystem.FileSystem | Path.Path | OpenCodeUsageCache;
 
 export const openCodeUsageReader: ProviderUsageReader<OpenCodeSettings, OpenCodeUsageReaderEnv> = {
   kind: "scan",
@@ -495,6 +508,7 @@ export const openCodeUsageReader: ProviderUsageReader<OpenCodeSettings, OpenCode
     windowStartMs,
     retentionCutoffMs,
   }) {
+    const cache = yield* OpenCodeUsageCache;
     const roots = new Set<string>();
     for (const instance of instances) {
       for (const root of yield* resolveOpenCodeDataDirs(instance.environment)) roots.add(root);
@@ -502,14 +516,20 @@ export const openCodeUsageReader: ProviderUsageReader<OpenCodeSettings, OpenCode
     return yield* Effect.forEach(
       roots,
       (dir) =>
-        readOpenCodeUsage(dir, windowStartMs, retentionCutoffMs).pipe(
-          Effect.map((result) => ({
-            dir,
-            files: result.missing && !result.error ? null : result.files,
-            status: result.error ? ("partial" as const) : ("ok" as const),
-            ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
-          })),
-        ),
+        cache
+          .use((rows) =>
+            readOpenCodeUsage(dir, windowStartMs, retentionCutoffMs, rows).pipe(
+              Effect.map((result) => [result, result.cacheChanged] as const),
+            ),
+          )
+          .pipe(
+            Effect.map((result) => ({
+              dir,
+              files: result.missing && !result.error ? null : result.files,
+              status: result.error ? ("partial" as const) : ("ok" as const),
+              ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
+            })),
+          ),
       { concurrency: "unbounded" },
     );
   }),
