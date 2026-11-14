@@ -9,8 +9,26 @@ const source = (path: string) => NodeFS.readFileSync(new URL(path, import.meta.u
 
 describe("Cody's hooks into upstream files", () => {
   it.each([
-    ["../components/chat/SideChatPane.tsx", ["<CodySideChatBar", "CODY_SIDE_CHAT_BAR ?"]],
-    ["../components/chat/AssistantSelectionToolbar.tsx", ["<CodyAskInSideChat"]],
+    [
+      "../components/chat/SideChatPane.tsx",
+      ["<CodySideChatBar", "CODY_SIDE_CHAT_BAR ?", "<CodySideChatTitle", "<CodySideChatComposers"],
+    ],
+    [
+      "../components/chat/AssistantSelectionToolbar.tsx",
+      ["<CodyAskInSideChat", "sourceAnchor={selection.sourceAnchor}"],
+    ],
+    ["../components/chat/TimelineAssistantRows.tsx", ["<CodyAssistantActions"]],
+    [
+      "../components/chat/useSideChat.ts",
+      ["...(fromRunId === undefined ? {} : { runId: fromRunId })"],
+    ],
+    ["../lib/assistantTextSelection.ts", ["export function readAssistantText"]],
+    [
+      "../../../../packages/client-runtime/src/operations/commands.ts",
+      [
+        'input.runId === undefined ? { type: "latest_stable" } : { type: "run", runId: input.runId }',
+      ],
+    ],
     [
       "../components/CommandPalette.tsx",
       ["useCodySideChatPaletteItems(activeThread)", "actionItems.push(...codySideChatItems)"],

@@ -243,6 +243,8 @@ export interface ForkSideChatInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly title?: string;
+  /** Cody: fork from this finished run instead of the latest stable point. */
+  readonly runId?: RunId;
 }
 
 export interface MergeThreadBackInput extends CommandMetadata {
@@ -1090,7 +1092,8 @@ export const forkSideChat = Effect.fn("EnvironmentCommands.forkSideChat")(functi
     creationSource: input.creationSource ?? "web",
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
-    sourcePoint: { type: "latest_stable" },
+    sourcePoint:
+      input.runId === undefined ? { type: "latest_stable" } : { type: "run", runId: input.runId },
     sideChat: true,
     ...(input.title === undefined ? {} : { title: input.title }),
   });

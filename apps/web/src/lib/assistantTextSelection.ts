@@ -125,7 +125,7 @@ type TextChunk = { node: Text | Element; start: number; end: number };
 
 const isText = (node: Node): node is Text => node.nodeType === 3;
 
-function readAssistantText(root: HTMLElement) {
+export function readAssistantText(root: HTMLElement) {
   const parts: string[] = [];
   const chunks: TextChunk[] = [];
   let length = 0;
