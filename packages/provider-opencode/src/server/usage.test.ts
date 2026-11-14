@@ -10,6 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { vi } from "vite-plus/test";
 
 import {
@@ -21,6 +22,7 @@ import {
   openCodeForkSourceSessionId,
 } from "./usage.fixture.ts";
 import { openCodeUsageReader, readOpenCodeUsage } from "./usage.ts";
+import * as OpenCodeUsageCache from "./usageCache.ts";
 
 const readerWorkers = vi.hoisted(() => ({ started: 0, enabled: false }));
 
@@ -237,7 +239,8 @@ describe("readOpenCodeUsage", () => {
         ),
         (spy) => Effect.sync(() => spy.mockRestore()),
       );
-      const result = yield* readOpenCodeUsage(dir, sinceMs);
+      const rows: OpenCodeUsageCache.OpenCodeRowCache = new Map();
+      const result = yield* readOpenCodeUsage(dir, sinceMs, sinceMs, rows);
       assert.isFalse(result.error);
       assert.deepStrictEqual(
         result.files.flatMap((file) => file.records).map((record) => record.dedupeKey),
@@ -246,7 +249,7 @@ describe("readOpenCodeUsage", () => {
       assert.isBelow(statements, 10);
 
       bodyReads = 0;
-      const repeated = yield* readOpenCodeUsage(dir, sinceMs);
+      const repeated = yield* readOpenCodeUsage(dir, sinceMs, sinceMs, rows);
       assert.deepStrictEqual(
         repeated.files.flatMap((file) => file.records).map((record) => record.dedupeKey),
         ["opencode:a", "opencode:b", "opencode:c"],
@@ -261,7 +264,7 @@ describe("readOpenCodeUsage", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-replaced-" });
-      const write = (name: string, input: number) =>
+      const write = (name: string, input: number, updated = 1) =>
         Effect.scoped(
           Effect.gen(function* () {
             const db = yield* openDatabase(path.join(dir, name));
@@ -270,13 +273,14 @@ describe("readOpenCodeUsage", () => {
               "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)",
             );
             yield* db.unsafe(
-              "INSERT INTO message(rowid, id, session_id, time_created, time_updated, data) VALUES (1, 'a', 's', 1, 1, ?)",
-              [JSON.stringify({ modelID: "m", tokens: { input } })],
+              "INSERT INTO message(rowid, id, session_id, time_created, time_updated, data) VALUES (1, 'a', 's', 1, ?, ?)",
+              [updated, JSON.stringify({ modelID: "m", tokens: { input } })],
             );
           }),
         );
+      const rows: OpenCodeUsageCache.OpenCodeRowCache = new Map();
       const input = Effect.map(
-        readOpenCodeUsage(dir, 0),
+        readOpenCodeUsage(dir, 0, 0, rows),
         (result) => result.files[0]?.records[0]?.totals.uncachedInputTokens,
       );
       yield* write("opencode.db", 100);
@@ -284,11 +288,61 @@ describe("readOpenCodeUsage", () => {
       yield* write("replacement.db", 900);
       yield* fileSystem.rename(path.join(dir, "replacement.db"), path.join(dir, "opencode.db"));
       assert.strictEqual(yield* input, 900);
-      // A backup restored in place keeps the inode and birth time, like `cp -p`.
-      yield* write("backup.db", 500);
+      // A backup restored in place keeps the inode and birth time, like `cp -p`, so its rows
+      // are told apart by the change markers they had when it was taken.
+      yield* write("backup.db", 500, 0);
       yield* fileSystem.copyFile(path.join(dir, "backup.db"), path.join(dir, "opencode.db"));
       yield* fileSystem.utimes(path.join(dir, "opencode.db"), 0, 0);
       assert.strictEqual(yield* input, 500);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps parsed rows when a checkpoint rewrites the database file", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-checkpoint-" });
+      const db = yield* openDatabase(path.join(dir, "opencode.db"));
+      yield* db.unsafe("PRAGMA journal_mode = WAL");
+      yield* db.unsafe("PRAGMA wal_autocheckpoint = 0");
+      yield* db.unsafe(
+        "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)",
+      );
+      const insert = (id: string) =>
+        db.unsafe(
+          "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, 's', 1, 1, ?)",
+          [id, JSON.stringify({ modelID: "m", tokens: { input: 1 } })],
+        );
+      yield* insert("a");
+      yield* insert("b");
+      let parsedRows = 0;
+      const originalAll = NodeSqlite.StatementSync.prototype.all;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(NodeSqlite.StatementSync.prototype, "all").mockImplementation(function (
+            this: NodeSqlite.StatementSync,
+            ...params
+          ) {
+            const rows = originalAll.apply(this, params);
+            if (this.sourceSQL.includes("data ->")) parsedRows += rows.length;
+            return rows;
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const rows: OpenCodeUsageCache.OpenCodeRowCache = new Map();
+      const keys = Effect.map(readOpenCodeUsage(dir, 0, 0, rows), (result) =>
+        result.files.flatMap((file) => file.records).map((record) => record.dedupeKey),
+      );
+      assert.deepStrictEqual(yield* keys, ["opencode:a", "opencode:b"]);
+      assert.strictEqual(parsedRows, 2);
+
+      // OpenCode keeps writing while agents run, so its WAL is copied into the main file often.
+      yield* insert("c");
+      yield* db.unsafe("PRAGMA wal_checkpoint(TRUNCATE)");
+      parsedRows = 0;
+      assert.deepStrictEqual(yield* keys, ["opencode:a", "opencode:b", "opencode:c"]);
+      assert.strictEqual(parsedRows, 1);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -536,7 +590,12 @@ describe("readOpenCodeUsage", () => {
       yield* write("msg-old", sinceMs - 60_000);
 
       const stale = yield* readOpenCodeUsage(dir, sinceMs);
-      assert.deepStrictEqual(stale, { files: [], missing: false, error: false });
+      assert.deepStrictEqual(stale, {
+        files: [],
+        missing: false,
+        error: false,
+        cacheChanged: false,
+      });
 
       const recent = yield* write("msg-new", sinceMs + 60_000);
       const result = yield* readOpenCodeUsage(dir, sinceMs);
@@ -635,7 +694,12 @@ describe("readOpenCodeUsage", () => {
       yield* fileSystem.symlink(path.join(session, "loop.json"), path.join(session, "loop.json"));
 
       const linksOnly = yield* readOpenCodeUsage(dir, sinceMs);
-      assert.deepStrictEqual(linksOnly, { files: [], missing: true, error: false });
+      assert.deepStrictEqual(linksOnly, {
+        files: [],
+        missing: true,
+        error: false,
+        cacheChanged: false,
+      });
 
       const real = yield* write(session, "msg-real", sinceMs + 60_000);
       const result = yield* readOpenCodeUsage(dir, sinceMs);
@@ -705,6 +769,98 @@ describe("openCodeUsageReader", () => {
         sources.map((source) => source.dir).sort(),
         [defaultRoot, instanceRoot, xdgRoot].sort(),
       );
+    }).pipe(
+      Effect.provide(
+        OpenCodeUsageCache.layer.pipe(
+          Layer.provideMerge(TestProviderHost.layer()),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps parsed rows across a server restart", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-restart-" });
+      const db = yield* openDatabase(path.join(dir, "opencode.db"));
+      yield* db.unsafe(
+        "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)",
+      );
+      const message = {
+        modelID: "deepseek-v4.1-flash",
+        providerID: "opencode-go",
+        cost: 0.5,
+        tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 30, write: 10 } },
+      };
+      yield* db.unsafe(
+        `INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES
+           ('a', 's', 1780000000000, 1, ?), ('b', 's', 1780000000000, 1, ?)`,
+        [JSON.stringify(message), JSON.stringify({ role: "user" })],
+      );
+      if (openCodeUsageReader.kind !== "scan") throw new Error("Expected an OpenCode scan reader");
+      const reader = openCodeUsageReader;
+      let parsedRows = 0;
+      const originalAll = NodeSqlite.StatementSync.prototype.all;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(NodeSqlite.StatementSync.prototype, "all").mockImplementation(function (
+            this: NodeSqlite.StatementSync,
+            ...params
+          ) {
+            const rows = originalAll.apply(this, params);
+            if (this.sourceSQL.includes("data ->")) parsedRows += rows.length;
+            return rows;
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const host = yield* Layer.build(TestProviderHost.layer());
+      // Each server builds its own cache from the state directory the previous one saved.
+      const startServer = Effect.gen(function* () {
+        const context = yield* Layer.build(Layer.fresh(OpenCodeUsageCache.layer)).pipe(
+          Effect.provideContext(host),
+        );
+        const cache = Context.get(context, OpenCodeUsageCache.OpenCodeUsageCache);
+        const scan = reader
+          .scan({
+            instances: [
+              {
+                instanceId: ProviderInstanceId.make("opencode"),
+                config: undefined,
+                environment: { OPENCODE_DATA_DIR: dir },
+                configured: true,
+              },
+            ],
+            settings: DEFAULT_SERVER_SETTINGS,
+            windowStartMs: 0,
+            retentionCutoffMs: 0,
+            awaitRefresh: false,
+          })
+          .pipe(
+            Effect.map((sources) => sources.flatMap((source) => source.files ?? [])),
+            Effect.map((files) => files.flatMap((file) => file.records)),
+            Effect.provideContext(context),
+          );
+        return { scan, awaitPersisted: cache.awaitPersisted };
+      });
+
+      const first = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* startServer;
+          const records = yield* server.scan;
+          yield* server.awaitPersisted;
+          return records;
+        }),
+      );
+      assert.strictEqual(parsedRows, 1);
+      assert.strictEqual(first.length, 1);
+
+      parsedRows = 0;
+      const restarted = yield* Effect.scoped(Effect.flatMap(startServer, (server) => server.scan));
+      assert.strictEqual(parsedRows, 0);
+      assert.deepStrictEqual(restarted, first);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
