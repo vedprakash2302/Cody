@@ -434,12 +434,7 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.orElseSucceed(() => null));
         const scope =
           config && config.exitCode === 0 && !config.stdoutTruncated
-            ? azureDevOpsScopeFromConfig(
-                config.stdout,
-                args.includes("--remote-name")
-                  ? args[args.indexOf("--remote-name") + 1]
-                  : undefined,
-              )
+            ? azureDevOpsScopeFromConfig(config.stdout)
             : null;
         if (scope) args = scopeAzureDevOpsArgs(args, scope);
       }

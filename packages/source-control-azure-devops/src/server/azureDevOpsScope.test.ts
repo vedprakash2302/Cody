@@ -47,14 +47,6 @@ describe("Azure DevOps checkout scope", () => {
     });
   });
 
-  it("honors checkout's explicit remote selection", () => {
-    const config =
-      "remote.upstream.url https://dev.azure.com/acme/Project/_git/Repo\nremote.origin.url https://dev.azure.com/fork/Project/_git/Fork";
-    expect(azureDevOpsScopeFromConfig(config, "origin")?.organization).toBe(
-      "https://dev.azure.com/fork",
-    );
-    expect(azureDevOpsScopeFromConfig(config, "missing")).toBeNull();
-  });
   it("preserves explicit repository and project selections", () => {
     const args = scopeAzureDevOpsArgs(
       [

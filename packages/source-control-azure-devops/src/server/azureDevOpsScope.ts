@@ -38,17 +38,16 @@ export function parseAzureDevOpsRemote(remote: string) {
 }
 
 /** Prefer the same primary remote as repository identity discovery. */
-export function azureDevOpsScopeFromConfig(output: string, remoteName?: string) {
+export function azureDevOpsScopeFromConfig(output: string) {
   const remotes = new Map<string, string>();
   for (const line of output.split("\n")) {
     const match = /^remote\.(.+)\.url\s+(.+)$/.exec(line.trim());
     if (match?.[1] && match[2]) remotes.set(match[1], match[2]);
   }
-  const remote = remoteName
-    ? remotes.get(remoteName)
-    : (remotes.get("upstream") ??
-      remotes.get("origin") ??
-      [...remotes.entries()].sort(([a], [b]) => a.localeCompare(b))[0]?.[1]);
+  const remote =
+    remotes.get("upstream") ??
+    remotes.get("origin") ??
+    [...remotes.entries()].sort(([a], [b]) => a.localeCompare(b))[0]?.[1];
   return remote ? parseAzureDevOpsRemote(remote) : null;
 }
 
