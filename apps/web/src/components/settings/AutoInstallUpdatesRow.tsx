@@ -4,13 +4,14 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
 
-/** Cody: lets this machine install updates by itself once no agent is running. */
+/** Cody: lets this machine install updates by itself overnight once no agent is running. */
 export function AutoInstallUpdatesRow() {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
   const getAutoInstall = bridge?.getAutoInstallUpdates;
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the desktop app's setting over IPC once per mount
   useEffect(() => {
     if (!getAutoInstall) return;
     let cancelled = false;
@@ -46,7 +47,7 @@ export function AutoInstallUpdatesRow() {
   return (
     <SettingsRow
       title="Install updates automatically"
-      description="Download new versions and restart into them after agents on this machine have been idle for 5 minutes."
+      description="Download new versions and restart into them between midnight and 8 AM, after agents on this machine have been idle for 5 minutes."
       control={
         <Switch
           checked={enabled}
