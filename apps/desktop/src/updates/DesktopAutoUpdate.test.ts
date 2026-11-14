@@ -1,5 +1,6 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -48,6 +49,7 @@ describe("nextAutoUpdateStep", () => {
       idleSinceMs: 0,
       downloadedAtMs: 0,
       nowMs: minutes(5),
+      localHour: 3,
       failedInstallVersion: null,
       ...overrides,
     });
@@ -62,6 +64,14 @@ describe("nextAutoUpdateStep", () => {
     assert.equal(step({ idleSinceMs: null }), "wait");
     assert.equal(step({ idleSinceMs: 1 }), "wait");
     assert.equal(step({ downloadedAtMs: 1 }), "wait");
+  });
+
+  it("restarts only before 8 AM, but downloads at any hour", () => {
+    assert.equal(step({ localHour: 0 }), "install");
+    assert.equal(step({ localHour: 7 }), "install");
+    assert.equal(step({ localHour: 8 }), "wait");
+    assert.equal(step({ localHour: 23 }), "wait");
+    assert.equal(step({ state: availableState, localHour: 14 }), "download");
   });
 
   it("does nothing when turned off or when updates are unavailable", () => {
@@ -165,12 +175,14 @@ const runListener = Effect.fn(function* (input: {
   readonly settings?: DesktopAppSettings.DesktopSettings;
   readonly installFails?: boolean;
   readonly scenario: (counts: {
+    readonly checks: Ref.Ref<number>;
     readonly downloads: Ref.Ref<number>;
     readonly installs: Ref.Ref<number>;
     readonly state: SubscriptionRef.SubscriptionRef<DesktopUpdateState>;
   }) => Effect.Effect<void, never, DesktopAppSettings.DesktopAppSettings>;
 }) {
   const state = yield* SubscriptionRef.make(availableState);
+  const checks = yield* Ref.make(0);
   const downloads = yield* Ref.make(0);
   const installs = yield* Ref.make(0);
   const quitting = yield* Ref.make(false);
@@ -190,7 +202,11 @@ const runListener = Effect.fn(function* (input: {
       disabledReason: Effect.succeedNone,
       configure: unexpected("configure"),
       setChannel: () => unexpected("setChannel"),
-      check: () => unexpected("check"),
+      check: () =>
+        Ref.update(checks, (count) => count + 1).pipe(
+          Effect.andThen(SubscriptionRef.get(state)),
+          Effect.map((latest) => ({ checked: true, state: latest })),
+        ),
       download: Ref.update(downloads, (count) => count + 1).pipe(
         Effect.andThen(SubscriptionRef.set(state, downloadedState)),
         Effect.as({ accepted: true, completed: true, state: downloadedState }),
@@ -214,7 +230,7 @@ const runListener = Effect.fn(function* (input: {
 
   yield* Effect.gen(function* () {
     yield* DesktopAutoUpdate.listen;
-    yield* input.scenario({ downloads, installs, state });
+    yield* input.scenario({ checks, downloads, installs, state });
   }).pipe(
     Effect.scoped,
     Effect.provide(
@@ -223,6 +239,7 @@ const runListener = Effect.fn(function* (input: {
         DesktopBackendPool.layerTest(input.backends.map(makeInstance)),
         DesktopAppSettings.layerTest(input.settings),
         httpClientLayer(input.backends),
+        DateTime.layerCurrentZone(DateTime.zoneMakeNamedUnsafe("UTC")),
       ),
     ),
   );
@@ -314,6 +331,27 @@ describe("DesktopAutoUpdate.listen", () => {
             // The updater's next check clears the error but keeps the download.
             yield* SubscriptionRef.set(state, downloadedState);
             yield* TestClock.adjust(Duration.minutes(30));
+            assert.equal(yield* Ref.get(installs), 1);
+          }),
+      });
+    }),
+  );
+
+  it.effect("waits for the night to restart, and looks for releases while it waits", () =>
+    Effect.gen(function* () {
+      const primary = { id: "local", port: 3773, answer: yield* Ref.make<BackendAnswer>("idle") };
+      yield* TestClock.setTime(Duration.toMillis(Duration.hours(8)));
+      yield* runListener({
+        backends: [primary],
+        scenario: ({ checks, downloads, installs }) =>
+          Effect.gen(function* () {
+            yield* TestClock.adjust(Duration.hours(15));
+            assert.equal(yield* Ref.get(downloads), 1);
+            assert.equal(yield* Ref.get(installs), 0, "08:00 to 23:00 is the workday");
+            assert.equal(yield* Ref.get(checks), 0);
+
+            yield* TestClock.adjust(Duration.minutes(61));
+            assert.equal(yield* Ref.get(checks), 1);
             assert.equal(yield* Ref.get(installs), 1);
           }),
       });

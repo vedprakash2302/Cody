@@ -24,11 +24,7 @@ The actions locate an existing `personal/main` worktree and discover remotes by 
 
 Sync leaves merge conflicts in the integration checkout for an agent to resolve using the fork skill. Failed checks leave the update local and do not publish a build. The regression file list is maintained in `scripts/personal-fixes.json`, shared by project actions and CI. GitHub authentication is required for Build Cody Release. Node 24, Git, and Vite+ are required for all actions.
 
-The **Personal upstream sync** workflow runs daily at 06:23 UTC, subject to GitHub's scheduling delays. It merges upstream `main`, runs the regression suites in `.github/scripts/check-personal-fixes.sh`, and pushes only if those checks pass. Conflicts or failed checks leave the remote branch unchanged and fail the workflow. The workflow can also be dispatched manually:
-
-```sh
-gh workflow run personal-sync.yml --repo vedprakash2302/Cody --ref personal/main
-```
+Every upstream merge goes through an agent. The T3 scheduled task **Sync upstream and release Cody** runs at 04:00 UTC on Devbox. It merges upstream `main`, reconciles Cody's patches, runs the regression checks, pushes `personal/main`, and builds a release, so the release lands before 08:00. GitHub Actions has no unattended merge workflow.
 
 Resolve a conflict in the personal worktree with the existing remote names:
 
@@ -73,7 +69,7 @@ Versions use `-nightly.YYYYMMDD.RUN` and tags use `v<version>`. The workflow emb
 
 `scripts/cody-release-notes.mjs` writes each release body from the commits since the previous published Cody nightly, split into T3 Code changes (reachable from upstream `main`) and Cody's own commits. The in-app update popover reads that body, so Cody's commits are listed last, where the popover looks first. A release edited by hand keeps its edited text in the popover.
 
-Older `-preview` installations have no embedded feed and need one manual upgrade to an update-enabled build. After that, Cody downloads each new release by itself and restarts into it once no agent on any of its backends has had a turn in progress for 5 minutes. A running agent holds the restart back. To update a machine by hand instead, turn off **Install updates automatically** under Settings > General > About and use the sidebar update control. Installing an update preserves the Cody profile, data, and client pairings. Windows may show an unsigned-app warning. macOS builds are not notarized; reliable macOS in-app installation requires signing credentials, so keep manual DMG installation available. Native mobile builds are not part of this workflow; keep using the official iOS app.
+Older `-preview` installations have no embedded feed and need one manual upgrade to an update-enabled build. After that, Cody downloads each new release by itself. It restarts into it only between midnight and 08:00 local time, once no agent on any of its backends has had a turn in progress for 5 minutes, and it checks for a release every 30 minutes during that window. A release found during the day waits for the night or for a manual restart. A running agent holds the restart back. To update a machine by hand instead, turn off **Install updates automatically** under Settings > General > About and use the sidebar update control. Installing an update preserves the Cody profile, data, and client pairings. Windows may show an unsigned-app warning. macOS builds are not notarized; reliable macOS in-app installation requires signing credentials, so keep manual DMG installation available. Native mobile builds are not part of this workflow; keep using the official iOS app.
 
 The desktop app and bundled web client display the name Cody. Cody installs alongside official T3 with its own application ID, `cody://` URL scheme, and Electron profile. Desktop data lives in `~/.cody/userdata`, including in WSL. The default backend port is 4773. Existing T3 data stays in `~/.t3`; Cody starts with a separate environment identity and needs its own client pairing. Use different Tailscale Serve ports for the two apps, such as 443 for T3 and 8443 for Cody. Keep using the official T3 iOS app.
 
@@ -82,5 +78,3 @@ Standalone server archives still use the `t3` CLI. Pass `--base-dir ~/.cody` whe
 Updating source or installing a client does not update independent remote servers. Install the matching server build on each environment that needs the fixes. Back up the environment's data before replacing a runtime; returning to an older executable does not undo database migrations.
 
 The build uses the public T3 Connect settings from `.env.example`. It needs no upstream signing or deployment secrets. Upstream release and deployment workflows are disabled in this fork's Actions settings; only the personal workflows and their reusable desktop packaging workflow need to be enabled.
-
-GitHub can disable scheduled workflows after extended inactivity in a public repository. If daily sync stops, check the workflow's Actions page and re-enable it.

@@ -1,5 +1,6 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -28,6 +29,10 @@ const AUTO_INSTALL_IDLE = Duration.minutes(5);
  */
 const DOWNLOAD_SETTLE = Duration.minutes(5);
 const ACTIVITY_POLL_INTERVAL = Duration.minutes(1);
+/** Automatic installs restart the app only before this local hour, so they never interrupt the workday. */
+const AUTO_INSTALL_BEFORE_HOUR = 8;
+/** Inside the install window the app looks for a release this often, instead of the updater's 4 hours. */
+const INSTALL_WINDOW_CHECK_INTERVAL = Duration.minutes(30);
 const PROBE_TIMEOUT = Duration.seconds(5);
 
 const decodeAgentActivity = HttpClientResponse.schemaBodyJson(
@@ -44,6 +49,8 @@ export function nextAutoUpdateStep(input: {
   /** When the downloaded version finished downloading. */
   readonly downloadedAtMs: number | null;
   readonly nowMs: number;
+  /** Local hour of `nowMs`, 0 to 23. */
+  readonly localHour: number;
   /** A version whose install already failed; it waits for the user. */
   readonly failedInstallVersion: string | null;
 }): AutoUpdateStep {
@@ -58,6 +65,7 @@ export function nextAutoUpdateStep(input: {
     state.downloadedVersion !== input.failedInstallVersion &&
     // The app came back on its old version after installing this one.
     state.downloadedVersion !== state.notAppliedVersion &&
+    input.localHour < AUTO_INSTALL_BEFORE_HOUR &&
     input.idleSinceMs !== null &&
     nowMs - input.idleSinceMs >= Duration.toMillis(AUTO_INSTALL_IDLE) &&
     input.downloadedAtMs !== null &&
@@ -97,10 +105,10 @@ const probeBackend = Effect.fn("DesktopAutoUpdate.probeBackend")(
 );
 
 /**
- * Downloads new versions as the updater finds them and restarts into one once
- * every backend, including WSL, has reported no agent work for
- * AUTO_INSTALL_IDLE. Checks again right before restarting. Off when the user
- * turns off automatic updates in Settings.
+ * Downloads new versions as the updater finds them and, before
+ * AUTO_INSTALL_BEFORE_HOUR local time, restarts into one once every backend,
+ * including WSL, has reported no agent work for AUTO_INSTALL_IDLE. Checks again
+ * right before restarting. Off when the user turns off automatic updates in Settings.
  */
 export const listen: Effect.Effect<
   void,
@@ -121,6 +129,14 @@ export const listen: Effect.Effect<
   const idleSinceRef = yield* Ref.make<number | null>(null);
   const downloadedRef = yield* Ref.make<{ version: string; atMs: number } | null>(null);
   const failedInstallVersionRef = yield* Ref.make<string | null>(null);
+  const lastWindowCheckRef = yield* Ref.make<number | null>(null);
+  // Tests pin a zone; the app uses the machine's.
+  const zone = Option.getOrElse(
+    yield* Effect.serviceOption(DateTime.CurrentTimeZone),
+    DateTime.zoneMakeLocal,
+  );
+  const localHourAt = (nowMs: number) =>
+    DateTime.getPart(DateTime.makeZonedUnsafe(nowMs, { timeZone: zone }), "hour");
   // One evaluator at a time; a trigger that arrives mid-download collapses into one rerun.
   const triggers = yield* Queue.sliding<void>(1);
   const probeDueRef = yield* Ref.make(true);
@@ -154,14 +170,32 @@ export const listen: Effect.Effect<
     );
   });
 
+  // The updater's own 4-hour poll can miss the install window, so check during it too.
+  const checkInWindow = Effect.gen(function* () {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const lastCheckMs = yield* Ref.get(lastWindowCheckRef);
+    if (
+      !(yield* desktopSettings.get).autoInstallUpdates ||
+      localHourAt(nowMs) >= AUTO_INSTALL_BEFORE_HOUR ||
+      (lastCheckMs !== null &&
+        nowMs - lastCheckMs < Duration.toMillis(INSTALL_WINDOW_CHECK_INTERVAL))
+    ) {
+      return;
+    }
+    yield* Ref.set(lastWindowCheckRef, nowMs);
+    yield* updates.check("install-window");
+  });
+
   const evaluate = Effect.gen(function* () {
     const state = yield* Ref.get(stateRef);
+    const nowMs = yield* Clock.currentTimeMillis;
     const step = nextAutoUpdateStep({
       enabled: (yield* desktopSettings.get).autoInstallUpdates,
       state,
       idleSinceMs: yield* Ref.get(idleSinceRef),
       downloadedAtMs: (yield* Ref.get(downloadedRef))?.atMs ?? null,
-      nowMs: yield* Clock.currentTimeMillis,
+      nowMs,
+      localHour: localHourAt(nowMs),
       failedInstallVersion: yield* Ref.get(failedInstallVersionRef),
     });
     switch (step) {
@@ -203,6 +237,7 @@ export const listen: Effect.Effect<
     recordState(state).pipe(Effect.andThen(Queue.offer(triggers, undefined))),
   ).pipe(Effect.forkScoped);
   yield* Ref.set(probeDueRef, true).pipe(
+    Effect.andThen(checkInWindow),
     Effect.andThen(Queue.offer(triggers, undefined)),
     Effect.andThen(Effect.sleep(ACTIVITY_POLL_INTERVAL)),
     Effect.forever,
