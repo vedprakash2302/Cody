@@ -219,6 +219,7 @@ export function AssistantSelectionToolbar({
       <CodyAskInSideChat
         threadRef={threadRef}
         citation={selection.citation}
+        sourceAnchor={selection.sourceAnchor}
         disabled={tooLong}
         onDone={() => {
           window.getSelection()?.removeAllRanges();

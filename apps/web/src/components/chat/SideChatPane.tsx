@@ -15,7 +15,6 @@ import { Trash2Icon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { ComposerHandleContext } from "../../composerHandleContext";
 import { useClientSettings } from "../../hooks/useSettings";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
@@ -32,6 +31,8 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { CODY_SIDE_CHAT_BAR, CodySideChatBar } from "../../cody/CodySideChatBar";
+import { CodySideChatTitle } from "../../cody/CodySideChatTitle";
+import { CodySideChatComposers } from "../../cody/sideChatComposers";
 
 /** A side chat tab: its title, Bring back, Delete and Close, over the side chat's own chat. */
 export default function SideChatPane(props: {
@@ -131,7 +132,11 @@ export default function SideChatPane(props: {
     <div data-side-chat-pane className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1 pl-3">
         <span className="min-w-0 flex-1 truncate text-xs font-medium">
-          {shell?.title ?? "Side chat"}
+          {CODY_SIDE_CHAT_BAR ? (
+            <CodySideChatTitle parentRef={parentRef} threadId={threadId} canOperate={canOperate} />
+          ) : (
+            (shell?.title ?? "Side chat")
+          )}
         </span>
         {CODY_SIDE_CHAT_BAR ? (
           <CodySideChatBar parentRef={parentRef} threadId={threadId} canOperate={canOperate} />
@@ -173,14 +178,14 @@ export default function SideChatPane(props: {
         ) : null
       ) : (
         <BackgroundThreadContext value>
-          <ComposerHandleContext value={null}>
+          <CodySideChatComposers parentRef={parentRef} threadId={threadId}>
             <ChatView
               environmentId={parentRef.environmentId}
               threadId={threadId}
               routeKind="server"
               embedded={props.parentPanel}
             />
-          </ComposerHandleContext>
+          </CodySideChatComposers>
         </BackgroundThreadContext>
       )}
     </div>
