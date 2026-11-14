@@ -22,6 +22,7 @@
   "apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.test.ts",
   "packages/provider-opencode/src/server/v2/OpenCode2Client.test.ts",
   "packages/provider-opencode/src/server/v2/OpenCode2Server.test.ts",
+  "packages/provider-opencode/src/server/usage.test.ts",
   "packages/provider-opencode/src/server/status.test.ts",
   "packages/provider-opencode/src/server/driver.test.ts",
   "packages/provider-core/src/server/runtimeInstructions.test.ts",
