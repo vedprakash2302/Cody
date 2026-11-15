@@ -9,6 +9,8 @@ import type {
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 
+import { foldLatinDiacritics } from "./path.ts";
+
 export const WORKTREE_BRANCH_PREFIX = "t3";
 
 /** Preserve the namespace when a picker stores a worktree base in a draft. */
@@ -27,9 +29,7 @@ const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
 );
 
 export function sanitizeBranchFragment(raw: string): string {
-  const normalized = raw
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+  const normalized = foldLatinDiacritics(raw)
     .trim()
     .toLowerCase()
     .replace(/['"`]/g, "")

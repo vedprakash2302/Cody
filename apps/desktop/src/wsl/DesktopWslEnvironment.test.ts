@@ -208,7 +208,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         "  }",
         '  eval "$2"',
         "); }",
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 
@@ -243,7 +243,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
       [
         "bash() { return 127; }",
         'export PATH="/fixture/bin:/usr/bin:/bin"',
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 

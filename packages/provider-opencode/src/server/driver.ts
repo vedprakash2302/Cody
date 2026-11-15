@@ -490,9 +490,14 @@ export const OpenCodeDriver: ProviderDriver<
         { concurrency: "unbounded" },
       );
       if (limits === undefined) unsupportedUsageVersion = runtime.version;
-      return limits === undefined
-        ? yield* legacyUsageLimits
-        : withCopilotUsageWindows(limits, copilot);
+      if (limits !== undefined && limits.unavailable?.reason !== "unsupported")
+        return withCopilotUsageWindows(limits, copilot);
+      // Without a Console workspace the server reports nothing, but a local Go key still has usage.
+      // The local read also carries the Copilot windows.
+      const legacy = yield* legacyUsageLimits;
+      return limits !== undefined && legacy.unavailable?.reason === "unsupported"
+        ? withCopilotUsageWindows(limits, copilot)
+        : legacy;
     }).pipe(
       Effect.timeout("10 seconds"),
       Effect.catch(() =>
