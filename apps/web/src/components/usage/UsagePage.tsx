@@ -1042,7 +1042,7 @@ function ProviderMark({
 }
 
 function figureClass(loading: boolean) {
-  return cn("transition-opacity", loading && "opacity-40 delay-150");
+  return cn("transition-opacity", loading && "opacity-40 delay-1000");
 }
 
 function Metric({
