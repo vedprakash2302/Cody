@@ -14,6 +14,8 @@ export interface OpenCodeCachedRow {
   readonly updated: unknown;
   readonly size: unknown;
   readonly created: unknown;
+  /** OpenCode 2's position in its session; `undefined` when a cache from before it was saved. */
+  readonly seq?: unknown;
   readonly record: UsageRecord | null;
 }
 
@@ -48,6 +50,7 @@ type SerializedRow = readonly [
   size: number | null,
   created: number | null,
   record: SerializedRecord | null,
+  seq?: number | null,
 ];
 
 const isFiniteNumber = (value: unknown): value is number =>
@@ -96,13 +99,12 @@ function* encodeOpenCodeRowCache(cache: OpenCodeRowCache): Generator<string> {
     for (const [rowId, row] of table.rows) {
       // Markers SQLite returns as other types cannot be compared after a round trip.
       if (!isMarker(row.updated) || !isMarker(row.size) || !isMarker(row.created)) continue;
-      chunk.push([
-        rowId,
-        row.updated,
-        row.size,
-        row.created,
-        row.record === null ? null : encodeRecord(row.record),
-      ]);
+      const record = row.record === null ? null : encodeRecord(row.record);
+      chunk.push(
+        isMarker(row.seq)
+          ? [rowId, row.updated, row.size, row.created, record, row.seq]
+          : [rowId, row.updated, row.size, row.created, record],
+      );
       if (chunk.length === ROWS_PER_CHUNK) yield flush();
     }
     if (chunk.length > 0) yield flush();
@@ -192,18 +194,25 @@ function decodeOpenCodeRowCache(document: unknown): OpenCodeRowCache {
     const rows = new Map<number, OpenCodeCachedRow>();
     for (const value of table.rows) {
       if (!Array.isArray(value)) break;
-      const [rowId, updated, size, created, encoded]: readonly unknown[] = value;
+      const [rowId, updated, size, created, encoded, seq]: readonly unknown[] = value;
       const record = encoded === null ? null : decodeRecord(encoded);
       if (
         !Number.isSafeInteger(rowId) ||
         !isMarker(updated) ||
         !isMarker(size) ||
         !isMarker(created) ||
+        (value.length > 5 && !isMarker(seq)) ||
         record === undefined
       ) {
         break;
       }
-      rows.set(rowId as number, { updated, size, created, record });
+      rows.set(rowId as number, {
+        updated,
+        size,
+        created,
+        record,
+        ...(value.length > 5 ? { seq } : {}),
+      });
     }
     if (rows.size !== table.rows.length) continue;
     cache.set(key, { version: table.version, rows });
