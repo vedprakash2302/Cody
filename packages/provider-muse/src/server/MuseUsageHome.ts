@@ -1,4 +1,5 @@
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,8 +24,12 @@ export class MuseUsageHome extends Context.Service<
   }
 >()("@t3tools/provider-muse/server/MuseUsageHome") {}
 
+/** How long a CLI that is not installed stays unsearched; PATH lookups on WSL stat Windows drives. */
+const MISSING_EXECUTABLE_TTL = Duration.minutes(10);
+
 const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
+  const missingUntil = new Map<string, number>();
   const cache = yield* Cache.makeWith(
     Effect.fn("MuseUsageHome.initialize")(function* (input: {
       readonly binaryPath: string;
@@ -64,11 +69,16 @@ const make = Effect.gen(function* () {
       };
       const settled = yield* Cache.getSuccess(cache, key);
       if (Option.isSome(settled)) return settled;
+      const missingKey = [binaryPath, environment.PATH, environment.PATHEXT].join("\0");
+      const now = yield* Clock.currentTimeMillis;
+      if ((missingUntil.get(missingKey) ?? 0) > now) return Option.some(undefined);
       // Spawn failures surface asynchronously; without this a missing CLI would report as pending.
       const resolveExecutable = yield* SpawnExecutableResolution;
       if (resolveExecutable(binaryPath, yield* HostProcess.Platform, environment) === undefined) {
+        missingUntil.set(missingKey, now + Duration.toMillis(MISSING_EXECUTABLE_TTL));
         return Option.some(undefined);
       }
+      missingUntil.delete(missingKey);
       if (awaitRefresh) return Option.some(yield* Cache.get(cache, key));
       // Awaited in the layer scope so a departing caller cannot cancel discovery.
       yield* Effect.forkIn(Cache.get(cache, key), scope, { startImmediately: true });
