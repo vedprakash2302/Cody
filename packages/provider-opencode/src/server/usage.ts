@@ -6,6 +6,7 @@ import {
 } from "@t3tools/provider-core/server/usage";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -98,6 +99,9 @@ export interface OpenCodeUsageReadResult {
 
 const isNotFound = (cause: PlatformError.PlatformError) => cause.reason._tag === "NotFound";
 const MESSAGE_PAGE_SIZE = 64;
+const MARKER_PAGE_SIZE = 2048;
+/** Longer than any single OpenCode turn, after which a message's usage no longer changes. */
+const SETTLED_AFTER_MS = 2 * 24 * 60 * 60 * 1000;
 
 const isSymbolicLink = Effect.fnUntraced(function* (path: string) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -131,6 +135,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
   let cacheChanged = false;
   let databaseRows = 0;
   let databasePages = 0;
+  const now = yield* Clock.currentTimeMillis;
   const append = (records: UsageRecord[], record: UsageRecord | null) => {
     if (record === null || record.timestampMs < sinceMs) return;
     if (record.dedupeKey !== null) {
@@ -276,42 +281,80 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const columns = yield* columnsOf(table);
         const timestamp = columns.has("time_created") ? "time_created" : "NULL";
         const updated = columns.has("time_updated") ? "time_updated" : "NULL";
-        const lineage =
-          table === "session_message" && forks.size > 0 && columns.has("seq") ? "seq" : "NULL";
+        const seq = table === "session_message" && columns.has("seq") ? "seq" : "NULL";
         // OpenCode moves time_updated on every write, so checkpoints that rewrite the main file
         // keep rows. Without it an in-place edit can keep the length, so any write counts.
         const version =
           updated === "NULL" ? `${identity}/${stamp(main!)}/${stamp(wal!)}` : identity;
         // OpenCode 2 records a compaction request's spend on its compaction message.
-        const predicates =
-          table === "session_message" ? ["type IN ('assistant', 'compaction')"] : [];
-        if (timestamp !== "NULL") predicates.push("time_created >= ?");
-        // List rowids and change markers so SQLite can use time indexes without reading message
-        // bodies; octet_length comes from the record header.
-        const listed = (yield* sql.unsafe<{
-          readonly row_id: number;
-          readonly updated: unknown;
-          readonly size: unknown;
-          readonly created: unknown;
-          readonly seq: unknown;
-        }>(
-          `SELECT rowid AS row_id, ${updated} AS updated, octet_length(data) AS size,
-             ${timestamp} AS created, ${lineage} AS seq
-           FROM ${table}
-           ${predicates.length ? `WHERE ${predicates.join(" AND ")}` : ""}`,
+        const usageRows = table === "session_message" ? "type IN ('assistant', 'compaction')" : "1";
+        // The time index lists the window without reading message pages, which are scattered across
+        // a multi-GB file and take tens of seconds to fetch when the page cache is cold.
+        const listed = (yield* sql.unsafe<{ readonly row_id: number; readonly created: unknown }>(
+          `SELECT rowid AS row_id, ${timestamp} AS created FROM ${table}
+           ${timestamp === "NULL" ? "" : "WHERE time_created >= ?"}`,
           timestamp === "NULL" ? [] : [sinceMs],
         )).toSorted((a, b) => a.row_id - b.row_id);
         databaseRows += listed.length;
         const key = `${file.path}\0${table}`;
         const previous = rowCache.get(key);
         const reusable = previous?.version === version ? previous.rows : undefined;
+        // Caches saved before seq was kept fill it from OpenCode's seq index in one cheap read.
+        const knownSeq =
+          seq !== "NULL" &&
+          listed.some((row) => {
+            const hit = reusable?.get(row.row_id);
+            return hit !== undefined && hit.seq === undefined;
+          })
+            ? new Map(
+                (yield* sql.unsafe<{ readonly row_id: number; readonly seq: unknown }>(
+                  `SELECT rowid AS row_id, seq FROM ${table} WHERE seq IS NOT NULL`,
+                )).map((row) => [row.row_id, row.seq]),
+              )
+            : undefined;
         const cached = new Map<number, OpenCodeCachedRow>();
-        const misses: typeof listed = [];
+        const unsettled: number[] = [];
         for (const row of listed) {
-          const hit = reusable?.get(row.row_id);
-          if (hit && hit.updated === row.updated && hit.size === row.size)
+          let hit = reusable?.get(row.row_id);
+          if (hit?.seq === undefined && hit !== undefined && (seq === "NULL" || knownSeq)) {
+            hit = { ...hit, seq: knownSeq?.get(row.row_id) ?? null };
+            cacheChanged = true;
+          }
+          // A message's usage stops changing when its turn ends, so older rows are trusted as cached.
+          if (
+            hit?.seq !== undefined &&
+            typeof row.created === "number" &&
+            row.created === hit.created &&
+            row.created < now - SETTLED_AFTER_MS
+          )
             cached.set(row.row_id, hit);
-          else misses.push(row);
+          else unsettled.push(row.row_id);
+        }
+        const misses: Array<{
+          readonly row_id: number;
+          readonly updated: unknown;
+          readonly size: unknown;
+          readonly created: unknown;
+          readonly seq: unknown;
+        }> = [];
+        for (let start = 0; start < unsettled.length; start += MARKER_PAGE_SIZE) {
+          const page = unsettled.slice(start, start + MARKER_PAGE_SIZE);
+          // octet_length comes from the record header, so message bodies stay unread.
+          const markers = yield* sql
+            .unsafe<(typeof misses)[number]>(
+              `SELECT rowid AS row_id, ${updated} AS updated, octet_length(data) AS size,
+                 ${timestamp} AS created, ${seq} AS seq
+               FROM ${table} WHERE rowid IN (${page.map(() => "?").join(", ")})`,
+              page,
+            )
+            .pipe(Effect.withTracerEnabled(false));
+          for (const row of markers) {
+            const hit = reusable?.get(row.row_id);
+            if (hit && hit.updated === row.updated && hit.size === row.size) {
+              if (hit.seq !== row.seq) cacheChanged = true;
+              cached.set(row.row_id, { ...hit, seq: row.seq });
+            } else misses.push(row);
+          }
         }
         // Filter and project in SQLite: user diffs and assistant bodies can be hundreds of MB.
         const validAssistant = `CASE WHEN typeof(data) = 'text' AND json_valid(data)
@@ -335,7 +378,8 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
                  'time', data -> '$.time', 'id', data -> '$.id', 'sessionID', data -> '$.sessionID'
                ) AS data
                FROM ${table}
-               WHERE rowid IN (${page.map(() => "?").join(", ")}) AND ${validAssistant}
+               WHERE rowid IN (${page.map(() => "?").join(", ")}) AND ${usageRows}
+                 AND ${validAssistant}
                ORDER BY rowid`,
               page.map((row) => row.row_id),
             )
@@ -357,15 +401,19 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
               updated: row.updated,
               size: row.size,
               created: row.created,
+              seq: row.seq,
               record: parsed.get(row.row_id) ?? null,
             });
           }
           yield* Effect.yieldNow;
         }
         for (const row of listed) {
-          const record = cached.get(row.row_id)!.record;
-          if (record !== null && typeof row.seq === "number") {
-            const copyOf = original(record.sessionId, row.seq, record.timestampMs);
+          // A row deleted after the listing has no markers.
+          const entry = cached.get(row.row_id);
+          if (entry === undefined) continue;
+          const record = entry.record;
+          if (record !== null && forks.size > 0 && typeof entry.seq === "number") {
+            const copyOf = original(record.sessionId, entry.seq, record.timestampMs);
             if (originals.has(copyOf)) continue;
             originals.add(copyOf);
           }

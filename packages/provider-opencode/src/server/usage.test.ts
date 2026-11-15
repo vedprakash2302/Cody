@@ -10,6 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { vi } from "vite-plus/test";
 
@@ -343,6 +344,58 @@ describe("readOpenCodeUsage", () => {
       parsedRows = 0;
       assert.deepStrictEqual(yield* keys, ["opencode:a", "opencode:b", "opencode:c"]);
       assert.strictEqual(parsedRows, 1);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("re-reads only recent rows' change markers once older rows are cached", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const day = 24 * 60 * 60 * 1000;
+      yield* TestClock.setTime(10 * day);
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-settled-" });
+      const db = yield* openDatabase(path.join(dir, "opencode.db"));
+      yield* db.unsafe("PRAGMA journal_mode = WAL");
+      yield* db.unsafe(
+        "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)",
+      );
+      yield* db.unsafe("CREATE INDEX message_time ON message(time_created)");
+      const data = (input: number) => JSON.stringify({ modelID: "m", tokens: { input } });
+      yield* db.unsafe(
+        "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES ('old', 's', ?, ?, ?), ('new', 's', ?, ?, ?)",
+        [day, day, data(1), 9.5 * day, 9.5 * day, data(2)],
+      );
+      let markerRows = 0;
+      const originalAll = NodeSqlite.StatementSync.prototype.all;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(NodeSqlite.StatementSync.prototype, "all").mockImplementation(function (
+            this: NodeSqlite.StatementSync,
+            ...params
+          ) {
+            const rows = originalAll.apply(this, params);
+            if (this.sourceSQL.includes("octet_length")) markerRows += rows.length;
+            return rows;
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const rows: OpenCodeUsageCache.OpenCodeRowCache = new Map();
+      const inputs = Effect.map(readOpenCodeUsage(dir, 0, 0, rows), (result) =>
+        result.files
+          .flatMap((file) => file.records)
+          .map((record) => record.totals.uncachedInputTokens),
+      );
+      assert.deepStrictEqual(yield* inputs, [1, 2]);
+      assert.strictEqual(markerRows, 2);
+
+      markerRows = 0;
+      yield* db.unsafe("UPDATE message SET data = ?, time_updated = ? WHERE id = 'new'", [
+        data(3),
+        9.6 * day,
+      ]);
+      assert.deepStrictEqual(yield* inputs, [1, 3]);
+      assert.strictEqual(markerRows, 1);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
