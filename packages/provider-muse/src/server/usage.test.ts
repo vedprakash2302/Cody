@@ -242,11 +242,12 @@ describe("Muse history discovery", () => {
       ),
   );
 
-  it.effect("reports no history without starting Muse when its CLI is not installed", () =>
-    Effect.gen(function* () {
+  it.effect("reports no history without starting Muse when its CLI is not installed", () => {
+    const resolveExecutable = vi.fn(() => undefined);
+    return Effect.gen(function* () {
       using create = vi.spyOn(MuseSdk, "createMuseSdkHostEffect");
       if (museUsageReader.kind !== "transcripts") throw new Error("Expected a transcript reader");
-      const directories = yield* museUsageReader.directories(
+      const scan = museUsageReader.directories(
         {
           instanceId: ProviderInstanceId.make("muse"),
           configured: false,
@@ -255,13 +256,16 @@ describe("Muse history discovery", () => {
         },
         { awaitRefresh: false },
       );
-      expect(directories).toEqual([]);
+      expect(yield* scan).toEqual([]);
+      // Searching PATH stats every entry, which is slow on WSL's mounted Windows drives.
+      expect(yield* scan).toEqual([]);
+      expect(resolveExecutable).toHaveBeenCalledOnce();
       expect(create).not.toHaveBeenCalled();
     }).pipe(
       Effect.provide([NodeServices.layer, MuseUsageHome.layer]),
-      Effect.provideService(SpawnExecutableResolution, () => undefined),
-    ),
-  );
+      Effect.provideService(SpawnExecutableResolution, resolveExecutable),
+    );
+  });
 
   it.effect("does not guess a directory when initialization fails", () =>
     Effect.gen(function* () {

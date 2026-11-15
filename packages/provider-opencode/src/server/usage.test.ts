@@ -347,7 +347,7 @@ describe("readOpenCodeUsage", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("re-reads only recent rows' change markers once older rows are cached", () =>
+  it.effect("re-reads only recent and new rows once older rows are cached", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -366,6 +366,7 @@ describe("readOpenCodeUsage", () => {
         [day, day, data(1), 9.5 * day, 9.5 * day, data(2)],
       );
       let markerRows = 0;
+      let listedRows = 0;
       const originalAll = NodeSqlite.StatementSync.prototype.all;
       yield* Effect.acquireRelease(
         Effect.sync(() =>
@@ -375,6 +376,7 @@ describe("readOpenCodeUsage", () => {
           ) {
             const rows = originalAll.apply(this, params);
             if (this.sourceSQL.includes("octet_length")) markerRows += rows.length;
+            else if (this.sourceSQL.includes("AS created FROM")) listedRows += rows.length;
             return rows;
           }),
         ),
@@ -390,12 +392,22 @@ describe("readOpenCodeUsage", () => {
       assert.strictEqual(markerRows, 2);
 
       markerRows = 0;
+      listedRows = 0;
       yield* db.unsafe("UPDATE message SET data = ?, time_updated = ? WHERE id = 'new'", [
         data(3),
         9.6 * day,
       ]);
       assert.deepStrictEqual(yield* inputs, [1, 3]);
       assert.strictEqual(markerRows, 1);
+      // A history of any length lists only what can still change.
+      assert.strictEqual(listedRows, 1);
+
+      // A fork or import copies rows with their old creation times.
+      yield* db.unsafe(
+        "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES ('copy', 't', ?, ?, ?)",
+        [2 * day, 9.7 * day, data(4)],
+      );
+      assert.deepStrictEqual(yield* inputs, [1, 3, 4]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -288,17 +288,76 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
           updated === "NULL" ? `${identity}/${stamp(main!)}/${stamp(wal!)}` : identity;
         // OpenCode 2 records a compaction request's spend on its compaction message.
         const usageRows = table === "session_message" ? "type IN ('assistant', 'compaction')" : "1";
-        // The time index lists the window without reading message pages, which are scattered across
-        // a multi-GB file and take tens of seconds to fetch when the page cache is cold.
-        const listed = (yield* sql.unsafe<{ readonly row_id: number; readonly created: unknown }>(
-          `SELECT rowid AS row_id, ${timestamp} AS created FROM ${table}
-           ${timestamp === "NULL" ? "" : "WHERE time_created >= ?"}`,
-          timestamp === "NULL" ? [] : [sinceMs],
-        )).toSorted((a, b) => a.row_id - b.row_id);
-        databaseRows += listed.length;
         const key = `${file.path}\0${table}`;
         const previous = rowCache.get(key);
         const reusable = previous?.version === version ? previous.rows : undefined;
+        const recentSinceMs = Math.max(sinceMs, now - SETTLED_AFTER_MS);
+        // Once a scan has listed this window, only recent rows and new rowids can change it. New
+        // rowids include copies a fork or import makes with old creation times.
+        const incremental =
+          reusable !== undefined &&
+          timestamp !== "NULL" &&
+          previous!.listedSinceMs !== undefined &&
+          previous!.listedSinceMs <= sinceMs &&
+          previous!.maxRowId !== undefined;
+        // The time index lists the window without reading message pages, which are scattered across
+        // a multi-GB file and take tens of seconds to fetch when the page cache is cold.
+        type ListedRow = { readonly row_id: number; readonly created: unknown };
+        // An empty window has no rowid to start from, so any later row in it is new.
+        let maxRowId = incremental ? previous!.maxRowId! : Number.MIN_SAFE_INTEGER;
+        const fresh = incremental
+          ? yield* Effect.gen(function* () {
+              const recent = yield* sql.unsafe<ListedRow>(
+                `SELECT rowid AS row_id, time_created AS created FROM ${table} WHERE time_created >= ?`,
+                [recentSinceMs],
+              );
+              // Filtering only on rowid walks just the end of the table. A UNION with the time
+              // query, or a time filter here, makes SQLite read every message page.
+              const added = yield* sql.unsafe<ListedRow>(
+                `SELECT rowid AS row_id, time_created AS created FROM ${table} WHERE rowid > ?`,
+                [previous!.maxRowId!],
+              );
+              for (const row of added) maxRowId = Math.max(maxRowId, row.row_id);
+              const ids = new Set(recent.map((row) => row.row_id));
+              return [
+                ...recent,
+                ...added.filter(
+                  (row) =>
+                    !ids.has(row.row_id) &&
+                    typeof row.created === "number" &&
+                    row.created >= sinceMs,
+                ),
+              ];
+            })
+          : yield* sql.unsafe<ListedRow>(
+              `SELECT rowid AS row_id, ${timestamp} AS created FROM ${table}
+               ${timestamp === "NULL" ? "" : "WHERE time_created >= ?"}`,
+              timestamp === "NULL" ? [] : [sinceMs],
+            );
+        databaseRows += fresh.length;
+        const listed: Array<ListedRow> = [...fresh];
+        if (incremental) {
+          const freshIds = new Set(fresh.map((row) => row.row_id));
+          // A deleted session keeps its settled usage, like a deleted Claude or Codex transcript.
+          for (const [rowId, entry] of reusable) {
+            const created = entry.created;
+            if (
+              typeof created === "number" &&
+              created >= sinceMs &&
+              created < recentSinceMs &&
+              !freshIds.has(rowId)
+            )
+              listed.push({ row_id: rowId, created });
+          }
+        }
+        listed.sort((a, b) => a.row_id - b.row_id);
+        for (const row of fresh) maxRowId = Math.max(maxRowId, row.row_id);
+        const listedSinceMs =
+          timestamp === "NULL"
+            ? undefined
+            : incremental
+              ? previous!.listedSinceMs
+              : Math.min(sinceMs, (reusable && previous?.listedSinceMs) ?? sinceMs);
         // Caches saved before seq was kept fill it from OpenCode's seq index in one cheap read.
         const knownSeq =
           seq !== "NULL" &&
@@ -428,10 +487,16 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         if (
           misses.length > 0 ||
           previous?.version !== version ||
-          previous.rows.size !== cached.size
+          previous.rows.size !== cached.size ||
+          previous.listedSinceMs !== listedSinceMs ||
+          previous.maxRowId !== maxRowId
         )
           cacheChanged = true;
-        rowCache.set(key, { version, rows: cached });
+        rowCache.set(key, {
+          version,
+          rows: cached,
+          ...(listedSinceMs === undefined ? {} : { listedSinceMs, maxRowId }),
+        });
       }
     }).pipe(
       (read) => Effect.flatMap(SqlClient.SqlClient, (sql) => sql.withTransaction(read)),
