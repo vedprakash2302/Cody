@@ -17,7 +17,6 @@
   "apps/web/src/composerDraftStore.test.ts",
   "apps/web/src/hooks/useHandleNewThread.test.ts",
   "packages/source-control-azure-devops/src/server/AzureDevOpsCli.test.ts",
-  "packages/source-control-azure-devops/src/server/azureDevOpsScope.test.ts",
   "packages/source-control-azure-devops/src/server/AzureDevOpsPullRequestCli.test.ts",
   "apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.test.ts",
   "packages/provider-opencode/src/server/v2/OpenCode2Client.test.ts",
