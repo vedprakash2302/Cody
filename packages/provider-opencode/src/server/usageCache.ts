@@ -22,7 +22,14 @@ export interface OpenCodeCachedRow {
 /** Parsed rows by `${databasePath}\0${table}`, then rowid, so unchanged rows are not read again. */
 export type OpenCodeRowCache = Map<
   string,
-  { readonly version: string; readonly rows: ReadonlyMap<number, OpenCodeCachedRow> }
+  {
+    readonly version: string;
+    readonly rows: ReadonlyMap<number, OpenCodeCachedRow>;
+    /** The widest window a full listing covered; later scans of it list only what changed. */
+    readonly listedSinceMs?: number;
+    /** The highest rowid listed, so rows inserted later are found whatever their creation time. */
+    readonly maxRowId?: number;
+  }
 >;
 
 /** Versioned files isolate caches for different server versions sharing a state directory. */
@@ -86,7 +93,11 @@ function* encodeOpenCodeRowCache(cache: OpenCodeRowCache): Generator<string> {
   ];
   yield '{"tables":{';
   for (const [index, [key, table]] of [...cache].entries()) {
-    yield `${index === 0 ? "" : ","}${JSON.stringify(key)}:{"version":${JSON.stringify(table.version)},"rows":[`;
+    const coverage =
+      table.listedSinceMs === undefined || table.maxRowId === undefined
+        ? ""
+        : `"listedSinceMs":${table.listedSinceMs},"maxRowId":${table.maxRowId},`;
+    yield `${index === 0 ? "" : ","}${JSON.stringify(key)}:{"version":${JSON.stringify(table.version)},${coverage}"rows":[`;
     let chunk: SerializedRow[] = [];
     let first = true;
     const flush = () => {
@@ -189,7 +200,12 @@ function decodeOpenCodeRowCache(document: unknown): OpenCodeRowCache {
 
   for (const [key, raw] of Object.entries(root.tables)) {
     if (typeof raw !== "object" || raw === null) continue;
-    const table = raw as { readonly version?: unknown; readonly rows?: unknown };
+    const table = raw as {
+      readonly version?: unknown;
+      readonly rows?: unknown;
+      readonly listedSinceMs?: unknown;
+      readonly maxRowId?: unknown;
+    };
     if (typeof table.version !== "string" || !Array.isArray(table.rows)) continue;
     const rows = new Map<number, OpenCodeCachedRow>();
     for (const value of table.rows) {
@@ -215,7 +231,13 @@ function decodeOpenCodeRowCache(document: unknown): OpenCodeRowCache {
       });
     }
     if (rows.size !== table.rows.length) continue;
-    cache.set(key, { version: table.version, rows });
+    cache.set(key, {
+      version: table.version,
+      rows,
+      ...(isFiniteNumber(table.listedSinceMs) && Number.isSafeInteger(table.maxRowId)
+        ? { listedSinceMs: table.listedSinceMs, maxRowId: table.maxRowId as number }
+        : {}),
+    });
   }
   return cache;
 }
