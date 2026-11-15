@@ -48,6 +48,10 @@ jobs:
       - name: Install dependencies
         run: vp install --frozen-lockfile --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/mobile... --filter=@t3tools/scripts...
 
+      # ServerBrowser.test.ts launches a real headless Chromium.
+      - name: Install Chromium for server browser tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+
       - name: Check integrated fixes
         run: bash .github/scripts/check-personal-fixes.sh
 
