@@ -179,6 +179,7 @@ interface ComposerSendInput {
   /** A worktree base picked from another remote, as a full ref. */
   readonly worktreeBaseRef: string | null;
   readonly activeProject: EnvironmentProject | null;
+  readonly activeProjectIsScratch: boolean;
   readonly activeProjectDefaultModelSelection: ModelSelection | null;
   readonly activeMessageCount: number;
   readonly isServerThread: boolean;
@@ -280,6 +281,7 @@ export function useComposerSend(input: ComposerSendInput) {
     activeThreadBranch,
     worktreeBaseRef,
     activeProject,
+    activeProjectIsScratch,
     activeProjectDefaultModelSelection,
     activeMessageCount,
     isServerThread,
@@ -821,6 +823,7 @@ export function useComposerSend(input: ComposerSendInput) {
       worktreePath: activeThread.worktreePath,
       activeThreadBranch,
       worktreeBaseRef,
+      isScratchProject: activeProjectIsScratch,
       resumeCompactionTokens,
       keepFullHistory,
       phase,

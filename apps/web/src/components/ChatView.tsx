@@ -2964,6 +2964,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadBranch,
     worktreeBaseRef: selectedWorktreeBaseRef,
     activeProject,
+    activeProjectIsScratch,
     activeProjectDefaultModelSelection,
     activeMessageCount,
     isServerThread,

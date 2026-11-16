@@ -1360,6 +1360,8 @@ export function planComposerTurn(input: {
   readonly activeThreadBranch: string | null;
   /** Cody: the worktree base as a full ref when it was picked from another remote. */
   readonly worktreeBaseRef: string | null;
+  /** The server launches a No project worktree request at its root, so it needs no base. */
+  readonly isScratchProject: boolean;
   readonly resumeCompactionTokens: number | null;
   readonly keepFullHistory: boolean;
   readonly phase: SessionPhase;
@@ -1390,7 +1392,8 @@ export function planComposerTurn(input: {
   return {
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
-    missingWorktreeBaseBranch: shouldCreateWorktree && !worktreeBaseBranch,
+    missingWorktreeBaseBranch:
+      shouldCreateWorktree && !worktreeBaseBranch && !input.isScratchProject,
     baseBranchForWorktree: shouldCreateWorktree ? worktreeBaseBranch : null,
     baseRefForWorktree: shouldCreateWorktree ? input.worktreeBaseRef : null,
     compactBeforeSend,
