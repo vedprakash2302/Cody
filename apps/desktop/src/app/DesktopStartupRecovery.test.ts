@@ -189,6 +189,8 @@ it.effect.each([
       expect(loaded.length).toBe(shouldRecover ? 1 : 0);
       if (shouldRecover) {
         expect(decodeURIComponent(loaded[0]!)).toContain("Failure details");
+        expect(decodeURIComponent(loaded[0]!)).toContain("<h1>Cody could not start</h1>");
+        expect(decodeURIComponent(loaded[0]!)).toContain("Cody tries again in the background");
         if (closeMain) yield* Ref.set(mainRef, Option.none());
         yield* SubscriptionRef.set(state.primaryBackendStartup, { _tag: "Ready" });
         yield* Deferred.await(remembered);
