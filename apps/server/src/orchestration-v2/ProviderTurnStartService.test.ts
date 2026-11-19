@@ -2422,7 +2422,9 @@ effectIt.effect.each([
 
       yield* harness.start;
 
-      expect(harness.startTurn.mock.calls[0]?.[0].message.text).toBe("Start over");
+      expect(harness.startTurn.mock.calls[0]?.[0].message.text).toBe(
+        withSideChatRules("Start over"),
+      );
       expect(
         harness.projection().contextHandoffs.map((handoff) => [handoff.status, handoff.delivery]),
       ).toEqual([
