@@ -3308,76 +3308,99 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect(
-      "returns an incomplete selected tracked preview while untracked discovery is held",
-      () =>
-        Effect.gen(function* () {
-          const cwd = yield* makeTmpDir();
-          yield* initRepoWithCommit(cwd);
-          yield* writeTextFile(cwd, "README.md", "changed\n");
-          yield* writeTextFile(cwd, "new.txt", "untracked\n");
-          const started = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          let untrackedReads = 0;
-          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-          const spawner = ChildProcessSpawner.make((command) =>
-            Effect.gen(function* () {
-              if (ChildProcess.isStandardCommand(command) && command.args.includes("--others")) {
-                assert.equal(
-                  ++untrackedReads,
-                  1,
-                  "tracked preview must not enumerate untracked files",
-                );
-                yield* Deferred.succeed(started, undefined);
-                yield* Deferred.await(release);
-              }
-              return yield* delegate.spawn(command);
-            }),
-          );
-          const driver = yield* makeGitVcsDriverCore().pipe(
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            Effect.provide(layerServerConfig),
-          );
-          const full = yield* driver
-            .getReviewDiffPreview({ cwd, sourceKind: "working-tree" })
-            .pipe(Effect.forkChild);
-          yield* Deferred.await(started);
-          yield* Effect.gen(function* () {
-            const preview = yield* driver.getReviewDiffPreview({
-              cwd,
-              sourceKind: "working-tree",
-              trackedOnly: true,
-            });
-            assert.isTrue(preview.incomplete);
-            assert.deepStrictEqual(
-              preview.sources.map((source) => source.kind),
-              ["working-tree"],
-            );
-            assert.include(preview.sources[0]!.diff, "+changed");
-            assert.notInclude(preview.sources[0]!.diff, "untracked");
-            const metadata = yield* driver.getReviewDiffPreview({
-              cwd,
-              sourceKind: "working-tree",
-              trackedOnly: true,
-              metadataOnly: true,
-            });
-            assert.isTrue(metadata.incomplete);
-            assert.deepStrictEqual(metadata.sources[0]!.files, preview.sources[0]!.files);
-            assert.isTrue(metadata.sources[0]!.patchesDeferred);
-            assert.isEmpty(metadata.sources[0]!.diff);
-          }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
-          const complete = yield* Fiber.join(full);
-          assert.isUndefined(complete.incomplete);
-          assert.include(complete.sources[0]!.diff, "+untracked");
-          yield* writeTextFile(cwd, "README.md", "edited again\n");
-          const refreshed = yield* driver.getReviewDiffPreview({
+    it.effect("returns a selected tracked preview while untracked discovery is held", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "README.md", "changed\n");
+        yield* writeTextFile(cwd, "new.txt", "untracked\n");
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let untrackedReads = 0;
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (
+              ChildProcess.isStandardCommand(command) &&
+              command.args.includes("--others") &&
+              !command.args.includes("--directory")
+            ) {
+              assert.equal(
+                ++untrackedReads,
+                1,
+                "tracked preview must not build an untracked index",
+              );
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+            }
+            return yield* delegate.spawn(command);
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(layerServerConfig),
+        );
+        const full = yield* driver
+          .getReviewDiffPreview({ cwd, sourceKind: "working-tree" })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* Effect.gen(function* () {
+          const preview = yield* driver.getReviewDiffPreview({
             cwd,
-            baseRef: "missing-base",
             sourceKind: "working-tree",
             trackedOnly: true,
           });
-          assert.include(refreshed.sources[0]!.diff, "+edited again");
-        }),
+          assert.isTrue(preview.incomplete);
+          assert.deepStrictEqual(
+            preview.sources.map((source) => source.kind),
+            ["working-tree"],
+          );
+          assert.include(preview.sources[0]!.diff, "+changed");
+          assert.notInclude(preview.sources[0]!.diff, "untracked");
+          const metadata = yield* driver.getReviewDiffPreview({
+            cwd,
+            sourceKind: "working-tree",
+            trackedOnly: true,
+            metadataOnly: true,
+          });
+          assert.isTrue(metadata.incomplete);
+          assert.deepStrictEqual(metadata.sources[0]!.files, preview.sources[0]!.files);
+          assert.isTrue(metadata.sources[0]!.patchesDeferred);
+          assert.isEmpty(metadata.sources[0]!.diff);
+          const inline = yield* driver.getReviewDiffPreview({
+            cwd,
+            sourceKind: "working-tree",
+            trackedOnly: true,
+            metadataOnly: true,
+            includeSmallPatch: true,
+          });
+          assert.isTrue(inline.incomplete);
+          assert.deepStrictEqual(inline.sources[0], preview.sources[0]);
+        }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+        const complete = yield* Fiber.join(full);
+        assert.isUndefined(complete.incomplete);
+        assert.include(complete.sources[0]!.diff, "+untracked");
+        yield* writeTextFile(cwd, "README.md", "edited again\n");
+        const refreshed = yield* driver.getReviewDiffPreview({
+          cwd,
+          baseRef: "missing-base",
+          sourceKind: "working-tree",
+          trackedOnly: true,
+        });
+        assert.include(refreshed.sources[0]!.diff, "+edited again");
+        yield* git(cwd, ["add", "new.txt"]);
+        const tracked = yield* driver.getReviewDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          trackedOnly: true,
+          metadataOnly: true,
+          includeSmallPatch: true,
+        });
+        assert.isUndefined(tracked.incomplete);
+        assert.isNotTrue(tracked.sources[0]!.patchesDeferred);
+        assert.include(tracked.sources[0]!.diff, "+untracked");
+        assert.include(tracked.sources[0]!.diff, "+edited again");
+      }),
     );
 
     it.effect("propagates patch failures instead of reporting an empty complete diff", () =>
@@ -3606,6 +3629,15 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const scopedSource = scoped.sources.find((candidate) => candidate.kind === "working-tree")!;
         assert.deepStrictEqual(scopedSource.files, source.files);
         assert.equal(scopedSource.diff, diff);
+        const [inline] = (yield* driver.getReviewDiffPreview({
+          cwd,
+          sourceKind: "branch-range",
+          metadataOnly: true,
+          includeSmallPatch: true,
+        })).sources;
+        assert.deepStrictEqual(inline?.files, source.files);
+        assert.equal(inline?.diff, diff);
+        assert.isNotTrue(inline?.patchesDeferred);
         assert.include(diff, "rename from before.ts");
         assert.include(diff, "rename to after.ts");
         assert.include(diff, "-three");
@@ -3792,7 +3824,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        const largeContents = "a long line of changed content for the diff preview\n".repeat(4000);
+        // Enough lines that the working-tree patch passes the 1 MiB inline limit.
+        const lineCount = 8000;
+        const largeContents = "a long line of changed content for the diff preview\n".repeat(
+          lineCount,
+        );
         yield* git(cwd, ["checkout", "-b", "feature/large"]);
         yield* writeTextFile(cwd, "a-large.txt", largeContents);
         yield* writeTextFile(cwd, "z-last.txt", "last file\n");
@@ -3825,6 +3861,15 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           assert.isTrue(metadata.patchesDeferred);
           assert.isFalse(metadata.truncated);
           assert.isEmpty(metadata.diff);
+          if (source.kind === "working-tree") {
+            const [oversized] = (yield* driver.getReviewDiffPreview({
+              cwd,
+              sourceKind: "working-tree",
+              metadataOnly: true,
+              includeSmallPatch: true,
+            })).sources;
+            assert.deepStrictEqual(oversized, metadata);
+          }
           for (const file of source.files ?? []) {
             const individual = yield* driver.getReviewDiffPreview({
               cwd,
@@ -3846,14 +3891,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             path: "a-large.txt",
             previousPath: null,
             changeType: "new",
-            additions: 4000,
+            additions: lineCount,
             deletions: 0,
           },
           {
             path: "untracked.txt",
             previousPath: null,
             changeType: "new",
-            additions: 4000,
+            additions: lineCount,
             deletions: 0,
           },
           { path: "z-last.txt", previousPath: null, changeType: "new", additions: 1, deletions: 0 },
@@ -3863,14 +3908,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             path: "a-large.txt",
             previousPath: null,
             changeType: "change",
-            additions: 4000,
-            deletions: 4000,
+            additions: lineCount,
+            deletions: lineCount,
           },
           {
             path: "untracked.txt",
             previousPath: null,
             changeType: "new",
-            additions: 4000,
+            additions: lineCount,
             deletions: 0,
           },
           {
@@ -4828,6 +4873,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           "--no-textconv",
           "--src-prefix=a/",
           "--dst-prefix=b/",
+          "--full-index",
           "HEAD",
           "--",
         ]);

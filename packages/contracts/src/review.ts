@@ -11,6 +11,8 @@ export const ReviewDiffPreviewInput = Schema.Struct({
   sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "branch-range"])),
   trackedOnly: Schema.optionalKey(Schema.Boolean),
   metadataOnly: Schema.optionalKey(Schema.Boolean),
+  // A metadata preview may include the whole patch if it fits in one bounded response.
+  includeSmallPatch: Schema.optionalKey(Schema.Boolean),
   file: Schema.optionalKey(
     Schema.Struct({
       path: Schema.NonEmptyString,

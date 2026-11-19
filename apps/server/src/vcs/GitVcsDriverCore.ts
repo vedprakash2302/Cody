@@ -91,6 +91,10 @@ const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
+// The client parses an inline patch in one pass, about 30 ms for 1 MiB; larger diffs load per file.
+const REVIEW_INLINE_PREVIEW_MAX_BYTES = 1024 * 1024;
+// A slow untracked scan delays the first tracked response by at most this long.
+const REVIEW_UNTRACKED_CHECK_WAIT = Duration.seconds(1);
 const REVIEW_METADATA_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 // Temporary-index git add scales poorly (50k files took ~30 s); report incomplete totals above this cap.
 const REVIEW_UNTRACKED_MAX_FILES = 5_000;
@@ -118,6 +122,9 @@ const REVIEW_DIFF_ARGS = [
   "--no-ext-diff",
   "--no-textconv",
   "--submodule=short",
+  // Abbreviating blob IDs makes Git search the object database for unique prefixes.
+  "--full-index",
+  "--no-abbrev",
   ...PATCH_RENDER_PREFIX_ARGS,
 ];
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
@@ -4307,6 +4314,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
+    const inlineMetadata =
+      input.includeSmallPatch && input.metadataOnly && input.sourceKind && !input.file;
+    // If there are no untracked files, the first tracked preview is already complete.
+    const untrackedCheck =
+      inlineMetadata && input.trackedOnly
+        ? yield* executeGit(
+            "GitVcsDriver.review.hasUntracked",
+            cwd,
+            [
+              "ls-files",
+              "--others",
+              "--exclude-standard",
+              "--directory",
+              "--no-empty-directory",
+              "-z",
+            ],
+            { maxOutputBytes: 4096 },
+          ).pipe(
+            Effect.map(({ stdout }) => stdout === ""),
+            Effect.orElseSucceed(() => false),
+            Effect.forkScoped,
+          )
+        : null;
     const dirtyRef = sourceKind === "branch-range" ? null : "HEAD";
     const review =
       sourceKind === "working-tree"
@@ -4353,6 +4383,36 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       metadataOnly = false,
     ) {
       if (ref === null) return { stdout: "", stdoutTruncated: false, files: [] };
+      if (metadataOnly && inlineMetadata) {
+        // The file list runs beside the combined read, so a patch over the cap adds no wait.
+        const stats = yield* Effect.forkChild(readStats(ref, env));
+        const combined = yield* executeGit(
+          "GitVcsDriver.getReviewDiffPreview.inline",
+          cwd,
+          [...diffArgs, "--raw", "--numstat", "-z", "--patch", ref, "--"],
+          { env, allowNonZeroExit: true, maxOutputBytes: REVIEW_INLINE_PREVIEW_MAX_BYTES },
+        ).pipe(
+          Effect.catchTags({
+            GitCommandError: (error) =>
+              error.outputLength === undefined ? Effect.fail(error) : Effect.succeed(null),
+          }),
+        );
+        if (combined?.exitCode === 0) {
+          // With -z Git separates the numstat records from the patch with an empty NUL record.
+          const boundary = combined.stdout.indexOf("\0\0");
+          if (combined.stdout === "" || boundary >= 0) {
+            yield* Fiber.interrupt(stats);
+            if (boundary < 0) return { stdout: "", stdoutTruncated: false, files: [] };
+            return {
+              stdout: combined.stdout.slice(boundary + 2),
+              stdoutTruncated: false,
+              files: parseReviewNumstat(combined.stdout.slice(0, boundary)),
+            };
+          }
+        }
+        const { files } = yield* Fiber.join(stats);
+        return { stdout: "", stdoutTruncated: false, files };
+      }
       const stat = yield* readStats(ref, env);
       if (metadataOnly || stat.files.length === 0) {
         return { stdout: "", stdoutTruncated: false, files: stat.files };
@@ -4409,7 +4469,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...(dirtyFiles === undefined ? {} : { files: dirtyFiles }),
         diffHash: dirtyDiffHash,
         truncated: dirtyTrackedResult.stdoutTruncated,
-        ...(input.metadataOnly && !input.file && dirtyFiles !== undefined
+        ...(input.metadataOnly && !input.file && !dirtyDiff && dirtyFiles !== undefined
           ? { patchesDeferred: true }
           : {}),
       },
@@ -4423,21 +4483,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...(baseFiles === undefined ? {} : { files: baseFiles }),
         diffHash: baseDiffHash,
         truncated: baseResult.stdoutTruncated,
-        ...(input.metadataOnly && !input.file && baseFiles !== undefined
+        ...(input.metadataOnly && !input.file && !baseDiff && baseFiles !== undefined
           ? { patchesDeferred: true }
           : {}),
       },
     ];
 
+    const noUntracked = untrackedCheck
+      ? yield* Fiber.join(untrackedCheck).pipe(
+          Effect.timeoutOption(REVIEW_UNTRACKED_CHECK_WAIT),
+          Effect.map(Option.getOrElse(() => false)),
+        )
+      : false;
     return {
       cwd: input.cwd,
       generatedAt: yield* DateTime.now,
       sources: input.sourceKind
         ? sources.filter((source) => source.kind === input.sourceKind)
         : sources,
-      ...(input.trackedOnly ? { incomplete: true } : {}),
+      ...(input.trackedOnly && !noUntracked ? { incomplete: true } : {}),
     };
-  });
+  }, Effect.scoped);
 
   const reviewDiffFileError = (
     input: ReviewDiffFileContentsInput,

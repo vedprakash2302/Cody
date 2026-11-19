@@ -382,6 +382,7 @@ export default function DiffPanel({
           metadataOnly: true,
           ...(selectedCommitSha === null
             ? {
+                includeSmallPatch: true,
                 sourceKind:
                   selectedGitScope === "unstaged"
                     ? ("working-tree" as const)
@@ -517,14 +518,10 @@ export default function DiffPanel({
     selectedPatch.trim().length === 0 &&
     !preview?.incomplete &&
     (!selectedGitSource?.patchesDeferred || selectedGitSource.files?.length === 0);
-  const lazySource =
-    isGitSelection &&
-    (selectedGitSource?.truncated || selectedGitSource?.patchesDeferred) &&
-    selectedGitSource.files?.length
-      ? selectedGitSource
-      : null;
+  const deferredGitPatch =
+    isGitSelection && (selectedGitSource?.truncated || selectedGitSource?.patchesDeferred);
   const renderablePatch = getRenderablePatch(
-    lazySource ? undefined : selectedPatch,
+    deferredGitPatch && selectedGitSource?.files?.length ? undefined : selectedPatch,
     `diff-panel:${resolvedTheme}`,
     {
       compactPartialHunkOffsets: isGitSelection,
@@ -532,6 +529,17 @@ export default function DiffPanel({
     },
     messages,
   );
+  const gitFiles = isGitSelection ? selectedGitSource?.files : undefined;
+  const parsedPaths = new Set(
+    gitFiles && renderablePatch?.kind === "files"
+      ? renderablePatch.files.map(resolveFileDiffPath)
+      : [],
+  );
+  // Some Git changes have a stat entry but no patch hunk. Keep those files reachable.
+  const lazySource =
+    gitFiles?.length && (deferredGitPatch || gitFiles.some(({ path }) => !parsedPaths.has(path)))
+      ? (selectedGitSource ?? null)
+      : null;
   const recordedToolCallFileCount =
     toolCallSelection && toolCallItem?.type === "file_change"
       ? (toolCallItem.changes?.length ?? 0)
@@ -540,7 +548,7 @@ export default function DiffPanel({
     renderablePatch?.kind === "files"
       ? Math.max(0, recordedToolCallFileCount - renderablePatch.files.length)
       : 0;
-  const fileStats = new Map(lazySource?.files?.map((file) => [file.path, file]));
+  const fileStats = new Map(gitFiles?.map((file) => [file.path, file]));
   const sourceLineStat =
     isGitSelection && selectedGitSource?.files
       ? selectedGitSource.files.reduce(
@@ -1519,7 +1527,7 @@ export default function DiffPanel({
                         />
                       );
                     }}
-                    {...(lazySource
+                    {...(fileStats.size > 0
                       ? {
                           unsafeCSSExtra:
                             "[data-additions-count], [data-deletions-count] { display: none; }",
