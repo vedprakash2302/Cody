@@ -106,9 +106,11 @@ import { reviewEnvironment } from "~/state/review";
 import { revisionedQuery } from "~/state/revisionedQuery";
 import {
   selectThreadBranchBaseRef,
+  selectThreadDiffPanelSelection,
   useDiffPanelSessionStore,
   useDiffPanelStore,
 } from "~/diffPanelStore";
+import { selectActiveRightPanel, useRightPanelStore } from "~/rightPanelStore";
 import { useClientSettings } from "~/hooks/useSettings";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -1098,9 +1100,15 @@ export default function GitActionsControl({
   const ignoreWhitespace =
     useDiffPanelSessionStore((state) => state.ignoreWhitespace) ?? ignoreWhitespaceSetting;
   const { canReadFiles } = useFilesystemReadAccess(activeEnvironmentId, messages);
-  // Same input as the Diff panel's branch query, so both read one cached result. Status
-  // totals join the revision because edits, pulls and resets outside a turn leave the mutation
-  // id as is.
+  const diffPanelOpen = useRightPanelStore(
+    (state) => selectActiveRightPanel(state.byThreadKey, activeThreadRef) === "diff",
+  );
+  const diffPanelShowsBranch = useDiffPanelStore(
+    (state) => selectThreadDiffPanelSelection(state.byThreadKey, activeThreadRef).kind === "branch",
+  );
+  // Same input as the Diff panel's branch query, so both read one cached result; the patch is
+  // only asked for while that panel shows it. Status totals join the revision because edits,
+  // pulls and resets outside a turn leave the mutation id as is.
   const changesRevision = gitStatusForActions
     ? JSON.stringify([
         workspaceMutationId,
@@ -1127,6 +1135,7 @@ export default function GitActionsControl({
               ...(changesBaseRef ? { baseRef: changesBaseRef } : {}),
               ignoreWhitespace,
               metadataOnly: true,
+              ...(diffPanelOpen && diffPanelShowsBranch ? { includeSmallPatch: true } : {}),
               sourceKind: "branch-range",
             },
           }),
