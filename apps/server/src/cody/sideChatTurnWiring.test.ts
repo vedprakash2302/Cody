@@ -30,6 +30,7 @@ import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ContextHandoffService from "../orchestration-v2/ContextHandoffService.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -404,6 +405,7 @@ describe("upstream turn services carry side chat context", () => {
               get: () => Effect.succeedSome(runtime),
             }),
             Layer.mock(EventSink.EventSinkV2)({}),
+            McpAppModelContext.layerEmpty,
           ),
         ),
       );

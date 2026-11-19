@@ -19,3 +19,7 @@ Do not delegate tasks, start subagents, create threads, or message other threads
 /** Slash commands go to the provider untouched; anything in front would stop them parsing. */
 export const withSideChatRules = (text: string) =>
   text.trimStart().startsWith("/") ? text : `${SIDE_CHAT_RULES}\n\n${text}`;
+
+/** Upstream's resume prompt, placed inside a side chat's rules when the turn has no request. */
+export const withResumeRequest = (text: string, prompt: string) =>
+  text === "" ? prompt : text === withSideChatRules("") ? withSideChatRules(prompt) : text;

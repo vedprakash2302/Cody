@@ -27,11 +27,21 @@ model. DPoP binds a token to a client's proof key; an invalid proof must fail
 rather than fall back to bearer authentication. The OAuth token-exchange
 vocabulary gives these grants a familiar meaning.
 
-Bearer clients, such as directly paired apps and MCP clients, cannot refresh
-their token, so the server renews a bearer session whenever it is used. Each
-renewal moves the session row's expiry to the token's signed lifetime from now.
-For bearer tokens the row's expiry is authoritative and the signed `exp` is only
-the first one. Cookie and DPoP sessions keep fixed expiries.
+A device that exchanges a plain pairing link with a DPoP proof gets a one-hour
+token on a session that renews: presenting the token, even expired, with a
+proof from the same key moves the session's expiry 30 days out and returns a
+fresh token for the same session. The session itself must still be unexpired
+and unrevoked, so a device idle past the window pairs again. Renewal stays in place rather than issuing a
+successor, so live sockets keep their session, Sharing & access shows one row
+per device for its whole renewal window, and one revoke ends it. T3 Connect,
+CLI, desktop and peer sessions never renew, so unlinking Connect or rotating
+their credential still cuts a device off.
+
+Bearer clients, such as directly paired apps that could not pair with DPoP and
+MCP clients, cannot refresh their token, so the server renews a bearer session
+whenever it is used. Each renewal moves the session row's expiry to the token's
+signed lifetime from now. For bearer tokens the row's expiry is authoritative
+and the signed `exp` is only the first one. Cookie sessions keep fixed expiries.
 
 ### Guest links are not sessions
 
