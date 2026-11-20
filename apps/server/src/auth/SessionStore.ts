@@ -434,6 +434,15 @@ export class SessionStore extends Context.Service<
       SessionCredentialError | ServerAuthInvalidCredentialError | ServerAuthInternalError
     >;
     readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
+    /**
+     * Moves a live session's expiry to `expiresAt` unless it is already within `step` of it, and
+     * returns the expiry it now has. None when it is revoked, expired or missing.
+     */
+    readonly extend: (
+      sessionId: AuthSessionId,
+      expiresAt: DateTime.Utc,
+      step: Duration.Duration,
+    ) => Effect.Effect<Option.Option<DateTime.Utc>, SessionCredentialInternalError>;
     readonly issueWebSocketToken: (
       sessionId: AuthSessionId,
       input?: {
@@ -898,9 +907,12 @@ const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      // A bearer session's row holds its renewed expiry; the signed claim only holds the first one.
-      const bearer = claims.method === "bearer-access-token";
-      if (!bearer && claims.exp <= observedAt.epochMilliseconds) {
+      // A peer link's session renews while it is used and its token is never
+      // reissued, so the session row holds its deadline, not the token. Cody renews other
+      // bearer sessions the same way, so their rows hold the deadline too.
+      const bearer = claims.method === "bearer-access-token" && claims.plk !== 1;
+      const rowHoldsDeadline = claims.plk === 1 || bearer;
+      if (!rowHoldsDeadline && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
           expiresAt: expiresAt.value,
@@ -918,20 +930,23 @@ const make = Effect.gen(function* () {
       if (Option.isNone(row)) {
         return yield* new UnknownSessionTokenError({ sessionId: claims.sid });
       }
-      if (bearer && row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds) {
-        return yield* new SessionTokenExpiredError({
-          sessionId: claims.sid,
-          expiresAt: row.value.expiresAt,
-          observedAt,
-        });
-      }
       if (row.value.revokedAt !== null) {
         return yield* new SessionTokenRevokedError({
           sessionId: claims.sid,
           revokedAt: row.value.revokedAt,
         });
       }
-      let sessionExpiresAt = expiresAt.value;
+      if (
+        rowHoldsDeadline &&
+        row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds
+      ) {
+        return yield* new SessionTokenExpiredError({
+          sessionId: claims.sid,
+          expiresAt: row.value.expiresAt,
+          observedAt,
+        });
+      }
+      let sessionExpiresAt = rowHoldsDeadline ? row.value.expiresAt : expiresAt.value;
       if (bearer) {
         const lifetimeMs = claims.exp - claims.iat;
         bearerLifetimeMsBySession.set(claims.sid, lifetimeMs);
@@ -951,6 +966,36 @@ const make = Effect.gen(function* () {
         ...(claims.plk === 1 ? { peerLink: true as const } : {}),
       } satisfies VerifiedSession;
     },
+  );
+
+  const extend: SessionStore["Service"]["extend"] = Effect.fn("SessionStore.extend")(
+    function* (sessionId, expiresAt, step) {
+      const now = yield* DateTime.now;
+      // The step is checked in the update, so of two uses that read the same expiry one writes.
+      const extended = yield* authSessions.extend({
+        sessionId,
+        expiresAt,
+        now,
+        onlyIfExpiresBy: DateTime.subtract(expiresAt, { milliseconds: Duration.toMillis(step) }),
+      });
+      if (!extended) {
+        const row = yield* authSessions.getById({ sessionId });
+        return Option.filter(
+          Option.map(row, (current) => current.expiresAt),
+          (current) =>
+            Option.exists(row, (session) => session.revokedAt === null) &&
+            DateTime.isGreaterThan(current, now),
+        );
+      }
+      const session = yield* loadActiveSession(sessionId);
+      if (Option.isSome(session)) yield* emitUpsert(session.value);
+      return Option.some(expiresAt);
+    },
+    (effect, sessionId) =>
+      Effect.mapError(
+        effect,
+        (cause) => new SessionCredentialVerificationError({ sessionId, cause }),
+      ),
   );
 
   const renew: SessionStore["Service"]["renew"] = Effect.fn("SessionStore.renew")(
@@ -1336,6 +1381,7 @@ const make = Effect.gen(function* () {
     legacyCookieName,
     issue,
     renew,
+    extend,
     verify,
     issueWebSocketToken,
     verifyWebSocketToken,

@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { ChevronDownIcon } from "lucide-react";
 
 import { Button } from "../components/ui/button";
@@ -35,7 +36,7 @@ import {
   useSideChatCatchUp,
 } from "./sideChats";
 
-/** Cody hides upstream's Bring back: this bar's works while the main thread runs. */
+/** Cody hides upstream's Add to chat: this bar's Bring back adds the same link, with a size and a summary option. */
 export const CODY_SIDE_CHAT_BAR: boolean = true;
 
 /**
@@ -48,6 +49,7 @@ export function CodySideChatBar(props: {
   readonly canOperate: boolean;
 }) {
   const { parentRef, canOperate } = props;
+  const gt = useGT();
   const sideChatRef = scopeThreadRef(parentRef.environmentId, props.threadId);
   const shell = useQuietThreadShell(sideChatRef);
   const sideChat = useQuietThreadProjection(sideChatRef)?.projection ?? null;
@@ -86,7 +88,7 @@ export function CodySideChatBar(props: {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
-        title: "Could not ask the side chat for a summary",
+        title: gt("Could not ask the side chat for a summary"),
         ...(error instanceof Error ? { description: error.message } : {}),
       });
     }
@@ -104,17 +106,21 @@ export function CodySideChatBar(props: {
                 disabled={!canOperate}
                 onClick={() => addCatchUp(sideChatRef, parentRef)}
               >
-                {newReplies > 0 ? `${newReplies} new in main` : "Main went back"}
+                {newReplies > 0
+                  ? gt("{count} new in main", { count: newReplies })
+                  : gt("Main went back")}
               </Button>
             }
           />
           <TooltipPopup side="bottom">
-            Adds what the main thread did since this side chat last saw it to your next message
-            here.
+            <T>
+              Adds what the main thread did since this side chat last saw it to your next message
+              here.
+            </T>
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      <Group aria-label="Bring back">
+      <Group aria-label={gt("Bring back")}>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -126,7 +132,7 @@ export function CodySideChatBar(props: {
                   if (bringBackBlocked === null) bringBackSideChat(sideChatRef, parentRef);
                 }}
               >
-                Bring back
+                <T>Bring back</T>
                 {size.newReplies > 0 ? (
                   <span className="text-muted-foreground">{formatTokens(size.tokens)}</span>
                 ) : null}
@@ -136,8 +142,18 @@ export function CodySideChatBar(props: {
           <TooltipPopup side="bottom">
             {bringBackBlocked ??
               (size.newReplies > 0
-                ? `Adds the ${size.newReplies === 1 ? "reply" : `${size.newReplies} replies`} main hasn't seen (${formatTokens(size.tokens)} tokens) to the main thread's next message. Works while the main thread runs.`
-                : "Main has everything this side chat said. Bringing it back again adds nothing new.")}
+                ? size.newReplies === 1
+                  ? gt(
+                      "Adds the reply main hasn't seen ({tokens} tokens) to the main thread's next message. Works while the main thread runs.",
+                      { tokens: formatTokens(size.tokens) },
+                    )
+                  : gt(
+                      "Adds the {count} replies main hasn't seen ({tokens} tokens) to the main thread's next message. Works while the main thread runs.",
+                      { count: size.newReplies, tokens: formatTokens(size.tokens) },
+                    )
+                : gt(
+                    "Main has everything this side chat said. Bringing it back again adds nothing new.",
+                  ))}
           </TooltipPopup>
         </Tooltip>
         <GroupSeparator />
@@ -147,26 +163,34 @@ export function CodySideChatBar(props: {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="More ways to bring back"
+                aria-label={gt("More ways to bring back")}
                 disabled={bringBackBlocked !== null}
               />
             }
           >
-            {summarizing ? <Spinner size="sm" aria-label="Summarizing" /> : <ChevronDownIcon />}
+            {summarizing ? (
+              <Spinner size="sm" aria-label={gt("Summarizing")} />
+            ) : (
+              <ChevronDownIcon />
+            )}
           </MenuTrigger>
           <MenuPopup align="end" className="w-72">
             <MenuItem onClick={() => bringBackSideChat(sideChatRef, parentRef)}>
-              <MenuItemLabel className="flex-1">Everything new</MenuItemLabel>
+              <MenuItemLabel className="flex-1">
+                <T>Everything new</T>
+              </MenuItemLabel>
               {size.newReplies > 0 ? (
-                <MenuItemDetail>{formatTokens(size.tokens)} tokens</MenuItemDetail>
+                <MenuItemDetail>
+                  {gt("{tokens} tokens", { tokens: formatTokens(size.tokens) })}
+                </MenuItemDetail>
               ) : null}
             </MenuItem>
             <MenuItem disabled={sideChatBusy || summarizing} onClick={() => void requestSummary()}>
               <MenuItemLabel className="flex-1">
-                {summarizing ? "Summarizing…" : "Summary"}
+                {summarizing ? gt("Summarizing…") : gt("Summary")}
               </MenuItemLabel>
               <MenuItemDetail>
-                {sideChatBusy && !summarizing ? "when idle" : "costs a turn"}
+                {sideChatBusy && !summarizing ? gt("when idle") : gt("costs a turn")}
               </MenuItemDetail>
             </MenuItem>
           </MenuPopup>

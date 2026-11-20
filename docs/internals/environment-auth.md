@@ -34,14 +34,20 @@ fresh token for the same session. The session itself must still be unexpired
 and unrevoked, so a device idle past the window pairs again. Renewal stays in place rather than issuing a
 successor, so live sockets keep their session, Sharing & access shows one row
 per device for its whole renewal window, and one revoke ends it. T3 Connect,
-CLI, desktop and peer sessions never renew, so unlinking Connect or rotating
+CLI and desktop sessions never renew, so unlinking Connect or rotating
 their credential still cuts a device off.
 
-Bearer clients, such as directly paired apps that could not pair with DPoP and
-MCP clients, cannot refresh their token, so the server renews a bearer session
-whenever it is used. Each renewal moves the session row's expiry to the token's
-signed lifetime from now. For bearer tokens the row's expiry is authoritative
-and the signed `exp` is only the first one. Cookie sessions keep fixed expiries.
+A [peer link](remote.md#peer-links)'s session renews on use instead: its
+bearer token is never reissued, so the session row alone holds its deadline and
+the token's own expiry is ignored. Authenticating a call from it moves the
+row 30 days out, at most once a day so a busy link does not write on every
+call. Only an unexpired, unrevoked row moves, so an idle link still ends after
+30 days and a revoke is final.
+
+In Cody, other bearer clients, such as directly paired apps that could not pair
+with DPoP and MCP clients, renew the same way: each verified use moves the
+session row's expiry to the token's signed lifetime from now, and the row's
+expiry is authoritative. Cookie sessions keep fixed expiries.
 
 ### Guest links are not sessions
 

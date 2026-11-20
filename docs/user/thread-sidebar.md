@@ -312,8 +312,9 @@ model, and reasoning level shown in the thread's composer, including for its fir
 reply. Change them for an individual side chat in its composer. Later changes to the
 parent do not change existing side chats.
 
-To use what you learned, choose **Bring back**. The thread gets the side chat with
-your next message there. In Cody, Bring back also works while the thread runs. See
+To use what you learned, choose **Bring back** at the top of the side chat, or type
+`@` and a word from its title in the thread's composer. The thread's next message
+gets the side chat. This works while the thread is busy. See
 [side chats in Cody](./side-chats.md) for Cody's other additions.
 
 Closing a side chat you never sent a message in deletes it. To delete one you used,
