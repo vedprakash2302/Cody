@@ -166,7 +166,8 @@ jobs:
     uses: ./.github/workflows/release-desktop.yml
     with:
       label: Cody macOS Apple Silicon
-      runner: macos-15
+      # The Apple Speech helper needs Xcode 26, the default on macos-26.
+      runner: macos-26
       platform: mac
       target: dmg
       arch: arm64
