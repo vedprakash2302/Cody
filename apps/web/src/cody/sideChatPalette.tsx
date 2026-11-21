@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { MessagesSquareIcon } from "lucide-react";
 import { Atom } from "effect/reactivity";
 
@@ -40,6 +41,7 @@ export function useSideChatsOffered(thread: EnvironmentThreadShell | null | unde
 export function useCodySideChatPaletteItems(
   thread: EnvironmentThreadShell | null | undefined,
 ): ReadonlyArray<CommandPaletteActionItem> {
+  const gt = useGT();
   const offered = useSideChatsOffered(thread);
   const threadRef =
     offered && thread != null ? scopeThreadRef(thread.environmentId, thread.id) : null;
@@ -56,7 +58,7 @@ export function useCodySideChatPaletteItems(
       kind: "action",
       value: "action:new-side-chat",
       searchTerms: [...searchTerms, "new"],
-      title: "New side chat",
+      title: gt("New side chat"),
       icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "thread.sideChat",
       run: async () => {
@@ -67,10 +69,13 @@ export function useCodySideChatPaletteItems(
       kind: "action" as const,
       value: `action:open-side-chat:${candidate.id}`,
       searchTerms: [...searchTerms, "open", candidate.title],
-      title: sideChats.length === 1 ? "Open side chat" : `Open side chat: ${candidate.title}`,
+      title:
+        sideChats.length === 1
+          ? gt("Open side chat")
+          : gt("Open side chat: {title}", { title: candidate.title }),
       icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        useRightPanelStore.getState().openSideChat(threadRef, candidate.id);
+        useRightPanelStore.getState().openThread(threadRef, candidate.id);
       },
     })),
   ];

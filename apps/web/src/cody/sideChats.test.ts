@@ -80,7 +80,7 @@ describe("side chats started from the palette or Ask in side chat", () => {
       { id: ThreadId.make("b"), createdAt: "2026-11-02T00:00:00.000Z" },
       { id: ThreadId.make("a"), createdAt: "2026-11-01T00:00:00.000Z" },
     ];
-    expect(pickSideChat(sideChats, "side-chat:a")?.id).toBe("a");
+    expect(pickSideChat(sideChats, "thread:a")?.id).toBe("a");
     expect(pickSideChat(sideChats, "terminal")?.id).toBe("b");
     expect(pickSideChat([], null)).toBeNull();
   });

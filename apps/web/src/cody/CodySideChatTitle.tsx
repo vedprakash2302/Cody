@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { T, useGT } from "gt-react";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -70,6 +71,7 @@ export function CodySideChatTitle(props: {
   readonly canOperate: boolean;
 }) {
   const { parentRef, threadId, canOperate } = props;
+  const gt = useGT();
   const sideChatRef = scopeThreadRef(parentRef.environmentId, threadId);
   const shell = useQuietThreadShell(sideChatRef);
   const projection = useQuietThreadProjection(sideChatRef)?.projection ?? null;
@@ -83,7 +85,7 @@ export function CodySideChatTitle(props: {
   const newSideChatShortcut = useNewSideChatShortcut();
   const [renaming, setRenaming] = useState(false);
   const [continuing, setContinuing] = useState(false);
-  const title = shell?.title ?? "Side chat";
+  const title = shell?.title ?? gt("Side chat");
   const latestFinishedRun =
     projection?.runs
       .filter((run) => run.status === "completed")
@@ -98,7 +100,7 @@ export function CodySideChatTitle(props: {
       environmentId: sideChatRef.environmentId,
       input: { threadId: sideChatRef.threadId, title: trimmed },
     });
-    if (result._tag === "Failure") reportFailure("Could not rename the side chat", result);
+    if (result._tag === "Failure") reportFailure(gt("Could not rename the side chat"), result);
   };
 
   // A normal fork of the side chat: a thread that can change files, with the side chat's context.
@@ -117,7 +119,7 @@ export function CodySideChatTitle(props: {
     });
     if (result._tag === "Failure") {
       setContinuing(false);
-      reportFailure("Could not continue the side chat as a thread", result);
+      reportFailure(gt("Could not continue the side chat as a thread"), result);
       return;
     }
     const ready = await waitForThreadShell(targetRef);
@@ -125,8 +127,8 @@ export function CodySideChatTitle(props: {
     if (!ready) {
       toastManager.add({
         type: "error",
-        title: "The thread was created, but it did not reach this client.",
-        description: "Reconnect and open it from the sidebar.",
+        title: gt("The thread was created, but it did not reach this client."),
+        description: gt("Reconnect and open it from the sidebar."),
       });
       return;
     }
@@ -136,7 +138,7 @@ export function CodySideChatTitle(props: {
   if (renaming) {
     return (
       <Input
-        aria-label="Side chat name"
+        aria-label={gt("Side chat name")}
         size="sm"
         className="w-48"
         defaultValue={title}
@@ -161,7 +163,7 @@ export function CodySideChatTitle(props: {
             variant="ghost"
             size="xs"
             className="max-w-full min-w-0"
-            aria-label="Side chats"
+            aria-label={gt("Side chats")}
           />
         }
       >
@@ -172,7 +174,7 @@ export function CodySideChatTitle(props: {
         {sideChats.map((sideChat) => (
           <MenuItem
             key={sideChat.id}
-            onClick={() => useRightPanelStore.getState().openSideChat(parentRef, sideChat.id)}
+            onClick={() => useRightPanelStore.getState().openThread(parentRef, sideChat.id)}
           >
             <MessagesSquareIcon aria-hidden="true" />
             <MenuItemLabel className="flex-1">{sideChat.title}</MenuItemLabel>
@@ -184,20 +186,26 @@ export function CodySideChatTitle(props: {
         ))}
         <MenuItem disabled={!start.available} onClick={() => void start.open()}>
           <PlusIcon aria-hidden="true" />
-          <MenuItemLabel className="flex-1">New side chat</MenuItemLabel>
+          <MenuItemLabel className="flex-1">
+            <T>New side chat</T>
+          </MenuItemLabel>
           {newSideChatShortcut ? <MenuShortcut>{newSideChatShortcut}</MenuShortcut> : null}
         </MenuItem>
         <MenuSeparator />
         <MenuItem disabled={!canOperate || shell === null} onClick={() => setRenaming(true)}>
           <PencilIcon aria-hidden="true" />
-          <MenuItemLabel>Rename</MenuItemLabel>
+          <MenuItemLabel>
+            <T>Rename</T>
+          </MenuItemLabel>
         </MenuItem>
         <MenuItem
           disabled={!canOperate || latestFinishedRun === null || continuing}
           onClick={() => void continueAsThread()}
         >
           <GitForkIcon aria-hidden="true" />
-          <MenuItemLabel>Continue as thread</MenuItemLabel>
+          <MenuItemLabel>
+            <T>Continue as thread</T>
+          </MenuItemLabel>
         </MenuItem>
       </MenuPopup>
     </Menu>
@@ -209,6 +217,7 @@ export function CodyNewSideChatButton(props: {
   readonly parentRef: ScopedThreadRef;
   readonly canOperate: boolean;
 }) {
+  const gt = useGT();
   const start = useStartSideChat(props.canOperate ? props.parentRef : null);
   const shortcut = useNewSideChatShortcut();
   return (
@@ -218,7 +227,7 @@ export function CodyNewSideChatButton(props: {
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="New side chat"
+            aria-label={gt("New side chat")}
             disabled={!start.available}
             onClick={() => void start.open()}
           />
@@ -227,7 +236,7 @@ export function CodyNewSideChatButton(props: {
         <PlusIcon />
       </TooltipTrigger>
       <TooltipPopup side="bottom">
-        {shortcut ? `New side chat (${shortcut})` : "New side chat"}
+        {shortcut ? gt("New side chat ({shortcut})", { shortcut }) : gt("New side chat")}
       </TooltipPopup>
     </Tooltip>
   );

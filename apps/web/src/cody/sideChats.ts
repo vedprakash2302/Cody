@@ -20,7 +20,7 @@ import { readThreadShell, useQuietThreadProjection } from "../state/entities";
 import { environmentThreadDetails, environmentThreadShells } from "../state/threads";
 import { holdCommentFocus, quoteIntoSideChatComposer } from "./sideChatComposers";
 
-const SIDE_CHAT_SURFACE_PREFIX = "side-chat:";
+const SIDE_CHAT_SURFACE_PREFIX = "thread:";
 
 type CarriedThrough = Parameters<typeof carriedThroughRunId>[0];
 
@@ -186,7 +186,7 @@ export function quoteInSideChat(
   const { newReplies, wentBack } = readSideChatCatchUp(sideChatRef, parentRef);
   if (newReplies > 0 || wentBack) addCatchUp(sideChatRef, parentRef);
   holdCommentFocus();
-  useRightPanelStore.getState().openSideChat(parentRef, sideChatId);
+  useRightPanelStore.getState().openThread(parentRef, sideChatId);
   quoteIntoSideChatComposer(sideChatRef, citation, sourceAnchor);
 }
 
@@ -232,5 +232,6 @@ export function summaryReply(
 
 /** The text a summary adds to main's next message. */
 export function summaryForMain(title: string, summary: string): string {
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- goes to the agent in main's next message
   return `Summary of side chat "${title}":\n\n${summary}\n\n`;
 }

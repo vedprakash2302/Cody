@@ -74,6 +74,7 @@ import {
   resolveGitHubPublishConfig,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   LINUX_CAPTURE_EXTRA_RESOURCES,
+  MAC_APPLE_SPEECH_EXTRA_RESOURCES,
   WINDOWS_SERVER_EXTRA_RESOURCES,
   WSL_RUNTIME_EXTRA_RESOURCES,
   LINUX_FILE_EXCLUSIONS,
@@ -841,7 +842,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
       assert.deepStrictEqual(winWithoutWslRuntime.asarUnpack, win.asarUnpack);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(mac.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...MAC_APPLE_SPEECH_EXTRA_RESOURCES,
+      ]);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,

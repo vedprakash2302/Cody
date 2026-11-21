@@ -10,7 +10,7 @@ const source = (path: string) => NodeFS.readFileSync(new URL(path, import.meta.u
 describe("Cody's hooks into upstream files", () => {
   it.each([
     [
-      "../components/chat/SideChatPane.tsx",
+      "../components/chat/SideThreadPane.tsx",
       ["<CodySideChatBar", "CODY_SIDE_CHAT_BAR ?", "<CodySideChatTitle", "<CodySideChatComposers"],
     ],
     [
