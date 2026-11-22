@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { usePaginatedBranches } from "../state/queries";
 import { useEnvironmentQuery } from "../state/query";
+import { useAtomCommand } from "../state/use-atom-command";
 import { vcsEnvironment } from "../state/vcs";
 import { BranchPicker, BranchPickerRefItem } from "./BranchPicker";
 import { resolveBranchTriggerLabel, sanitizeNewRefName } from "./BranchToolbar.logic";
@@ -36,6 +37,9 @@ export function WorktreeBaseBranchPicker({
   const messages = useMessages();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const refreshLocalStatusForPicker = useAtomCommand(vcsEnvironment.refreshLocalStatusForPicker, {
+    reportFailure: false,
+  });
   const branches = usePaginatedBranches(
     {
       environmentId,
@@ -87,6 +91,9 @@ export function WorktreeBaseBranchPicker({
           : null);
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
+    if (next && !open && cwd !== null) {
+      void refreshLocalStatusForPicker({ environmentId, input: { cwd } });
+    }
     if (!next) setQuery("");
   };
   return (

@@ -40,6 +40,7 @@ import * as ProviderTurnControl from "../orchestration-v2/ProviderTurnControlSer
 import * as ProviderTurnStart from "../orchestration-v2/ProviderTurnStartService.ts";
 import * as RunExecutionService from "../orchestration-v2/RunExecutionService.ts";
 import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
+import { layerNoTaskFolders } from "../orchestration-v2/ProviderTurnStartService.testkit.ts";
 import * as TurnItemPositionStore from "../orchestration-v2/TurnItemPositionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
@@ -335,6 +336,7 @@ const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
             resolve: () => Effect.succeed({ cwd: "/tmp/side-chat-wiring" } as never),
           }),
           Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
+          layerNoTaskFolders,
         ),
       ),
     );
