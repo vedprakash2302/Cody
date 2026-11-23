@@ -74,7 +74,11 @@ const make = Effect.gen(function* () {
       if ((missingUntil.get(missingKey) ?? 0) > now) return Option.some(undefined);
       // Spawn failures surface asynchronously; without this a missing CLI would report as pending.
       const resolveExecutable = yield* SpawnExecutableResolution;
-      if (resolveExecutable(binaryPath, yield* HostProcess.Platform, environment) === undefined) {
+      const platform = yield* HostProcess.Platform;
+      const resolved = yield* Effect.promise(async () =>
+        resolveExecutable(binaryPath, platform, environment),
+      );
+      if (resolved === undefined) {
         missingUntil.set(missingKey, now + Duration.toMillis(MISSING_EXECUTABLE_TTL));
         return Option.some(undefined);
       }

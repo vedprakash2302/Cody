@@ -244,7 +244,7 @@ describe("Muse history discovery", () => {
   );
 
   it.effect("reports no history without starting Muse when its CLI is not installed", () => {
-    const resolveExecutable = vi.fn(() => undefined);
+    const resolveExecutable = vi.fn(async () => undefined);
     return Effect.gen(function* () {
       using create = vi.spyOn(MuseSdk, "createMuseSdkHostEffect");
       if (museUsageReader.kind !== "transcripts") throw new Error("Expected a transcript reader");
