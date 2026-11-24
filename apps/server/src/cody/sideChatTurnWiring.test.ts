@@ -43,8 +43,10 @@ import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import { layerNoTaskFolders } from "../orchestration-v2/ProviderTurnStartService.testkit.ts";
 import * as TurnItemPositionStore from "../orchestration-v2/TurnItemPositionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 import { SIDE_CHAT_RULES } from "./sideChatRules.ts";
 
 // These run upstream's turn services, so a merge that drops Cody's calls into
@@ -336,6 +338,8 @@ const startTurn = (options: { readonly sideChat?: boolean } = {}) =>
             resolve: () => Effect.succeed({ cwd: "/tmp/side-chat-wiring" } as never),
           }),
           Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
+          Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+          Layer.mock(ThreadWorktreeRestore)({ takeRecreated: () => Effect.undefined }),
           layerNoTaskFolders,
         ),
       ),

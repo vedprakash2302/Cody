@@ -5,6 +5,7 @@ import { serializeComposerMessageForServer } from "./composerContext";
 
 import {
   buildProjectThreadStartTurnInput,
+  deriveThreadTitleFromPrompt,
   type ProjectThreadStartTurnSpec,
 } from "./projectThreadStartTurn";
 
@@ -97,6 +98,12 @@ describe("project thread title", () => {
       branch: "t3/new",
       repositories: [{ path: "/workspace/api" }],
     });
+  });
+
+  it("shortens a long prompt without splitting an emoji", () => {
+    expect(deriveThreadTitleFromPrompt(`${"a".repeat(68)}😀 and the rest of the prompt`)).toBe(
+      `${"a".repeat(68)}...`,
+    );
   });
 });
 
