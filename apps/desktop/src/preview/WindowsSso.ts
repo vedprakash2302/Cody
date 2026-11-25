@@ -81,11 +81,12 @@ export function createWindowsSsoHandler(
   return { handle, finish };
 }
 
-/** Another header rewrite for the session, such as upstream's Teams User-Agent fix. */
-export interface WindowsSsoSharedRewrite {
-  readonly urls: ReadonlyArray<string>;
-  readonly rewrite: (headers: Headers) => Headers | undefined;
-}
+/** The session's other header rewrite, upstream's client hints and Teams User-Agent fix. */
+export type WindowsSsoSharedRewrite = (details: {
+  readonly url: string;
+  readonly resourceType: string;
+  readonly requestHeaders: Headers;
+}) => Headers | undefined;
 
 /**
  * Incognito never uses the Windows account. Existing sessions read the current setting.
@@ -106,13 +107,10 @@ export function installWindowsSso(
   // Match navigations in Chromium, avoiding blocking interception of assets unless `shared` needs them.
   // Keep all URLs so redirects away from Entra still remove attached proofs.
   const filter: WebRequestFilter = { urls: ["<all_urls>"], types: ["mainFrame", "subFrame"] };
-  const sharedPrefixes = shared?.urls.map((url) => url.replace(/\*$/, "")) ?? [];
   browserSession.webRequest.onBeforeSendHeaders(
     shared ? { urls: ["<all_urls>"] } : filter,
     (details, callback) => {
-      const rewritten = sharedPrefixes.some((prefix) => details.url.startsWith(prefix))
-        ? shared?.rewrite(details.requestHeaders)
-        : undefined;
+      const rewritten = shared?.(details);
       if (details.resourceType !== "mainFrame" && details.resourceType !== "subFrame") {
         callback(rewritten ? { requestHeaders: rewritten } : {});
         return;

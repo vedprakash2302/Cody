@@ -103,12 +103,25 @@ describe("Windows browser SSO", () => {
     const browserSession = {
       webRequest: { onBeforeSendHeaders, onCompleted: vi.fn(), onErrorOccurred: vi.fn() },
     } as unknown as Session;
-    const rewrite = (headers: Record<string, string>) => ({ ...headers, "User-Agent": "teams" });
+    const rewrite = ({
+      url,
+      requestHeaders,
+    }: {
+      url: string;
+      requestHeaders: Record<string, string>;
+    }) =>
+      url.startsWith("https://teams.microsoft.com/")
+        ? { ...requestHeaders, "User-Agent": "teams" }
+        : undefined;
     expect(
-      installWindowsSso(browserSession, true, "win32", "C:\\helper.exe", async () => false, {
-        urls: ["https://teams.microsoft.com/*"],
+      installWindowsSso(
+        browserSession,
+        true,
+        "win32",
+        "C:\\helper.exe",
+        async () => false,
         rewrite,
-      }),
+      ),
     ).toBe(true);
     expect(onBeforeSendHeaders).toHaveBeenCalledOnce();
     const [filter, listener] = onBeforeSendHeaders.mock.calls[0]!;
