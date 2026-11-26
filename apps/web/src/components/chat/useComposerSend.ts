@@ -15,7 +15,7 @@ import {
   optimisticMessageAttachments,
   planComposerTurn,
   resolveWorktreeBaseBranch,
-  sendTitleFallbackLabels,
+  deriveComposerSendTitle,
   snapshotComposerSend,
   withMessageContext,
   makeThreadErrorSetter,
@@ -34,7 +34,6 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   declinePendingApprovals,
@@ -704,14 +703,7 @@ export function useComposerSend(input: ComposerSendInput) {
               })),
             }),
           }),
-          titleSeed: deriveThreadTitleSeed(
-            {
-              text: snapshot.messageText,
-              attachments: snapshot.attachments,
-              fallbackLabels: sendTitleFallbackLabels(snapshot),
-            },
-            m,
-          ),
+          titleSeed: deriveComposerSendTitle(snapshot),
         });
       }).finally(() => {
         sendInFlightRef.current = false;
@@ -1473,14 +1465,7 @@ export function useComposerSend(input: ComposerSendInput) {
       composerRef.current?.resetCursorState();
     }
 
-    const title = deriveThreadTitleSeed(
-      {
-        text: messageTextForSend,
-        attachments: composerAttachmentsSnapshot,
-        fallbackLabels: sendTitleFallbackLabels(sendSnapshot),
-      },
-      m,
-    );
+    const title = deriveComposerSendTitle(sendSnapshot);
     const threadCreateModelSelection = createModelSelection(
       ctxSelectedModelSelection.instanceId,
       ctxSelectedModel || activeProjectDefaultModelSelection?.model || DEFAULT_MODEL,

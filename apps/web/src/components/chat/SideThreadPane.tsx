@@ -36,12 +36,12 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import ChatView from "../ChatView";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { CODY_SIDE_CHAT_BAR, CodySideChatBar } from "../../cody/CodySideChatBar";
 import { CodySideChatTitle } from "../../cody/CodySideChatTitle";
 import { CodySideChatComposers } from "../../cody/sideChatComposers";
 import { closeThreadFindIn } from "./threadFindStore";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 /**
  * A side chat or a subagent as a tab: the thread's own chat, which decides its bottom, the
@@ -175,25 +175,24 @@ export default function SideThreadPane(props: {
           {CODY_SIDE_CHAT_BAR ? (
             <CodySideChatBar parentRef={parentRef} threadId={threadId} canOperate={canOperate} />
           ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-disabled={!canAddToChat || undefined}
-                    onClick={addToChat}
-                  >
-                    <T>Add to chat</T>
-                  </Button>
-                }
-              />
-              <TooltipPopup side="bottom">
-                {canAddToChat
+            <SharedTooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-disabled={!canAddToChat || undefined}
+                  onClick={addToChat}
+                >
+                  <T>Add to chat</T>
+                </Button>
+              }
+              label={
+                canAddToChat
                   ? gt("Adds this side chat to the main thread's next message.")
-                  : gt("Available after the first message.")}
-              </TooltipPopup>
-            </Tooltip>
+                  : gt("Available after the first message.")
+              }
+              side="bottom"
+            />
           )}
           <Button
             variant="ghost"

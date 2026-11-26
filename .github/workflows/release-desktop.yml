@@ -287,6 +287,15 @@ jobs:
           name: js-bundle
           path: apps
 
+      - name: Restore web asset manifest
+        shell: bash
+        run: |
+          client=apps/server/dist/client
+          if [[ -f "$client/vite-manifest.release.json" ]]; then
+            mkdir -p "$client/.vite"
+            mv "$client/vite-manifest.release.json" "$client/.vite/manifest.json"
+          fi
+
       # Cody still packages Windows on Windows runners so MSVC can build its
       # work-account sign-in helper; there cargo builds the monitor natively.
       - name: Install cargo-xwin
