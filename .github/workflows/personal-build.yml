@@ -86,6 +86,15 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: vp run build:desktop
 
+      # upload-artifact skips hidden files; release-desktop.yml moves this back to .vite/manifest.json.
+      - name: Stage web asset manifest
+        shell: bash
+        run: |
+          manifest=apps/server/dist/client/.vite/manifest.json
+          if [[ -f "$manifest" ]]; then
+            cp "$manifest" apps/server/dist/client/vite-manifest.release.json
+          fi
+
       - name: Upload JS bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
