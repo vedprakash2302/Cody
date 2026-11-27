@@ -192,6 +192,9 @@ jobs:
       clerk_jwt_template: ${{ needs.bundle.outputs.clerk_template }}
       clerk_cli_oauth_client_id: ${{ needs.bundle.outputs.clerk_oauth }}
       relay_url: ${{ needs.bundle.outputs.relay_url }}
+    secrets:
+      CODY_MAC_SIGN_P12: ${{ secrets.CODY_MAC_SIGN_P12 }}
+      CODY_MAC_SIGN_PASSWORD: ${{ secrets.CODY_MAC_SIGN_PASSWORD }}
 
   publish:
     needs: [bundle, linux, windows, mac]

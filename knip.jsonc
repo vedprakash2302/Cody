@@ -42,6 +42,8 @@
         "scenarios/*.ts",
         "setup-worktree.ts",
         "sign-macos.ts",
+        // Cody: electron-builder loads it by path to sign with Cody's certificate.
+        "cody-sign-macos.ts",
         "prepare-server-compile-cache.cjs",
         "smoke-desktop-app.ts",
         "verify-windows-desktop-artifact.ts",

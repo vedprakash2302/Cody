@@ -722,6 +722,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("signs macOS builds with Cody's own certificate when one is configured", () =>
+    Effect.gen(function* () {
+      const mac = (signed: boolean) =>
+        createBuildConfig("mac", "dmg", "0.0.33", signed, false, undefined, undefined).pipe(
+          Effect.map((config) => config.mac as Record<string, unknown>),
+        );
+
+      const selfSigned = yield* mac(false).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { CODY_MAC_SIGN_IDENTITY: "ABCDEF0123456789" } }),
+          ),
+        ),
+      );
+      assert.equal(selfSigned.identity, "-");
+      assert.equal(selfSigned.hardenedRuntime, false);
+      assert.equal(selfSigned.timestamp, "none");
+      assert.match(String(selfSigned.sign), /scripts[\\/]cody-sign-macos\.ts$/);
+
+      const adHoc = yield* mac(false);
+      assert.notProperty(adHoc, "identity");
+      assert.notProperty(adHoc, "sign");
+    }),
+  );
+
   it.effect("packages every platform with Node inspector flags off and run-as-Node left on", () =>
     Effect.gen(function* () {
       const fuses = (platform: "mac" | "linux" | "win", target: string, signed: boolean) =>

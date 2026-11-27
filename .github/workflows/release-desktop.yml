@@ -35,6 +35,10 @@ on:
         required: false
       AZURE_TRUSTED_SIGNING_PUBLISHER_NAME:
         required: false
+      CODY_MAC_SIGN_P12:
+        required: false
+      CODY_MAC_SIGN_PASSWORD:
+        required: false
     inputs:
       label:
         required: true
@@ -595,6 +599,47 @@ jobs:
           name: cli-linux-${{ inputs.arch }}
           path: wsl-runtime
 
+      # Cody has no Apple Developer ID. One self-signed certificate keeps the designated
+      # requirement the same across builds, which Squirrel.Mac needs to install an update.
+      - name: Import Cody macOS signing certificate
+        if: inputs.platform == 'mac'
+        shell: bash
+        env:
+          CODY_MAC_SIGN_P12: ${{ secrets.CODY_MAC_SIGN_P12 }}
+          CODY_MAC_SIGN_PASSWORD: ${{ secrets.CODY_MAC_SIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CODY_MAC_SIGN_P12" ]]; then
+            echo "Cody macOS signing disabled (no certificate); the app is signed ad hoc."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/cody-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          cert_path="$RUNNER_TEMP/cody-signing.p12"
+          printf '%s' "$CODY_MAC_SIGN_P12" | base64 -D > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert_path" -k "$keychain" -P "$CODY_MAC_SIGN_PASSWORD" -T /usr/bin/codesign
+          rm -f "$cert_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          existing=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            existing+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          # The certificate is not trusted, so it is listed only without -v.
+          identity="$(security find-identity -p codesigning "$keychain" | sed -n 's/^ *[0-9][0-9]*) \([0-9A-F]\{40\}\) .*/\1/p' | head -n 1)"
+          if [[ -z "$identity" ]]; then
+            echo "No code signing identity found in CODY_MAC_SIGN_P12." >&2
+            security find-identity -p codesigning "$keychain" >&2
+            exit 1
+          fi
+          echo "CODY_MAC_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CODY_MAC_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "Cody macOS signing enabled ($identity)."
+
       - name: Build desktop artifact
         shell: bash
         env:
@@ -686,6 +731,28 @@ jobs:
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
+
+      # The zip is what the updater installs. Its signature must meet a certificate-based
+      # designated requirement, or the next build could not replace it.
+      - name: Verify Cody macOS signature
+        if: inputs.platform == 'mac' && env.CODY_MAC_SIGN_IDENTITY != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          unpacked="$RUNNER_TEMP/cody-signature-check"
+          rm -rf "$unpacked"
+          mkdir -p "$unpacked"
+          ditto -x -k "$(ls "$GITHUB_WORKSPACE"/release/*.zip)" "$unpacked"
+          app="$(ls -d "$unpacked"/*.app)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Authority|Signature|CodeDirectory)'
+          requirement="$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')"
+          echo "Designated requirement: $requirement"
+          if [[ "$requirement" != *certificate* ]]; then
+            echo "The update payload is not signed with Cody's certificate." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --test-requirement="=$requirement" "$app"
 
       # The CLI was submitted without waiting so Apple reviews it while the
       # desktop builds. Notarization does not change the archive bytes, but

@@ -2871,6 +2871,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    const codyMacSignIdentity = Option.getOrUndefined(
+      yield* Config.String("CODY_MAC_SIGN_IDENTITY").pipe(Config.option),
+    )?.trim();
     buildConfig.mac = {
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
@@ -2918,6 +2921,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      // "-" gets past electron-builder's trusted-identity lookup; the hook signs with Cody's
+      // self-signed certificate instead. Hardened runtime stays off, as on ad hoc builds.
+      ...(!signed && codyMacSignIdentity
+        ? {
+            identity: "-",
+            hardenedRuntime: false,
+            timestamp: "none",
+            sign: path.join(repoRoot, "scripts/cody-sign-macos.ts"),
+          }
+        : {}),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
