@@ -602,6 +602,7 @@ jobs:
       # Cody has no Apple Developer ID. One self-signed certificate keeps the designated
       # requirement the same across builds, which Squirrel.Mac needs to install an update.
       - name: Import Cody macOS signing certificate
+        id: cody_mac_sign
         if: inputs.platform == 'mac'
         shell: bash
         env:
@@ -638,6 +639,7 @@ jobs:
           fi
           echo "CODY_MAC_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "CODY_MAC_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
           echo "Cody macOS signing enabled ($identity)."
 
       - name: Build desktop artifact
@@ -735,7 +737,7 @@ jobs:
       # The zip is what the updater installs. Its signature must meet a certificate-based
       # designated requirement, or the next build could not replace it.
       - name: Verify Cody macOS signature
-        if: inputs.platform == 'mac' && env.CODY_MAC_SIGN_IDENTITY != ''
+        if: inputs.platform == 'mac' && steps.cody_mac_sign.outputs.identity != ''
         shell: bash
         run: |
           set -euo pipefail
