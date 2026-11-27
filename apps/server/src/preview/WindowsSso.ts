@@ -1,12 +1,7 @@
 /**
- * Windows work-account sign-in for headless tabs on a WSL host. The desktop app
- * passes the path of its Windows helper, and each Entra sign-in navigation gets
- * the host's device proofs, the same headers Edge sends on Windows.
- *
- * Playwright's route API can't do this: it re-applies a continued request's
- * headers to every redirect hop and never routes the hops. CDP Fetch pauses
- * each hop, and continueRequest headers apply to that hop only, so a redirect
- * away from Entra never carries a proof.
+ * Windows work-account sign-in for headless tabs on a WSL host. CDP Fetch pauses each Entra
+ * redirect hop on its own, unlike Playwright's route API, so only Entra hops get the host's
+ * device proofs (the headers Edge sends on Windows).
  */
 import {
   isWindowsSsoUrl,
@@ -15,7 +10,7 @@ import {
 } from "@t3tools/shared/windowsSso";
 import type { CDPSession } from "playwright-core";
 
-import { enableFetchPatterns, isResponseStage } from "./FetchInterception.ts";
+import { enableFetchPatterns, isResponseStage, takeRequestStage } from "./FetchInterception.ts";
 
 interface PausedRequest {
   readonly requestId: string;
@@ -65,6 +60,7 @@ export function makeWindowsSso(readAuth: (url: string) => Promise<WindowsSsoAuth
   };
   return {
     install: async (cdp) => {
+      takeRequestStage(cdp);
       cdp.on("Fetch.requestPaused", (event: PausedRequest) => {
         if (isResponseStage(event)) return;
         void proofHeaders(event).then((headers) =>

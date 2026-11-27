@@ -1,7 +1,7 @@
 import { constVoid } from "effect/Function";
 import type { CDPSession } from "playwright-core";
 
-import { enableFetchPatterns, isResponseStage } from "./FetchInterception.ts";
+import { enableFetchPatterns, isResponseStage, requestStageTaken } from "./FetchInterception.ts";
 
 const escapeHtml = (value: string) =>
   value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
@@ -11,21 +11,31 @@ export const isPdfAssetUrl = (url: string) => {
   return pathname.startsWith("/api/assets/") && /\.pdf$/i.test(pathname);
 };
 
-export async function installPdfDocumentNavigation(cdp: CDPSession) {
+/**
+ * A session has one `Fetch.enable`, so HTTP auth challenges share it. Chromium
+ * raises `Fetch.authRequired` only for requests a pattern intercepts.
+ */
+export async function installPdfDocumentNavigation(
+  cdp: CDPSession,
+  { handleAuthRequests }: { readonly handleAuthRequests: boolean },
+) {
   const nativeViewer = await cdp.send("Runtime.evaluate", {
     expression: "navigator.pdfViewerEnabled",
     returnByValue: true,
   });
-  if (nativeViewer.result?.value === true) return;
+  const interceptPdfs = nativeViewer.result?.value !== true;
+  if (!interceptPdfs && !handleAuthRequests) return;
   const { frameTree } = await cdp.send("Page.getFrameTree");
   // The shell cannot open PDFs. Commit a document at the original URL so the
   // client can embed its signed bytes while Back and Forward keep working.
   cdp.on("Fetch.requestPaused", (event) => {
-    if (!isResponseStage(event)) return;
+    // Windows sign-in, when installed, answers every request-stage pause itself.
+    if (!isResponseStage(event) && requestStageTaken(cdp)) return;
     const { requestId, request, frameId } = event;
     const proceed = () => cdp.send("Fetch.continueRequest", { requestId });
     void (async () => {
       if (
+        !interceptPdfs ||
         request.method !== "GET" ||
         frameId !== frameTree.frame.id ||
         !isPdfAssetUrl(request.url)
@@ -67,7 +77,22 @@ export async function installPdfDocumentNavigation(cdp: CDPSession) {
     })().catch(() => proceed().catch(constVoid));
   });
   // Only document navigations pause; the client's PDF fetch gets the original bytes.
-  await enableFetchPatterns(cdp, [
-    { urlPattern: "*/api/assets/*", resourceType: "Document", requestStage: "Response" },
-  ]);
+  await enableFetchPatterns(
+    cdp,
+    [
+      ...(interceptPdfs
+        ? [
+            {
+              urlPattern: "*/api/assets/*",
+              resourceType: "Document",
+              requestStage: "Response",
+            } as const,
+          ]
+        : []),
+      ...(handleAuthRequests
+        ? [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" } as const]
+        : []),
+    ],
+    { handleAuthRequests },
+  );
 }

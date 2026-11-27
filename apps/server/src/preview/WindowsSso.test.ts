@@ -95,24 +95,37 @@ describe("server browser Windows sign-in", () => {
       answered.set(event.requestId, done);
       for (const listener of listeners) listener(event);
       await done.promise;
-      // The fake answers in microtasks; one macrotask lets a second listener answer too.
-      await new Promise((resolve) => setImmediate(resolve));
+      // Every listener answers in microtasks; draining them lets a second answer show up.
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
       return sent.filter(({ params }) => params.requestId === event.requestId);
     };
-    await installPdfDocumentNavigation(cdp);
+    // Headless tabs also pause every document request to answer HTTP auth.
+    await installPdfDocumentNavigation(cdp, { handleAuthRequests: true });
     await makeWindowsSso(async () => proof).install(cdp);
 
     const enables = sent.filter(({ method }) => method === "Fetch.enable");
     assert.deepStrictEqual(enables.at(-1)?.params, {
       patterns: [
         { urlPattern: "*/api/assets/*", resourceType: "Document", requestStage: "Response" },
+        { urlPattern: "*", resourceType: "Document", requestStage: "Request" },
         {
           urlPattern: "https://login.microsoftonline.com/*",
           resourceType: "Document",
           requestStage: "Request",
         },
       ],
+      handleAuthRequests: true,
     } as never);
+
+    const page = await pause({
+      requestId: "page",
+      frameId: "main",
+      request: { url: "https://app.test/", method: "GET", headers: {} },
+    });
+    assert.deepStrictEqual(
+      page.map(({ method }) => method),
+      ["Fetch.continueRequest"],
+    );
 
     const signIn = await pause({
       requestId: "sign-in",
