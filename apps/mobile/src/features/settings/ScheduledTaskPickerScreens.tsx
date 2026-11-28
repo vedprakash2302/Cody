@@ -3,7 +3,7 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { LegendList } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
 import { scheduledTaskWorktreeBaseRef } from "@t3tools/client-runtime/scheduled-task-worktree";
-import { isListedThreadLineage } from "@t3tools/contracts";
+import { isListedThreadLineage, trimAsciiWhitespace } from "@t3tools/contracts";
 import { worktreeBaseRef } from "@t3tools/shared/git";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -156,7 +156,7 @@ export function ScheduledTaskBranchPickerRouteScreen() {
       project={project}
       branches={visibleBranches}
       selectedBranchName={
-        editor.draft.baseRef.trim() || debouncedQuery.trim() || branches.data === null
+        trimAsciiWhitespace(editor.draft.baseRef) || debouncedQuery.trim() || branches.data === null
           ? editor.draft.baseRef
           : scheduledTaskWorktreeBaseRef("", branches.refs)
       }

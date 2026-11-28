@@ -576,6 +576,18 @@ it.effect("shows the accounts that answered when another OpenCode login fails", 
       copilotOnly.credentialFingerprint,
     );
     NodeAssert.equal(overServer({ ...copilotFailed, credentialFingerprint: undefined }), undefined);
+    // A Console workspace that environments share pools with the Copilot account beside it.
+    const workspace = { ...copilotFailed, credentialFingerprint: "workspace:wrk_shared" };
+    const pooled = overServer(workspace);
+    NodeAssert.ok(pooled?.startsWith("workspace:wrk_shared+copilot:"));
+    NodeAssert.equal(
+      withCopilotUsageWindows(workspace, otherMachine).credentialFingerprint,
+      pooled,
+    );
+    NodeAssert.notEqual(
+      withCopilotUsageWindows(workspace, otherAccount).credentialFingerprint,
+      pooled,
+    );
   }),
 );
 

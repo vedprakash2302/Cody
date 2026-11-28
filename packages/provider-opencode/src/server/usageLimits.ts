@@ -363,8 +363,8 @@ export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(func
 });
 
 /**
- * Adds Cody's GitHub Copilot windows to the limits an OpenCode 2 server reports. The Copilot
- * fingerprint names the account only when the server shows no windows of its own.
+ * Adds Cody's GitHub Copilot windows to the limits an OpenCode 2 server reports. With windows on
+ * both sides, the fingerprint names the workspace and the Copilot account together.
  */
 export const withCopilotUsageWindows = (
   server: ServerProviderUsageLimits,
@@ -372,11 +372,15 @@ export const withCopilotUsageWindows = (
 ): ServerProviderUsageLimits => {
   const copilot = local.windows.filter((window) => window.id.startsWith("copilot_"));
   if (copilot.length === 0) return server;
+  const credentialFingerprint =
+    server.windows.length === 0
+      ? local.credentialFingerprint
+      : server.credentialFingerprint !== undefined && local.credentialFingerprint !== undefined
+        ? `${server.credentialFingerprint}+copilot:${local.credentialFingerprint}`
+        : undefined;
   return {
     ...makeUsageLimits({ checkedAt: server.checkedAt, windows: [...server.windows, ...copilot] }),
     ...(server.externalUsage === undefined ? {} : { externalUsage: server.externalUsage }),
-    ...(server.windows.length === 0 && local.credentialFingerprint !== undefined
-      ? { credentialFingerprint: local.credentialFingerprint }
-      : {}),
+    ...(credentialFingerprint === undefined ? {} : { credentialFingerprint }),
   };
 };
